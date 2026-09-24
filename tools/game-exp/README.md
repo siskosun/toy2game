@@ -166,7 +166,7 @@ Low-level fallback:
 
 ## Board and Skill
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.1`.
 
 Normal users do not need to remember MCP tool names. Examples:
 
