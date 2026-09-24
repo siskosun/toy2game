@@ -176,6 +176,7 @@ class TrustedRehearsalContext:
     run_id: str
     run_attempt: str
     policy_digest: str
+    scope_digest: str
     checks: tuple[dict[str, Any], ...]
 
 
@@ -1070,6 +1071,11 @@ def _plan_rehearsal(
             "Rehearsal policy_digest does not match the trusted policy",
             code="DOMAIN_REHEARSAL_CONFLICT",
         )
+    if not SHA256_RE.fullmatch(trusted_rehearsal.scope_digest):
+        raise DomainError(
+            "Rehearsal scope_digest must be sha256:<64 lowercase hex>",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
     if not re.fullmatch(r"[0-9]+", trusted_rehearsal.run_id):
         raise DomainError("Rehearsal run_id must be a decimal string")
     if not re.fullmatch(r"[1-9][0-9]*", trusted_rehearsal.run_attempt):
@@ -1136,6 +1142,7 @@ def _plan_rehearsal(
         "github_run_id": trusted_rehearsal.run_id,
         "github_run_attempt": trusted_rehearsal.run_attempt,
         "policy_digest": trusted_rehearsal.policy_digest,
+        "scope_digest": trusted_rehearsal.scope_digest,
         "checks": normalized_checks,
     }
     next_state = dict(state)
