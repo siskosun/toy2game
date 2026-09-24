@@ -1,0 +1,122 @@
+name: game-exp candidate retention probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Project tests
+        run: npm test
+      - name: Build untrusted project
+        run: npm run build
+      - name: Package candidate
+        run: tar -czf candidate.tgz dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-bytes
+          path: candidate.tgz
+          retention-days: 7
+          if-no-files-found: error
+
+  observe:
+    needs: build
+    permissions: {}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: candidate-bytes
+      - name: Observe artifact without source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -tzf candidate.tgz > artifact-files.txt
+          grep -q '^dist/index.html$' artifact-files.txt
+          grep -q '^dist/games/' artifact-files.txt
+          printf '{"observer":"trusted-clean-job","source_checkout":false,"artifact":"candidate.tgz"}\n' > observer.json
+          sha256sum candidate.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-observation
+          path: |
+            artifact-files.txt
+            observer.json
+          retention-days: 7
+
+  attest-retain:
+    needs: [build, observe]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: candidate-bytes
+      - name: Compute trusted digest
+        id: digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum candidate.tgz | tee candidate.sha256
+          echo "sha=$(cut -d' ' -f1 candidate.sha256)" >> "$GITHUB_OUTPUT"
+      - name: Attest candidate provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: candidate.tgz
+      - name: Verify attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify candidate.tgz --repo "${{ github.repository }}"
+      - name: Publish immutable candidate release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.digest.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tag="game-exp-candidate-${GITHUB_RUN_ID}"
+          gh release create "$tag" candidate.tgz candidate.sha256             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "game-exp candidate ${GITHUB_RUN_ID}"             --notes "source_sha=$GITHUB_SHA
+          run_id=$GITHUB_RUN_ID
+          run_attempt=$GITHUB_RUN_ATTEMPT
+          sha256=$DIGEST"
+          url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          printf '{"candidate_id":"C-PROBE-%s","source_sha":"%s","run_id":"%s","run_attempt":"%s","artifact_digest":"sha256:%s","retention_provider":"github-immutable-release","release_tag":"%s","release_url":"%s"}\n'             "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$DIGEST" "$tag" "$url" | tee retention-receipt.json
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Prove release asset is immutable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(gh release delete-asset "$TAG" candidate.tgz --repo "$GITHUB_REPOSITORY" -y 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          test "$code" -ne 0
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx candidate.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-retention-receipt
+          path: |
+            candidate.sha256
+            retention-receipt.json
+          retention-days: 30
