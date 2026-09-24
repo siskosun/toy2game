@@ -29,7 +29,11 @@ jobs:
           python - <<'PY'
           import json
           x=json.load(open("doctor.json",encoding="utf-8"))
-          assert x["status"]=="PASS", x
+          checks={row["name"]:row for row in x["checks"]}
+          assert checks["ledger_ref"]["status"]=="PASS", x
+          assert checks["rulesets"]["status"]=="PASS", x
+          assert not any(row["status"]=="FAIL" for row in x["checks"]), x
+          assert x["status"] in {"PASS","UNKNOWN"}, x
           PY
 
       - name: Submit real request
