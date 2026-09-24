@@ -54,6 +54,20 @@ class TrustedCandidateContext:
 
 
 @dataclass(frozen=True)
+class TrustedRetentionContext:
+    experiment_id: str
+    candidate_id: str
+    release_id: str
+    release_tag: str
+    release_url: str
+    immutable: bool
+    target_commitish: str
+    artifact_name: str
+    artifact_digest: str
+    asset_id: str
+
+
+@dataclass(frozen=True)
 class DomainPlan:
     status: str
     experiment_id: str | None
@@ -337,6 +351,7 @@ def _plan_decision(
     payload: dict[str, Any],
     request_id: str,
     trusted_actor: TrustedActorContext | None,
+    trusted_retention: TrustedRetentionContext | None,
 ) -> DomainPlan:
     input_value = _mapping(payload.get("input"), "operation.input")
     _expect_keys(
@@ -391,9 +406,104 @@ def _plan_decision(
             f"invalid lifecycle transition {current} -> {to_state}",
             code="DOMAIN_INVALID_TRANSITION",
         )
-    if to_state in {"PROMISING", "SELECTED"}:
+    promotion_evidence = None
+    if to_state == "PROMISING":
+        candidate_id = state.get("current_candidate_id")
+        review_id = state.get("current_review_id")
+        review_candidate_id = state.get("current_review_candidate_id")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise DomainError(
+                "PROMISING requires a current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if (
+            not isinstance(review_id, str)
+            or not review_id
+            or review_candidate_id != candidate_id
+        ):
+            raise DomainError(
+                "PROMISING requires a current Review bound to the current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        candidate = _load_candidate(repo_dir, experiment_id, candidate_id)
+        review = _read_json_file(
+            repo_dir,
+            f"experiments/{experiment_id}/reviews/{review_id}.json",
+            where=experiment_id,
+        )
+        if (
+            review.get("kind") != "review"
+            or review.get("review_id") != review_id
+            or review.get("experiment_id") != experiment_id
+            or review.get("candidate_id") != candidate_id
+            or review.get("artifact_digest") != candidate.get("artifact_digest")
+            or review.get("outcome") != "PASS"
+        ):
+            raise DomainError(
+                "PROMISING requires a current PASS Review for the current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        retention = candidate.get("retention")
+        if not isinstance(retention, dict):
+            raise DomainError(
+                "PROMISING requires Candidate retention",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if trusted_retention is None:
+            raise DomainError(
+                "PROMISING requires current trusted Level-3 retention verification",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        expected_retention = {
+            "experiment_id": experiment_id,
+            "candidate_id": candidate_id,
+            "release_tag": retention.get("release_tag"),
+            "artifact_digest": candidate.get("artifact_digest"),
+            "target_commitish": candidate.get("source_sha"),
+        }
+        actual_retention = {
+            "experiment_id": trusted_retention.experiment_id,
+            "candidate_id": trusted_retention.candidate_id,
+            "release_tag": trusted_retention.release_tag,
+            "artifact_digest": trusted_retention.artifact_digest,
+            "target_commitish": trusted_retention.target_commitish,
+        }
+        if actual_retention != expected_retention:
+            raise DomainError(
+                "current trusted retention evidence does not match Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if (
+            trusted_retention.immutable is not True
+            or trusted_retention.artifact_name != "candidate.tgz"
+            or not trusted_retention.release_id
+            or not trusted_retention.asset_id
+        ):
+            raise DomainError(
+                "current trusted retention evidence is incomplete or mutable",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        promotion_evidence = {
+            "candidate_id": candidate_id,
+            "review_id": review_id,
+            "artifact_digest": candidate["artifact_digest"],
+            "source_sha": candidate["source_sha"],
+            "retention": {
+                "provider": "github-immutable-release",
+                "release_id": trusted_retention.release_id,
+                "release_tag": trusted_retention.release_tag,
+                "release_url": trusted_retention.release_url,
+                "asset_id": trusted_retention.asset_id,
+                "asset_name": trusted_retention.artifact_name,
+                "artifact_digest": trusted_retention.artifact_digest,
+                "immutable": True,
+            },
+        }
+    elif to_state == "SELECTED":
         raise DomainError(
-            f"{to_state} requires a current valid Candidate; Candidate semantics are not active yet",
+            "SELECTED requires a current trusted Rehearsal; Rehearsal semantics are not active yet",
             code="DOMAIN_PREREQUISITE_MISSING",
         )
 
@@ -421,6 +531,8 @@ def _plan_decision(
     actor_claim = payload.get("actor_claim")
     if actor_claim is not None:
         decision["actor_claim"] = actor_claim
+    if promotion_evidence is not None:
+        decision["promotion_evidence"] = promotion_evidence
 
     next_state = dict(state)
     next_state["lifecycle"] = to_state
@@ -779,6 +891,7 @@ def plan_domain_mutation(
     trusted_binding: TrustedBindingContext | None = None,
     trusted_actor: TrustedActorContext | None = None,
     trusted_candidate: TrustedCandidateContext | None = None,
+    trusted_retention: TrustedRetentionContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
@@ -802,6 +915,7 @@ def plan_domain_mutation(
             payload=payload,
             request_id=request_id,
             trusted_actor=trusted_actor,
+            trusted_retention=trusted_retention,
         )
     if operation != "experiment.bind":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
