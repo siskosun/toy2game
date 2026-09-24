@@ -22,9 +22,14 @@ Use game-exp as the experiment control plane. Prefer native `game_exp_*` MCP too
 
 When the user asks to open the game-exp panel, Board, dashboard, experiment list, or experiment overview:
 
-1. Call `game_exp_board`.
-2. Treat it as a read-only projection over one protected-Ledger snapshot. Never derive authority from the rendered Board itself.
-3. Present a compact Board in the active host with these columns when available:
+1. If native MCP is available, call `game_exp_board`.
+2. Otherwise use the authorized GitHub connector against the protected `game-exp/ledger` ref:
+   - read the current `refs/heads/game-exp/ledger` SHA;
+   - list `experiments/*/state.json` from that exact Ledger snapshot;
+   - read the matching `manifest.json` and current Candidate/Review/Rehearsal/Integration/Archive records only as needed;
+   - render the same Board columns from that single snapshot.
+3. Never mix records from different Ledger heads in one Board.
+4. Present these columns when available:
    - Experiment
    - Title
    - Lifecycle
@@ -32,22 +37,21 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
    - Candidate / Review
    - Rehearsal / Integration / Archive
    - Next gate
-4. Treat `health=FAIL` as blocked: show the health code prominently and never recommend lifecycle work for that experiment. If the next gate is `DO_NOT_USE_RECREATE_EXPERIMENT`, tell the user to create a fresh experiment instead.
-5. Put blocked/invalid experiments first, then experiments needing a human gate. Do not rank or auto-decide the human outcome.
-6. If the Board returns `UNKNOWN`, report the snapshot error and do not fill missing rows from local Git state or memory.
-7. For a requested action on one experiment, follow the Board with `game_exp_experiment_get` before mutating it.
+5. Treat `health=FAIL` as blocked. Never recommend lifecycle work for an invalid binding chain.
+6. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
 ## Start every workflow from authoritative state
 
-- Call `game_exp_status` when repository/Ledger identity is not already established.
-- For an existing experiment, call `game_exp_experiment_get` before choosing a mutation.
-- Use `game_exp_doctor` when trust controls, archived refs, or repository health are relevant.
-- Before a new experiment is bound, use repo-level `game_exp_doctor` without `experiment_id`; an unbound `EXP-N` has no archive state yet. Use experiment-aware Doctor only after the experiment exists in the protected Ledger.
-- If the requested action conflicts with the current lifecycle, explain the current state and the valid next gate instead of improvising a transition.
+- With MCP, use `game_exp_status` / `game_exp_experiment_get` / `game_exp_doctor` as appropriate.
+- Without MCP, read the same authoritative objects from the protected `game-exp/ledger` ref through GitHub. For one experiment, start with `experiments/EXP-N/state.json`, then follow only the current ids in that state to the corresponding records.
+- Pin multi-file reads to one Ledger commit SHA whenever the connector supports an explicit ref; never combine files fetched from moving `game-exp/ledger` at different times.
+- Before a mutation, confirm the current lifecycle, current Candidate/Review/Rehearsal/Integration/Archive ids, and `last_decision_id` when relevant.
+- If repository-health checks require information the GitHub connector cannot read (for example an admin-only secret inventory), report that Doctor coverage is partial rather than inventing PASS. Trusted workflows remain the mutation gate.
+- If the requested action conflicts with current lifecycle, explain the valid next gate instead of improvising a transition.
 
-See `references/workflow.md` for the lifecycle/tool map.
+See `references/workflow.md` for the lifecycle/tool map and `references/github-bridge.md` for exact Bridge command schemas.
 
 ## Backend routing
 
@@ -76,29 +80,29 @@ For the GitHub Bridge:
 
 1. Ensure there is a real GitHub Issue for the experiment. Resolve repository id, Issue id/number, and parent SHA from GitHub or provided authoritative context; never invent them.
 2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
-3. Call `game_exp_experiment_bind`. The request id must equal `manifest.operation_id`.
-4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile that same request with `game_exp_request_get`. Continue only after the binding is committed/applied.
-5. Call `game_exp_initialize` to create the canonical experiment branch/base tag.
+3. Execute Bind through the active backend: `game_exp_experiment_bind` with MCP, or Bridge action `bind`. The request id must equal `manifest.operation_id`.
+4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile the same logical request. With MCP use `game_exp_request_get`; with GitHub Bridge inspect its claim/result markers plus the protected Ledger. Continue only after the binding is committed/applied.
+5. Execute Initialize through `game_exp_initialize` or Bridge action `initialize` to create the canonical experiment branch/base tag.
 6. Work on the canonical `exp/<issue>` branch using the host's authorized source-editing capability (for example GitHub tools in ChatGPT Work or normal Codex Git operations). Keep changes inside Manifest `scope.allowed`; treat `scope.avoid` as forbidden. Do not recreate or rename canonical refs.
 7. Run project checks appropriate to the repository before asking game-exp to build the Candidate.
 
 ## Candidate and human Review
 
-1. Move the experiment to `REVIEW` with `game_exp_decision_submit` when implementation is ready for evaluation.
-2. Call `game_exp_candidate_build`. Wait for the trusted Candidate workflow to finish, then refresh with `game_exp_experiment_get` until a current Candidate is present.
+1. Move the experiment to `REVIEW` through `game_exp_decision_submit` or Bridge action `decision_submit` when implementation is ready for evaluation.
+2. Build the Candidate through `game_exp_candidate_build` or Bridge action `candidate_build`. Wait for the trusted Candidate workflow, then refresh the protected experiment state until a current Candidate is present.
 3. Present the Candidate identity and relevant evidence to the user. Do not infer human quality from automated checks.
-4. Call `game_exp_review_record` only after the user explicitly supplies the human outcome (`PASS` or `FAIL`) or explicitly instructs you to record an already-made human review.
-5. A PASS Review does not automatically mean PROMISING. Call `game_exp_decision_submit(... to_state="PROMISING")` only after explicit user approval to promote.
+4. Record Review through `game_exp_review_record` or Bridge action `review_record` only after the user explicitly supplies the human outcome (`PASS` or `FAIL`) or explicitly instructs you to record an already-made human review.
+5. A PASS Review does not automatically mean PROMISING. Submit the PROMISING decision through the active backend only after explicit user approval.
 
 ## Rehearsal, selection and Integration
 
-1. From `PROMISING`, call `game_exp_rehearse` to test the current Candidate against exact latest main with the trusted scope-filtered Rehearsal.
+1. From `PROMISING`, run Rehearsal through `game_exp_rehearse` or Bridge action `rehearse` against exact latest main.
 2. Before SELECTED, refresh `game_exp_experiment_get`. If main advanced or Rehearsal is stale, run a new Rehearsal; never relax the freshness gate.
-3. Call `game_exp_decision_submit(... to_state="SELECTED")` only after the user explicitly chooses/selects the Candidate.
+3. Submit the SELECTED decision through the active backend only after the user explicitly chooses/selects the Candidate.
 4. If main advances after selection, a fresh Rehearsal may be required before Integration. Follow the trusted workflow result rather than reusing stale evidence.
-5. Call `game_exp_integrate` to create/reuse the trusted Integration PR. Treat the PR as the human-visible integration step; do not claim INTEGRATED yet.
+5. Create/reuse the Integration PR through `game_exp_integrate` or Bridge action `integrate`. Treat the PR as the human-visible integration step; do not claim INTEGRATED yet.
 6. Do not merge the Integration PR implicitly. If the user explicitly asks to merge and the host has an authorized GitHub merge action, the merge may be performed there; otherwise present the PR for human merge.
-7. After the PR is actually merged, call `game_exp_integrate_finalize` with the PR number. Verify the experiment projection becomes `INTEGRATED`.
+7. After the PR is actually merged, finalize through `game_exp_integrate_finalize` or Bridge action `integrate_finalize`, then verify the protected state becomes `INTEGRATED`.
 
 ## Archive
 
@@ -107,9 +111,9 @@ Archive is a destructive/recovery-sensitive workflow.
 - If the user says to archive **and delete the experiment branch**, use `ATOMIC_DELETE`.
 - If the user says to archive **and keep the branch**, use `RETAIN_BRANCH`.
 - If the user asks only to "archive" and the intended branch behavior is not clear, ask for this one material choice before dispatching.
-- Call `game_exp_archive`; do not manually create the final tag or delete the branch.
-- `game_exp_archive_abort` is valid only while the archive is still PREPARED. Once the trusted workflow claims it, Abort is permanently unavailable; recover the same archive instead of creating a second logical archive.
-- After completion, call `game_exp_experiment_get` and `game_exp_doctor(experiment_id=...)`. Report `ARCHIVED` only when the protected Ledger says so and the final-ref checks are consistent.
+- Archive through `game_exp_archive` or Bridge action `archive`; do not manually create the final tag or delete the branch.
+- `game_exp_archive_abort` / Bridge action `archive_abort` is valid only while the archive is still PREPARED. Once the trusted workflow claims it, Abort is permanently unavailable; recover the same archive instead of creating a second logical archive.
+- After completion, refresh protected Ledger state and archive health through the best available backend. Report `ARCHIVED` only when the protected Ledger says so and final-ref checks are consistent.
 
 ## Request/result handling
 
