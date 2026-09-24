@@ -70,6 +70,28 @@ class ProjectPolicyTests(unittest.TestCase):
             self.assertIn("dist/index.html", names)
             self.assertIn("dist/games/a.js", names)
 
+    def test_duplicate_candidate_include_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "dist").mkdir()
+            (root / "dist" / "index.html").write_text("ok", encoding="utf-8")
+            policy = valid_policy()
+            policy["candidate"]["include"] = ["dist", "dist/index.html"]
+            with self.assertRaises(ProjectPolicyError):
+                package_candidate(policy, root, root / "candidate.tgz")
+
+    def test_duplicate_archive_member_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            archive = pathlib.Path(td) / "duplicate.tgz"
+            import io
+            with tarfile.open(archive, "w:gz") as tf:
+                for _ in range(2):
+                    info = tarfile.TarInfo("dist/index.html")
+                    info.size = 1
+                    tf.addfile(info, io.BytesIO(b"x"))
+            with self.assertRaises(ProjectPolicyError):
+                verify_candidate_archive(valid_policy(), archive)
+
     def test_missing_required_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
