@@ -1,107 +1,24 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
 import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-SAFE_INT = (1 << 53) - 1
-REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+from protocol_core import (
+    ProtocolError,
+    canonical_json_bytes,
+    decode_payload_b64,
+    digest_object,
+    validate_request_id,
+)
 
 
 class WriterError(RuntimeError):
     pass
-
-
-def fail_float(value: str):
-    raise WriterError(f"floats are not allowed: {value}")
-
-
-def fail_constant(value: str):
-    raise WriterError(f"non-finite number is not allowed: {value}")
-
-
-def object_no_dupes(pairs):
-    out = {}
-    for key, value in pairs:
-        if key in out:
-            raise WriterError(f"duplicate JSON key: {key}")
-        out[key] = value
-    return out
-
-
-def validate_value(value):
-    if value is None or isinstance(value, (bool, str)):
-        return
-    if isinstance(value, int) and not isinstance(value, bool):
-        if abs(value) > SAFE_INT:
-            raise WriterError("integer outside protocol-safe range")
-        return
-    if isinstance(value, list):
-        for item in value:
-            validate_value(item)
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise WriterError("object keys must be strings")
-            validate_value(item)
-        return
-    raise WriterError(f"unsupported JSON value: {type(value).__name__}")
-
-
-def utf16_sort_key(value: str):
-    raw = value.encode("utf-16-be")
-    return tuple(int.from_bytes(raw[i:i + 2], "big") for i in range(0, len(raw), 2))
-
-
-def json_string(value: str) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
-
-def canonical_json(value) -> bytes:
-    if value is None:
-        return b"null"
-    if value is True:
-        return b"true"
-    if value is False:
-        return b"false"
-    if isinstance(value, int) and not isinstance(value, bool):
-        if abs(value) > SAFE_INT:
-            raise WriterError("integer outside protocol-safe range")
-        return str(value).encode("ascii")
-    if isinstance(value, str):
-        return json_string(value)
-    if isinstance(value, list):
-        return b"[" + b",".join(canonical_json(item) for item in value) + b"]"
-    if isinstance(value, dict):
-        parts = []
-        for key in sorted(value, key=utf16_sort_key):
-            parts.append(json_string(key) + b":" + canonical_json(value[key]))
-        return b"{" + b",".join(parts) + b"}"
-    raise WriterError(f"unsupported JSON value: {type(value).__name__}")
-
-
-def load_payload(payload_b64: str):
-    try:
-        raw = base64.b64decode(payload_b64, validate=True)
-        text = raw.decode("utf-8")
-    except Exception as exc:
-        raise WriterError(f"invalid base64/UTF-8 payload: {exc}") from exc
-    value = json.loads(
-        text,
-        parse_float=fail_float,
-        parse_constant=fail_constant,
-        object_pairs_hook=object_no_dupes,
-    )
-    validate_value(value)
-    return value
 
 
 def run(args, cwd=None, env=None, check=True):
@@ -125,7 +42,10 @@ def read_record(repo_dir: Path, ref: str, target: str):
     proc = run(["git", "show", f"{ref}:{target}"], cwd=repo_dir, check=False)
     if proc.returncode != 0:
         return None
-    return json.loads(proc.stdout)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise WriterError(f"invalid Ledger record at {ref}:{target}") from exc
 
 
 def emit(status: str, **fields):
@@ -146,14 +66,12 @@ def main() -> int:
     ap.add_argument("--workflow-source-sha", required=True)
     args = ap.parse_args()
 
-    if not REQUEST_ID_RE.fullmatch(args.request_id):
-        raise WriterError("invalid request_id")
+    validate_request_id(args.request_id)
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
-        raise WriterError("expected_head must be a 40-character commit SHA")
+        raise ProtocolError("expected_head must be a 40-character commit SHA")
 
-    payload = load_payload(args.payload_b64)
-    payload_bytes = canonical_json(payload)
-    payload_digest = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+    payload = decode_payload_b64(args.payload_b64)
+    payload_digest = digest_object(payload)
     target = f"operations/{args.request_id}.json"
 
     env = os.environ.copy()
@@ -163,8 +81,7 @@ def main() -> int:
     )
 
     with tempfile.TemporaryDirectory(prefix="game-exp-ledger-") as td:
-        root = Path(td)
-        repo_dir = root / "ledger"
+        repo_dir = Path(td) / "ledger"
         run(
             [
                 "git",
@@ -225,7 +142,7 @@ def main() -> int:
         }
         path = repo_dir / target
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(canonical_json(record) + b"\n")
+        path.write_bytes(canonical_json_bytes(record) + b"\n")
 
         run(["git", "config", "user.name", "game-exp-trusted-writer"], cwd=repo_dir)
         run(
@@ -290,7 +207,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except WriterError as exc:
+    except (ProtocolError, WriterError) as exc:
         print(
             json.dumps(
                 {"status": "INVALID_REQUEST", "error": str(exc)},
