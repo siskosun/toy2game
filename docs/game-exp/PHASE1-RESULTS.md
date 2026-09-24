@@ -43,7 +43,7 @@ These tests validate the protocol/state-machine implementation. The target-repos
 | Trusted Ledger Writer workflow | IMPLEMENTED | `.github/workflows/game-exp-trusted-writer.yml` |
 | Trusted Writer credential installed | BLOCKED | No write Deploy Key / `GAME_EXP_WRITER_KEY` secret installed by this automation environment |
 | Trusted Writer can bypass Ledger Ruleset | UNKNOWN | Must be tested after the manual credential step |
-| Trusted workflow source protection | REQUIRED | Main/default branch governance is not yet frozen |
+| Trusted workflow source protection | PASS | Ruleset `23916012`: PR required on `main`, delete/force-push blocked |
 
 ## Atomic archive evidence
 
@@ -100,6 +100,7 @@ On the local Windows machine, `npm run build` currently fails in `scripts/build.
 - Protected base/final tag Ruleset: active, DeployKey bypass only
 - Trusted Writer workflow: committed
 - Trusted Writer setup guide: `docs/game-exp/TRUSTED-WRITER-SETUP.md`
+- Protected main Ruleset: active (`23916012`), PR required, delete/force-push blocked
 
 ## Remaining Phase 1 gate
 
@@ -114,7 +115,6 @@ Before changing this decision to `PROTOCOL_FREEZE_APPROVED`:
    - same request/different payload is rejected;
    - stale `expected_head` is rejected;
    - lost-response retry reconciles to the committed remote record.
-4. Protect the default branch/workflow source so normal project code cannot silently replace the trusted writer or attestation workflow.
-5. Re-run the target checks after those controls are active.
+4. Re-run the target checks after the Trusted Writer credential is active.
 
-Any failure in items 3-4 remains a high-severity correctness failure.
+Any failure in item 3 remains a high-severity correctness failure. Default-branch workflow-source protection is already active and tested.
