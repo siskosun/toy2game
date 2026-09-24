@@ -40,6 +40,14 @@ def game_exp_experiment_get(
     return _client(repo).experiment_get(experiment_id)
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_board(
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Return a lightweight, consistent snapshot of all game-exp experiments."""
+    return _client(repo).board()
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 def game_exp_experiment_bind(
     manifest: dict[str, Any],

@@ -50,6 +50,19 @@ def _print_result(result: dict[str, Any], *, as_json: bool) -> None:
             suffix = "" if detail in (None, "", {}) else f" — {detail}"
             print(f"{check['status']:7} {check['name']}{suffix}")
 
+    if "experiments" in result:
+        if result.get("snapshot_head"):
+            print(f"snapshot_head: {result['snapshot_head']}")
+        print(f"experiments: {result.get('count', len(result['experiments']))}")
+        for row in result["experiments"]:
+            title = row.get("title") or ""
+            print(
+                f"{row.get('experiment_id', '?'):8} "
+                f"{row.get('lifecycle', 'UNKNOWN'):10} "
+                f"{row.get('next_gate', 'UNKNOWN'):36} "
+                f"{title}"
+            )
+
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
@@ -61,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="show target repository and Ledger head")
+    sub.add_parser("board", help="show lightweight snapshot of all experiments")
     doctor = sub.add_parser("doctor", help="validate trusted repository prerequisites")
     doctor.add_argument(
         "--experiment-id",
@@ -127,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "status":
             result = client.status()
+        elif args.command == "board":
+            result = client.board()
         elif args.command == "doctor":
             result = client.doctor(args.experiment_id)
         elif args.command == "request":

@@ -103,6 +103,34 @@ class GitHubTransport:
             raise ClientError(f"invalid Ledger head returned by GitHub: {head!r}")
         return head
 
+    def ledger_paths(self, ref: str) -> list[str]:
+        if not re.fullmatch(r"[0-9a-f]{40}", ref):
+            raise ClientError("Ledger tree ref must be a 40-character commit SHA")
+        proc = _run(
+            [
+                "gh",
+                "api",
+                f"repos/{self.repo}/git/trees/{ref}?recursive=1",
+            ]
+        )
+        value = _json_output(proc)
+        if not isinstance(value, dict):
+            raise ClientError("Ledger tree response must be an object")
+        if value.get("truncated") is True:
+            raise ClientError("Ledger recursive tree response is truncated")
+        tree = value.get("tree")
+        if not isinstance(tree, list):
+            raise ClientError("Ledger tree response is missing tree entries")
+        paths: list[str] = []
+        for row in tree:
+            if (
+                isinstance(row, dict)
+                and row.get("type") == "blob"
+                and isinstance(row.get("path"), str)
+            ):
+                paths.append(row["path"])
+        return sorted(paths)
+
     def dispatch_writer(
         self,
         *,
@@ -330,11 +358,16 @@ class GitHubTransport:
             )
         return url
 
-    def ledger_json(self, path: str) -> dict[str, Any] | None:
-        endpoint = (
-            f"repos/{self.repo}/contents/{path}"
-            "?ref=game-exp%2Fledger"
-        )
+    def ledger_json(
+        self,
+        path: str,
+        *,
+        ref: str | None = None,
+    ) -> dict[str, Any] | None:
+        ref_value = ref or "game-exp%2Fledger"
+        if ref is not None and not re.fullmatch(r"[0-9a-f]{40}", ref):
+            raise ClientError("Ledger JSON ref must be a 40-character commit SHA")
+        endpoint = f"repos/{self.repo}/contents/{path}?ref={ref_value}"
         proc = _run(
             [
                 "gh",
@@ -684,6 +717,143 @@ class GameExpClient:
             else:
                 result[key] = None
         return result
+
+    def board(self) -> dict[str, Any]:
+        try:
+            snapshot_head = self.transport.ledger_head()
+            paths = self.transport.ledger_paths(snapshot_head)
+        except ClientError as exc:
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "reason": "board_snapshot_unavailable",
+                "error": str(exc),
+            }
+
+        experiment_ids = sorted(
+            {
+                match.group(1)
+                for path in paths
+                if (
+                    match := re.fullmatch(
+                        r"experiments/(EXP-[1-9][0-9]*)/state\.json",
+                        path,
+                    )
+                )
+            },
+            key=lambda value: int(value.removeprefix("EXP-")),
+        )
+
+        items: list[dict[str, Any]] = []
+        counts: dict[str, int] = {}
+        for experiment_id in experiment_ids:
+            state = self.transport.ledger_json(
+                f"experiments/{experiment_id}/state.json",
+                ref=snapshot_head,
+            )
+            manifest = self.transport.ledger_json(
+                f"experiments/{experiment_id}/manifest.json",
+                ref=snapshot_head,
+            )
+            if state is None or manifest is None:
+                return {
+                    "status": "UNKNOWN",
+                    "repo": self.transport.repo,
+                    "snapshot_head": snapshot_head,
+                    "reason": "board_snapshot_incomplete",
+                    "experiment_id": experiment_id,
+                }
+
+            lifecycle = state.get("lifecycle")
+            if not isinstance(lifecycle, str) or not lifecycle:
+                return {
+                    "status": "UNKNOWN",
+                    "repo": self.transport.repo,
+                    "snapshot_head": snapshot_head,
+                    "reason": "board_state_invalid",
+                    "experiment_id": experiment_id,
+                }
+
+            review_id = state.get("current_review_id")
+            review = None
+            if isinstance(review_id, str) and review_id:
+                review = self.transport.ledger_json(
+                    f"experiments/{experiment_id}/reviews/{review_id}.json",
+                    ref=snapshot_head,
+                )
+
+            exp_meta = manifest.get("experiment")
+            issue_number = None
+            if isinstance(exp_meta, dict):
+                raw_issue = exp_meta.get("issue_number")
+                if isinstance(raw_issue, str):
+                    issue_number = raw_issue
+
+            item = {
+                "experiment_id": experiment_id,
+                "issue_number": issue_number,
+                "title": manifest.get("title"),
+                "hypothesis": manifest.get("hypothesis"),
+                "lifecycle": lifecycle,
+                "candidate_id": state.get("current_candidate_id"),
+                "review_id": review_id,
+                "review_outcome": (
+                    review.get("outcome") if isinstance(review, dict) else None
+                ),
+                "rehearsal_id": state.get("current_rehearsal_id"),
+                "integration_id": state.get("current_integration_id"),
+                "archive_id": state.get("current_archive_id"),
+                "archive_lock": state.get("archive_lock"),
+                "next_gate": self._board_next_gate(state, review),
+            }
+            items.append(item)
+            counts[lifecycle] = counts.get(lifecycle, 0) + 1
+
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "snapshot_head": snapshot_head,
+            "count": len(items),
+            "counts_by_lifecycle": dict(sorted(counts.items())),
+            "experiments": items,
+        }
+
+    @staticmethod
+    def _board_next_gate(
+        state: dict[str, Any],
+        review: dict[str, Any] | None,
+    ) -> str:
+        if state.get("archive_lock") is not None:
+            return "ARCHIVE_RECOVERY"
+
+        lifecycle = state.get("lifecycle")
+        if lifecycle == "ACTIVE":
+            return "IMPLEMENT_OR_REVIEW"
+        if lifecycle == "REVIEW":
+            if not state.get("current_candidate_id"):
+                return "CANDIDATE_BUILD"
+            if not state.get("current_review_id"):
+                return "HUMAN_REVIEW"
+            if isinstance(review, dict) and review.get("outcome") == "PASS":
+                return "HUMAN_PROMOTION"
+            return "HUMAN_DECISION"
+        if lifecycle == "PROMISING":
+            if (
+                state.get("current_rehearsal_id")
+                and state.get("current_rehearsal_candidate_id")
+                == state.get("current_candidate_id")
+            ):
+                return "HUMAN_SELECTION_OR_REFRESH_REHEARSAL"
+            return "TRUSTED_REHEARSAL"
+        if lifecycle == "SELECTED":
+            return "TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL"
+        if lifecycle == "INTEGRATED":
+            return "ARCHIVE_OR_RETAIN"
+        if lifecycle == "REJECTED":
+            return "ARCHIVE"
+        if lifecycle == "ARCHIVED":
+            return "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK"
+        return "UNKNOWN"
 
     def candidate(self, experiment_id: str) -> dict[str, Any]:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
