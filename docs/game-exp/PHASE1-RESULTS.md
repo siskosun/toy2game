@@ -8,7 +8,7 @@ Target baseline SHA: `39078515a13331a748e63bc75424ed83c773a72a`
 
 **REQUIRED_CHANGES**
 
-The protocol reference implementation passes locally, and the target repository now validates the critical GitHub primitives for CAS, archive safety, cross-platform canonicalization, artifact attestation, and immutable retention. Phase 1 is not frozen yet because the Trusted Ledger Writer cannot be executed until a dedicated long-lived credential is manually installed, and the trusted workflow source still needs default-branch governance.
+The protocol reference implementation passes locally, and the target repository now validates the critical GitHub primitives for CAS, archive safety, cross-platform canonicalization, artifact attestation, immutable retention, and default-branch workflow governance. Phase 1 is not frozen yet only because the Trusted Ledger Writer cannot be executed until a dedicated long-lived credential is manually installed and exercised.
 
 ## Reference protocol tests
 
