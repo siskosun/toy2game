@@ -58,7 +58,7 @@ See `references/workflow.md` for the lifecycle/tool map.
 For the GitHub Bridge:
 
 - Read authoritative state from `game-exp/ledger` through GitHub before deciding the next action.
-- Post one top-level comment on the experiment's canonical Issue. The first line must be exactly `/game-exp`; the rest must be one strict JSON command matching `references/workflow.md`.
+- Post one top-level comment on the experiment's canonical Issue. The first line must be exactly `/game-exp`; the rest must be one strict JSON command from `references/github-bridge.md`.
 - Use one stable `request_id` per logical action. Never post a second command with a new id merely because the bridge response is delayed or uncertain.
 - After posting, read Issue comments for the matching `game-exp-bridge:<request_id>:claim` and `:result` markers and inspect the referenced Actions run when necessary.
 - Treat claim-without-result as `UNKNOWN`. Reconcile against the Ledger or existing bridge run; do not resubmit blindly.
