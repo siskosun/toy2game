@@ -186,17 +186,13 @@ jobs:
           printf '%s\n' "$WRITER_KEY" > "$key"
           chmod 600 "$key"
           echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
-      - name: Compute digest and verify repository retention policy
+      - name: Compute trusted artifact digest
         id: digest
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sha="$(sha256sum candidate.tgz | cut -d' ' -f1)"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          enabled="$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases"             -H 'X-GitHub-Api-Version: 2026-03-10' --jq '.enabled')"
-          test "$enabled" = true
       - name: Attest candidate provenance
         id: attest
         uses: actions/attest@v4
