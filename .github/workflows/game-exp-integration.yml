@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   propose:
@@ -96,7 +96,7 @@ jobs:
           fi
           echo "proposal_sha=$proposal_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Create or reuse Integration PR
+      - name: Report existing Integration PR or user handoff
         id: pr
         shell: bash
         env:
@@ -116,8 +116,9 @@ jobs:
             echo "multiple Integration PRs found for $BRANCH" >&2
             exit 1
           fi
-          if [ "$count" -eq 0 ]; then
-            body="$(cat <<EOF
+
+          title="game-exp integrate $EXPERIMENT_ID ($CANDIDATE_ID)"
+          body="$(cat <<EOF
           game-exp trusted Integration proposal.
 
           Experiment: $EXPERIMENT_ID
@@ -130,7 +131,28 @@ jobs:
           Merging this PR is the human-visible code integration step. The experiment is not marked INTEGRATED until the trusted finalize workflow independently verifies the merged PR and writes the protected Ledger.
           EOF
           )"
-            gh pr create               --repo "$GITHUB_REPOSITORY"               --base main               --head "$BRANCH"               --title "game-exp integrate $EXPERIMENT_ID ($CANDIDATE_ID)"               --body "$body" >/dev/null
+
+          if [ "$count" -eq 0 ]; then
+            jq -n \
+              --arg branch "$BRANCH" \
+              --arg title "$title" \
+              --arg body "$body" \
+              --arg head_sha "$PROPOSAL_SHA" \
+              --arg tree_sha "$TREE_SHA" \
+              '{pr_required:true,branch:$branch,title:$title,body:$body,head_sha:$head_sha,tree_sha:$tree_sha}' \
+              | tee "$RUNNER_TEMP/integration-pr.json"
+            echo "pr_required=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Integration PR handoff"
+              echo ""
+              echo "The trusted workflow created and verified the deterministic branch, but repository policy does not allow GitHub Actions to create PRs."
+              echo ""
+              echo "- Branch: `$BRANCH`"
+              echo "- Proposal SHA: `$PROPOSAL_SHA`"
+              echo "- Tree SHA: `$TREE_SHA`"
+              echo ""
+              echo "Create the PR using a human/Harness GitHub identity. Do not enable Actions PR creation just for game-exp."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             state="$(printf '%s' "$existing" | jq -r '.[0].state')"
             merged="$(printf '%s' "$existing" | jq -r '.[0].mergedAt // ""')"
@@ -138,10 +160,12 @@ jobs:
               echo "existing Integration PR was closed without merge" >&2
               exit 1
             fi
+            printf '%s' "$existing" | jq '.[0] + {pr_required:false}' \
+              | tee "$RUNNER_TEMP/integration-pr.json"
+            echo "pr_required=false" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$(printf '%s' "$existing" | jq -r '.[0].number')" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$(printf '%s' "$existing" | jq -r '.[0].url')" >> "$GITHUB_OUTPUT"
           fi
-          gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number,url,state,mergedAt,headRefOid             | tee "$RUNNER_TEMP/integration-pr.json"
-          echo "pr_number=$(jq -r .number "$RUNNER_TEMP/integration-pr.json")" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$(jq -r .url "$RUNNER_TEMP/integration-pr.json")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
