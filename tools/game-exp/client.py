@@ -429,7 +429,12 @@ class GameExpClient:
                 elif "HEAD_CONFLICT" in logs:
                     conflict_type = "HEAD_CONFLICT"
                 else:
-                    conflict_type = None
+                    match = re.search(
+                        r'"status":"(DOMAIN_[A-Z_]+|EXPERIMENT_IDENTITY_CONFLICT)"',
+                        logs,
+                    )
+                    conflict_type = match.group(1) if match and match.group(1).endswith("CONFLICT") else None
+                    domain_error = match.group(1) if match else None
                 if conflict_type:
                     return {
                         "status": "CONFLICT",
@@ -438,12 +443,15 @@ class GameExpClient:
                         "repo": self.transport.repo,
                         "workflow": state,
                     }
-                return {
+                result = {
                     "status": "REJECTED",
                     "request_id": rid,
                     "repo": self.transport.repo,
                     "workflow": state,
                 }
+                if "domain_error" in locals() and domain_error:
+                    result["domain_error"] = domain_error
+                return result
 
         return {
             "status": "UNKNOWN",
