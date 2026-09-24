@@ -171,6 +171,7 @@ def resolve_trusted_rehearsal(
         "run_id",
         "run_attempt",
         "policy_digest",
+        "scope_digest",
         "checks",
     }
     if set(value) != required or not isinstance(value["checks"], list):
@@ -191,6 +192,7 @@ def resolve_trusted_rehearsal(
     run_id = str(value["run_id"])
     run_attempt = str(value["run_attempt"])
     policy_digest = str(value["policy_digest"])
+    scope_digest = str(value["scope_digest"])
 
     match = re.fullmatch(r"EXP-([1-9][0-9]*)", experiment_id)
     if not match:
@@ -244,6 +246,7 @@ def resolve_trusted_rehearsal(
         "game-exp-run-id": run_id,
         "game-exp-run-attempt": run_attempt,
         "game-exp-policy-digest": policy_digest,
+        "game-exp-scope-digest": scope_digest,
     }
     for key, expected in expected_metadata.items():
         if metadata.get(key) != expected:
@@ -307,6 +310,7 @@ def resolve_trusted_rehearsal(
         run_id=run_id,
         run_attempt=run_attempt,
         policy_digest=policy_digest,
+        scope_digest=scope_digest,
         checks=tuple(value["checks"]),
     )
 
