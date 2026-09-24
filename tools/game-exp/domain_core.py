@@ -465,6 +465,7 @@ def _plan_decision(
     request_id: str,
     trusted_actor: TrustedActorContext | None,
     trusted_retention: TrustedRetentionContext | None,
+    trusted_rehearsal: TrustedRehearsalContext | None,
 ) -> DomainPlan:
     input_value = _mapping(payload.get("input"), "operation.input")
     _expect_keys(
@@ -520,6 +521,7 @@ def _plan_decision(
             code="DOMAIN_INVALID_TRANSITION",
         )
     promotion_evidence = None
+    selection_evidence = None
     if to_state == "PROMISING":
         candidate_id = state.get("current_candidate_id")
         review_id = state.get("current_review_id")
@@ -615,10 +617,146 @@ def _plan_decision(
             },
         }
     elif to_state == "SELECTED":
-        raise DomainError(
-            "SELECTED requires a current trusted Rehearsal; Rehearsal semantics are not active yet",
-            code="DOMAIN_PREREQUISITE_MISSING",
+        candidate_id = state.get("current_candidate_id")
+        rehearsal_id = state.get("current_rehearsal_id")
+        rehearsal_candidate_id = state.get("current_rehearsal_candidate_id")
+        rehearsal_main_sha = state.get("current_rehearsal_main_sha")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise DomainError(
+                "SELECTED requires a current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if (
+            not isinstance(rehearsal_id, str)
+            or not rehearsal_id
+            or rehearsal_candidate_id != candidate_id
+            or not isinstance(rehearsal_main_sha, str)
+        ):
+            raise DomainError(
+                "SELECTED requires a current Rehearsal bound to the current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        candidate = _load_candidate(repo_dir, experiment_id, candidate_id)
+        rehearsal = _read_json_file(
+            repo_dir,
+            f"experiments/{experiment_id}/rehearsals/{rehearsal_id}.json",
+            where=experiment_id,
         )
+        if (
+            rehearsal.get("kind") != "rehearsal"
+            or rehearsal.get("rehearsal_id") != rehearsal_id
+            or rehearsal.get("experiment_id") != experiment_id
+            or rehearsal.get("candidate_id") != candidate_id
+            or rehearsal.get("source_sha") != candidate.get("source_sha")
+            or rehearsal.get("main_sha") != rehearsal_main_sha
+        ):
+            raise DomainError(
+                "current Rehearsal record does not match current experiment state",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        if trusted_rehearsal is None:
+            raise DomainError(
+                "SELECTED requires live trusted Rehearsal verification",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        expected_rehearsal = {
+            "experiment_id": experiment_id,
+            "candidate_id": candidate_id,
+            "rehearsal_id": rehearsal_id,
+            "main_sha": rehearsal.get("main_sha"),
+            "source_sha": rehearsal.get("source_sha"),
+            "integration_sha": rehearsal.get("integration_sha"),
+            "integration_tree_sha": rehearsal.get("integration_tree_sha"),
+            "rehearsal_ref": rehearsal.get("rehearsal_ref"),
+            "workflow_source_sha": rehearsal.get("workflow_source_sha"),
+            "run_id": rehearsal.get("github_run_id"),
+            "run_attempt": rehearsal.get("github_run_attempt"),
+            "policy_digest": rehearsal.get("policy_digest"),
+            "scope_digest": rehearsal.get("scope_digest"),
+        }
+        actual_rehearsal = {
+            "experiment_id": trusted_rehearsal.experiment_id,
+            "candidate_id": trusted_rehearsal.candidate_id,
+            "rehearsal_id": trusted_rehearsal.rehearsal_id,
+            "main_sha": trusted_rehearsal.main_sha,
+            "source_sha": trusted_rehearsal.source_sha,
+            "integration_sha": trusted_rehearsal.integration_sha,
+            "integration_tree_sha": trusted_rehearsal.integration_tree_sha,
+            "rehearsal_ref": trusted_rehearsal.rehearsal_ref,
+            "workflow_source_sha": trusted_rehearsal.workflow_source_sha,
+            "run_id": trusted_rehearsal.run_id,
+            "run_attempt": trusted_rehearsal.run_attempt,
+            "policy_digest": trusted_rehearsal.policy_digest,
+            "scope_digest": trusted_rehearsal.scope_digest,
+        }
+        if actual_rehearsal != expected_rehearsal:
+            raise DomainError(
+                "live trusted Rehearsal evidence does not match current Rehearsal",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if {row.get("name") for row in trusted_rehearsal.checks} != set(REHEARSAL_REQUIRED_CHECKS):
+            raise DomainError(
+                "SELECTED Rehearsal check set is incomplete",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        retention = candidate.get("retention")
+        if not isinstance(retention, dict) or trusted_retention is None:
+            raise DomainError(
+                "SELECTED requires live Level-3 Candidate retention verification",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        expected_retention = {
+            "experiment_id": experiment_id,
+            "candidate_id": candidate_id,
+            "release_tag": retention.get("release_tag"),
+            "artifact_digest": candidate.get("artifact_digest"),
+            "target_commitish": candidate.get("source_sha"),
+        }
+        actual_retention = {
+            "experiment_id": trusted_retention.experiment_id,
+            "candidate_id": trusted_retention.candidate_id,
+            "release_tag": trusted_retention.release_tag,
+            "artifact_digest": trusted_retention.artifact_digest,
+            "target_commitish": trusted_retention.target_commitish,
+        }
+        if actual_retention != expected_retention or trusted_retention.immutable is not True:
+            raise DomainError(
+                "live Candidate retention evidence does not match current Candidate",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        if trusted_retention.artifact_name != "candidate.tgz":
+            raise DomainError(
+                "SELECTED requires retained candidate.tgz",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+
+        selection_evidence = {
+            "candidate_id": candidate_id,
+            "artifact_digest": candidate["artifact_digest"],
+            "source_sha": candidate["source_sha"],
+            "rehearsal": {
+                "rehearsal_id": rehearsal_id,
+                "main_sha": trusted_rehearsal.main_sha,
+                "integration_sha": trusted_rehearsal.integration_sha,
+                "integration_tree_sha": trusted_rehearsal.integration_tree_sha,
+                "rehearsal_ref": trusted_rehearsal.rehearsal_ref,
+                "policy_digest": trusted_rehearsal.policy_digest,
+                "scope_digest": trusted_rehearsal.scope_digest,
+            },
+            "retention": {
+                "provider": "github-immutable-release",
+                "release_id": trusted_retention.release_id,
+                "release_tag": trusted_retention.release_tag,
+                "release_url": trusted_retention.release_url,
+                "asset_id": trusted_retention.asset_id,
+                "asset_name": trusted_retention.artifact_name,
+                "artifact_digest": trusted_retention.artifact_digest,
+                "immutable": True,
+            },
+        }
 
     decision_path = f"experiments/{experiment_id}/decisions/{request_id}.json"
     if (repo_dir / decision_path).exists():
@@ -646,6 +784,8 @@ def _plan_decision(
         decision["actor_claim"] = actor_claim
     if promotion_evidence is not None:
         decision["promotion_evidence"] = promotion_evidence
+    if selection_evidence is not None:
+        decision["selection_evidence"] = selection_evidence
 
     next_state = dict(state)
     next_state["lifecycle"] = to_state
@@ -1209,6 +1349,7 @@ def plan_domain_mutation(
             request_id=request_id,
             trusted_actor=trusted_actor,
             trusted_retention=trusted_retention,
+            trusted_rehearsal=trusted_rehearsal,
         )
     if operation != "experiment.bind":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
