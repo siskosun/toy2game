@@ -22,6 +22,7 @@ class FakeTransport:
         self.record = None
         self.state = None
         self.logs = ""
+        self.dispatch_uncertain = False
         self._rules = [
             {"name": "game-exp ledger", "enforcement": "active"},
             {"name": "game-exp experiment branches", "enforcement": "active"},
@@ -34,6 +35,8 @@ class FakeTransport:
 
     def dispatch_writer(self, **kwargs):
         self.dispatched.append(kwargs)
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/123"
 
     def ledger_record(self, request_id):
