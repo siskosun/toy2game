@@ -97,6 +97,39 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(reconciled["status"], "COMMITTED")
         self.assertTrue(reconciled["verified_against_local_request"])
 
+    def test_submit_replay_returns_committed_without_second_dispatch(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        first = client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "three roles"},
+            request_id="req_test_replay",
+        )
+        self.assertEqual(first["status"], "ACCEPTED")
+        self.assertEqual(len(transport.dispatched), 1)
+
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.create",
+            "input": {"hypothesis": "three roles"},
+            "preconditions": {},
+        }
+        transport.record = {
+            "request_id": "req_test_replay",
+            "payload_digest": digest_object(payload),
+            "payload": payload,
+        }
+
+        replay = client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "three roles"},
+            request_id="req_test_replay",
+        )
+        self.assertEqual(replay["status"], "COMMITTED")
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(len(transport.dispatched), 1)
+
     def test_remote_digest_mismatch_is_conflict(self):
         transport = FakeTransport()
         client = GameExpClient(transport)
