@@ -97,7 +97,7 @@ class GameExpSkillContractTests(unittest.TestCase):
             "## Experiment Board",
             "game_exp_board",
             "read-only projection",
-            "Next gate",
+            "下一步",
             "health=FAIL",
             "DO_NOT_USE_RECREATE_EXPERIMENT",
             "ChatGPT Work",
