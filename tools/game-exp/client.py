@@ -430,6 +430,7 @@ class GameExpClient:
 
     def status(self) -> dict[str, Any]:
         return {
+            "status": "PASS",
             "repo": self.transport.repo,
             "ledger_head": self.transport.ledger_head(),
         }
