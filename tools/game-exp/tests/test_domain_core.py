@@ -90,6 +90,30 @@ class DomainBindingTests(unittest.TestCase):
             digest_object(plan.writes["experiments/EXP-123/manifest.json"]),
         )
 
+    def test_validation_and_planning_do_not_mutate_manifest_or_payload(self):
+        import copy
+
+        value = manifest()
+        original_manifest = copy.deepcopy(value)
+        payload = build_operation_payload("experiment.bind", {"manifest": value})
+        original_payload = copy.deepcopy(payload)
+        before = digest_object(payload)
+
+        plan_domain_mutation(
+            repo_dir=self.root,
+            payload=payload,
+            request_id="req_bind_1",
+            payload_digest=before,
+            repository_full_name="siskosun/toy2game",
+            trusted_binding=self.ctx,
+        )
+
+        self.assertEqual(value, original_manifest)
+        self.assertEqual(payload, original_payload)
+        self.assertEqual(digest_object(payload), before)
+        self.assertEqual(value["scope"]["allowed"], ["games/**"])
+        self.assertEqual(value["scope"]["avoid"], ["infra/**"])
+
     def test_trusted_issue_identity_mismatch_is_rejected(self):
         value = manifest()
         value["experiment"]["issue_id"] = "999"

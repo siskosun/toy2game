@@ -203,6 +203,12 @@ def main() -> int:
             repository_full_name=args.repo,
             trusted_binding=trusted_binding,
         )
+        post_domain_digest = digest_object(payload)
+        if post_domain_digest != payload_digest:
+            raise WriterError(
+                "trusted domain planning mutated the request payload; "
+                f"before={payload_digest} after={post_domain_digest}"
+            )
 
         record = {
             "expected_head": args.expected_head,

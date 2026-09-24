@@ -80,7 +80,7 @@ def _string_list(value: Any, where: str, *, min_items: int = 0) -> list[str]:
         raise DomainError(f"{where}: expected non-empty strings")
     if len(value) < min_items:
         raise DomainError(f"{where}: requires at least {min_items} item(s)")
-    return value
+    return list(value)
 
 
 def _require_nfc(value: str, where: str) -> None:
