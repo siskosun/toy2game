@@ -121,6 +121,7 @@ class RehearsalControlTests(unittest.TestCase):
                 run_id="456",
                 run_attempt="1",
                 policy_digest="sha256:" + "f" * 64,
+                scope_digest="sha256:" + "6" * 64,
                 context_output=context_path,
             )
             result = payload(args)
@@ -135,6 +136,7 @@ class RehearsalControlTests(unittest.TestCase):
         )
         self.assertEqual(context["integration_sha"], "c" * 40)
         self.assertEqual(context["integration_tree_sha"], "d" * 40)
+        self.assertEqual(context["scope_digest"], "sha256:" + "6" * 64)
         self.assertEqual(
             {row["name"] for row in context["checks"]},
             {
