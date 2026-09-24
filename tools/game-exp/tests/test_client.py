@@ -9,7 +9,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
-from client import GameExpClient  # noqa: E402
+from client import GameExpClient, TransportUncertainError  # noqa: E402
 from protocol_core import digest_object  # noqa: E402
 
 
@@ -127,6 +127,46 @@ class ClientTests(unittest.TestCase):
         reconciled = client.reconcile("req_test_3")
         self.assertEqual(reconciled["status"], "CONFLICT")
         self.assertEqual(reconciled["conflict_type"], "HEAD_CONFLICT")
+
+
+    def test_uncertain_dispatch_keeps_original_expected_head_for_retry(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        transport.dispatch_uncertain = True
+
+        first = client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "retry me"},
+            request_id="req_test_uncertain",
+        )
+        self.assertEqual(first["status"], "UNKNOWN")
+        original_head = first["expected_head"]
+
+        transport.head = "b" * 40
+        transport.dispatch_uncertain = False
+        second = client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "retry me"},
+            request_id="req_test_uncertain",
+        )
+        self.assertEqual(second["status"], "ACCEPTED")
+        self.assertEqual(transport.dispatched[-1]["expected_head"], original_head)
+
+    def test_same_local_request_id_with_different_payload_is_conflict(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "A"},
+            request_id="req_test_local_conflict",
+        )
+        result = client.submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "B"},
+            request_id="req_test_local_conflict",
+        )
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "LOCAL_REQUEST_ID_CONFLICT")
 
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
