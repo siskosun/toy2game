@@ -85,7 +85,52 @@ class RehearsalControlTests(unittest.TestCase):
 
     @patch("rehearsal_control.github_json")
     @patch("rehearsal_control.github_content_json")
-    def test_prepare_rejects_non_promising_experiment(self, content, api):
+    def test_prepare_allows_selected_experiment_refresh(self, content, api):
+        manifest = {
+            "scope": {"allowed": ["games/**"], "avoid": [".github/**"]}
+        }
+        manifest_digest = digest_object(manifest)
+        content.side_effect = [
+            {
+                "kind": "experiment_state",
+                "experiment_id": "EXP-21",
+                "lifecycle": "SELECTED",
+                "current_candidate_id": "C-21-123-1",
+            },
+            {
+                "kind": "candidate",
+                "experiment_id": "EXP-21",
+                "candidate_id": "C-21-123-1",
+                "source_sha": "b" * 40,
+                "manifest_digest": manifest_digest,
+            },
+            {
+                "kind": "experiment_identity",
+                "experiment_id": "EXP-21",
+                "parent_sha": "d" * 40,
+                "initialization": {
+                    "manifest_digest": manifest_digest,
+                    "manifest_path": "experiments/EXP-21/manifest.yaml",
+                },
+            },
+            manifest,
+        ]
+        api.return_value = {"object": {"sha": "a" * 40}}
+        args = argparse.Namespace(
+            repo="owner/repo",
+            experiment_id="EXP-21",
+            run_id="789",
+            run_attempt="1",
+            workflow_source_sha="c" * 40,
+        )
+        result = prepare(args)
+        self.assertEqual(result["candidate_id"], "C-21-123-1")
+        self.assertEqual(result["main_sha"], "a" * 40)
+        self.assertEqual(result["rehearsal_id"], "R-21-789-1")
+
+    @patch("rehearsal_control.github_json")
+    @patch("rehearsal_control.github_content_json")
+    def test_prepare_rejects_non_promising_or_selected_experiment(self, content, api):
         content.side_effect = [
             {
                 "kind": "experiment_state",
@@ -101,7 +146,7 @@ class RehearsalControlTests(unittest.TestCase):
             run_attempt="1",
             workflow_source_sha="c" * 40,
         )
-        with self.assertRaisesRegex(RehearsalControlError, "PROMISING"):
+        with self.assertRaisesRegex(RehearsalControlError, "PROMISING or SELECTED"):
             prepare(args)
         api.assert_not_called()
 

@@ -244,13 +244,13 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         f"experiments/{args.experiment_id}/state.json",
         "game-exp/ledger",
     )
-    if state.get("lifecycle") != "PROMISING":
+    if state.get("lifecycle") not in {"PROMISING", "SELECTED"}:
         raise RehearsalControlError(
-            f"Rehearsal requires PROMISING lifecycle, got {state.get('lifecycle')!r}"
+            f"Rehearsal requires PROMISING or SELECTED lifecycle, got {state.get('lifecycle')!r}"
         )
     candidate_id = state.get("current_candidate_id")
     if not isinstance(candidate_id, str) or not candidate_id:
-        raise RehearsalControlError("PROMISING experiment has no current Candidate")
+        raise RehearsalControlError("experiment has no current Candidate")
     candidate = github_content_json(
         args.repo,
         f"experiments/{args.experiment_id}/candidates/{candidate_id}.json",
