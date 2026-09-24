@@ -148,7 +148,9 @@ The proposal workflow requires the current lifecycle to be `SELECTED`, requires 
 
 `game-exp/integration/<issue>/<rehearsal-id>`
 
-The proposal commit has exactly one parent (the rehearsed main) and its tree is exactly the trusted Rehearsal `integration_tree_sha`. The workflow opens a normal PR against `main`; it does not mark the experiment integrated and it does not bypass the protected-main PR rule.
+The proposal commit has exactly one parent (the rehearsed main) and its tree is exactly the trusted Rehearsal `integration_tree_sha`. Repository policy intentionally does **not** allow `GITHUB_TOKEN` to create or approve pull requests. The trusted workflow therefore stops after creating/verifying the deterministic branch and emits PR handoff metadata when no matching PR exists.
+
+Create the PR with your own GitHub identity (or an authorized Harness/connector). Do not enable Actions PR creation just for game-exp. Creating or merging the PR does not mark the experiment integrated.
 
 After that PR is actually merged, finalize it:
 
