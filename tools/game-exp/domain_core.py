@@ -537,7 +537,7 @@ def _plan_review(
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
 
-    _binding, manifest, state, _binding_operation = _load_bound_experiment(
+    binding, manifest, state, _binding_operation = _load_bound_experiment(
         repo_dir,
         experiment_id,
     )
@@ -552,6 +552,12 @@ def _plan_review(
             code="DOMAIN_REVIEW_CONFLICT",
         )
     candidate = _load_candidate(repo_dir, experiment_id, candidate_id)
+    binding_manifest_digest = binding.get("initialization", {}).get("manifest_digest")
+    if candidate.get("manifest_digest") != binding_manifest_digest:
+        raise DomainError(
+            "Candidate manifest digest differs from authoritative binding",
+            code="DOMAIN_REVIEW_CONFLICT",
+        )
 
     protocol = manifest.get("review", {}).get("protocol")
     if not isinstance(protocol, str) or not protocol:
