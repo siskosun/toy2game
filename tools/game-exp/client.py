@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from protocol_core import (
-    ProtocolError,
     build_operation_payload,
     digest_object,
     encode_payload_b64,
@@ -23,16 +21,31 @@ class ClientError(RuntimeError):
     pass
 
 
-def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+class TransportUncertainError(ClientError):
+    """The remote outcome may have happened, but the client cannot prove it yet."""
+
+
+def _run(
+    args: list[str],
+    *,
+    check: bool = True,
+    timeout: float = 30.0,
+) -> subprocess.CompletedProcess[str]:
     try:
         proc = subprocess.run(
             args,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise ClientError(f"required command not found: {args[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TransportUncertainError(
+            f"command timed out after {timeout:.0f}s: {' '.join(args[:3])}"
+        ) from exc
+
     if check and proc.returncode != 0:
         raise ClientError(
             f"command failed ({proc.returncode}): {' '.join(args)}\n"
@@ -49,7 +62,7 @@ def _json_output(proc: subprocess.CompletedProcess[str]) -> Any:
 
 
 def _journal_root() -> Path:
-    proc = _run(["git", "rev-parse", "--git-common-dir"], check=False)
+    proc = _run(["git", "rev-parse", "--git-common-dir"], check=False, timeout=5)
     if proc.returncode == 0 and proc.stdout.strip():
         raw = Path(proc.stdout.strip())
         if not raw.is_absolute():
@@ -112,11 +125,20 @@ class GitHubTransport:
                 f"expected_head={expected_head}",
                 "-f",
                 f"payload_b64={payload_b64}",
-            ]
+            ],
+            check=False,
+            timeout=30,
         )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "workflow dispatch did not produce a provable result; reconcile by request_id"
+            )
+
         url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not RUN_URL_RE.search(url):
-            raise ClientError(f"workflow dispatch did not return a run URL: {proc.stdout!r}")
+            raise TransportUncertainError(
+                "workflow dispatch returned no run URL; outcome is uncertain"
+            )
         return url
 
     def ledger_record(self, request_id: str) -> dict[str, Any] | None:
@@ -271,23 +293,57 @@ class GameExpClient:
             preconditions=preconditions,
             actor_claim=actor_claim,
         )
-        expected_head = self.transport.ledger_head()
         payload_digest = digest_object(payload)
-        workflow_url = self.transport.dispatch_writer(
-            request_id=rid,
-            expected_head=expected_head,
-            payload_b64=encode_payload_b64(payload),
-        )
-        result = {
-            "status": "ACCEPTED",
+
+        existing = self._read_journal(rid)
+        if existing is not None:
+            old_digest = existing.get("payload_digest")
+            if old_digest != payload_digest:
+                return {
+                    "status": "CONFLICT",
+                    "conflict_type": "LOCAL_REQUEST_ID_CONFLICT",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                    "expected_payload_digest": old_digest,
+                    "new_payload_digest": payload_digest,
+                }
+            expected_head = existing["expected_head"]
+        else:
+            expected_head = self.transport.ledger_head()
+
+        pending = {
+            "status": "PENDING_DISPATCH",
             "request_id": rid,
             "repo": self.transport.repo,
             "operation": operation,
             "expected_head": expected_head,
             "payload_digest": payload_digest,
+            "payload": payload,
+        }
+        self._write_journal({**existing, **pending} if existing else pending)
+
+        try:
+            workflow_url = self.transport.dispatch_writer(
+                request_id=rid,
+                expected_head=expected_head,
+                payload_b64=encode_payload_b64(payload),
+            )
+        except TransportUncertainError as exc:
+            result = {
+                **pending,
+                "status": "UNKNOWN",
+                "reason": "dispatch_outcome_uncertain",
+                "error": str(exc),
+            }
+            self._write_journal(result)
+            return result
+
+        result = {
+            **pending,
+            "status": "ACCEPTED",
             "workflow_url": workflow_url,
         }
-        self._write_journal({**result, "payload": payload})
+        self._write_journal(result)
         return result
 
     def reconcile(self, request_id: str) -> dict[str, Any]:
@@ -367,6 +423,9 @@ class GameExpClient:
             "reason": "no_remote_record_and_no_resolved_workflow",
             "request_id": rid,
             "repo": self.transport.repo,
+            "retry_safe_with_same_request_id": journal is not None,
+            "expected_head": journal.get("expected_head") if journal else None,
+            "payload_digest": expected_digest,
         }
 
     def status(self) -> dict[str, Any]:
