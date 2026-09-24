@@ -437,6 +437,168 @@ def _plan_decision(
     )
 
 
+def _load_candidate(
+    repo_dir: Path,
+    experiment_id: str,
+    candidate_id: str,
+) -> dict[str, Any]:
+    match = CANDIDATE_RE.fullmatch(candidate_id)
+    if not match or match.group(1) != experiment_id.removeprefix("EXP-"):
+        raise DomainError("candidate_id does not match experiment", code="DOMAIN_REVIEW_CONFLICT")
+    candidate = _read_json_file(
+        repo_dir,
+        f"experiments/{experiment_id}/candidates/{candidate_id}.json",
+        where=experiment_id,
+    )
+    if (
+        candidate.get("kind") != "candidate"
+        or candidate.get("candidate_id") != candidate_id
+        or candidate.get("experiment_id") != experiment_id
+    ):
+        raise DomainError("Candidate identity mismatch", code="DOMAIN_REVIEW_CONFLICT")
+
+    artifact_digest = candidate.get("artifact_digest")
+    manifest_digest = candidate.get("manifest_digest")
+    source_sha = candidate.get("source_sha")
+    if not isinstance(artifact_digest, str) or not SHA256_RE.fullmatch(artifact_digest):
+        raise DomainError("Candidate artifact digest invalid", code="DOMAIN_REVIEW_CONFLICT")
+    if not isinstance(manifest_digest, str) or not SHA256_RE.fullmatch(manifest_digest):
+        raise DomainError("Candidate manifest digest invalid", code="DOMAIN_REVIEW_CONFLICT")
+    if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise DomainError("Candidate source SHA invalid", code="DOMAIN_REVIEW_CONFLICT")
+
+    checks = candidate.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise DomainError("Candidate trusted checks missing", code="DOMAIN_REVIEW_CONFLICT")
+    seen: set[str] = set()
+    for check in checks:
+        if not isinstance(check, dict):
+            raise DomainError("Candidate check invalid", code="DOMAIN_REVIEW_CONFLICT")
+        if set(check) != {"name", "status", "source"}:
+            raise DomainError("Candidate check keys invalid", code="DOMAIN_REVIEW_CONFLICT")
+        name = check.get("name")
+        if not isinstance(name, str) or not name or name in seen:
+            raise DomainError("Candidate check name invalid", code="DOMAIN_REVIEW_CONFLICT")
+        seen.add(name)
+        if check.get("status") != "PASS" or check.get("source") != "TRUSTED_OBSERVED":
+            raise DomainError("Candidate has non-trusted or failed check", code="DOMAIN_REVIEW_CONFLICT")
+
+    retention = candidate.get("retention")
+    if not isinstance(retention, dict):
+        raise DomainError("Candidate retention missing", code="DOMAIN_REVIEW_CONFLICT")
+    if (
+        retention.get("provider") != "github-immutable-release"
+        or retention.get("immutable") is not True
+        or retention.get("artifact_digest") != artifact_digest
+    ):
+        raise DomainError("Candidate retention invalid", code="DOMAIN_REVIEW_CONFLICT")
+
+    attestation = candidate.get("attestation")
+    if not isinstance(attestation, dict):
+        raise DomainError("Candidate attestation missing", code="DOMAIN_REVIEW_CONFLICT")
+    if (
+        attestation.get("provider") != "github-artifact-attestations"
+        or attestation.get("verified") is not True
+        or attestation.get("subject_digest") != artifact_digest
+        or attestation.get("source_sha") != source_sha
+    ):
+        raise DomainError("Candidate attestation invalid", code="DOMAIN_REVIEW_CONFLICT")
+    return candidate
+
+
+def _plan_review(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_actor: TrustedActorContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(
+        input_value,
+        {"experiment_id", "candidate_id", "outcome", "notes"},
+        where="operation.input",
+    )
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    candidate_id = _string(input_value["candidate_id"], "operation.input.candidate_id")
+    outcome = _string(input_value["outcome"], "operation.input.outcome")
+    notes = _string(input_value["notes"], "operation.input.notes")
+    if outcome not in {"PASS", "FAIL"}:
+        raise DomainError("review outcome must be PASS or FAIL")
+
+    if trusted_actor is None:
+        raise DomainError(
+            "trusted actor context is required for Review",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_actor.permission not in {"admin", "maintain", "write"}:
+        raise DomainError(
+            f"actor {trusted_actor.login!r} lacks write permission",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+
+    _binding, manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    if state.get("lifecycle") != "REVIEW":
+        raise DomainError(
+            f"Review requires REVIEW lifecycle, got {state.get('lifecycle')!r}",
+            code="DOMAIN_REVIEW_CONFLICT",
+        )
+    if state.get("current_candidate_id") != candidate_id:
+        raise DomainError(
+            "Review must bind the current Candidate",
+            code="DOMAIN_REVIEW_CONFLICT",
+        )
+    candidate = _load_candidate(repo_dir, experiment_id, candidate_id)
+
+    protocol = manifest.get("review", {}).get("protocol")
+    if not isinstance(protocol, str) or not protocol:
+        raise DomainError("manifest review protocol missing", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+
+    review_path = f"experiments/{experiment_id}/reviews/{request_id}.json"
+    if (repo_dir / review_path).exists():
+        raise DomainError("review_id already exists", code="DOMAIN_REVIEW_CONFLICT")
+
+    review = {
+        "kind": "review",
+        "review_id": request_id,
+        "experiment_id": experiment_id,
+        "candidate_id": candidate_id,
+        "artifact_digest": candidate["artifact_digest"],
+        "protocol": protocol,
+        "outcome": outcome,
+        "notes": notes,
+        "actor": {
+            "login": trusted_actor.login,
+            "user_id": trusted_actor.user_id,
+            "permission": trusted_actor.permission,
+            "source": "github-collaborator-permission",
+        },
+    }
+    actor_claim = payload.get("actor_claim")
+    if actor_claim is not None:
+        review["actor_claim"] = actor_claim
+
+    next_state = dict(state)
+    review_sequence = next_state.get("review_sequence", 0)
+    if not isinstance(review_sequence, int) or isinstance(review_sequence, bool) or review_sequence < 0:
+        raise DomainError("invalid review_sequence", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    next_state["review_sequence"] = review_sequence + 1
+    next_state["current_review_id"] = request_id
+    next_state["current_review_candidate_id"] = candidate_id
+
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            review_path: review,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
 def _plan_candidate(
     *,
     repo_dir: Path,
@@ -588,6 +750,8 @@ def _plan_candidate(
         raise DomainError("invalid candidate_sequence", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
     next_state["candidate_sequence"] = current_seq + 1
     next_state["current_candidate_id"] = trusted_candidate.candidate_id
+    next_state.pop("current_review_id", None)
+    next_state.pop("current_review_candidate_id", None)
 
     return DomainPlan(
         status="APPLIED",
@@ -613,6 +777,13 @@ def plan_domain_mutation(
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "review.record":
+        return _plan_review(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_actor=trusted_actor,
+        )
     if operation == "candidate.register":
         return _plan_candidate(
             repo_dir=repo_dir,
