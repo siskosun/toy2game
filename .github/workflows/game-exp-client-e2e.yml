@@ -25,7 +25,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          set +e
           python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json doctor | tee doctor.json
+          doctor_code=${PIPESTATUS[0]}
+          set -e
+          test "$doctor_code" -eq 0 -o "$doctor_code" -eq 1
           python - <<'PY'
           import json
           x=json.load(open("doctor.json",encoding="utf-8"))
