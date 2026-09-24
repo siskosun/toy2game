@@ -206,7 +206,22 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(state["current_rehearsal_id"], "R-42-456-1")
         self.assertEqual(state["current_rehearsal_candidate_id"], self.candidate_id)
 
-    def test_rehearsal_requires_promising(self):
+    def test_selected_can_refresh_rehearsal_without_changing_lifecycle(self):
+        state_path = self.root / "experiments/EXP-42/state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["lifecycle"] = "SELECTED"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        plan = self.plan()
+        refreshed = plan.writes["experiments/EXP-42/state.json"]
+        self.assertEqual(refreshed["lifecycle"], "SELECTED")
+        self.assertEqual(refreshed["current_rehearsal_id"], "R-42-456-1")
+        self.assertEqual(
+            refreshed["current_rehearsal_candidate_id"],
+            self.candidate_id,
+        )
+
+    def test_rehearsal_requires_promising_or_selected(self):
         state_path = self.root / "experiments/EXP-42/state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["lifecycle"] = "REVIEW"
