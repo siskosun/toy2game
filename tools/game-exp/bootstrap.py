@@ -155,18 +155,23 @@ class Bootstrapper:
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         mcp_header = "[mcp_servers.game-exp]"
         plugin_header = f'[plugins."game-exp@{marketplace_name}"]'
-        existing_plugin = re.search(r'(?m)^\[plugins\."game-exp@[^"]+"\]\s*            f'{mcp_header}\n'
+        existing_plugin = re.search(r'(?m)^\[plugins\."game-exp@[^"]+"\]\s*$', existing)
+
+        block = (
+            f"{mcp_header}\n"
             'command = "uv"\n'
             'args = ["run", "--with", "mcp>=2,<3", "python", "tools/game-exp/mcp_server.py"]\n'
             'enabled = true\n'
             f'env = {{ GAME_EXP_REPO = "{self.repo}" }}\n\n'
-            f'{plugin_header}\n'
+            f"{plugin_header}\n"
             'enabled = true\n'
         )
         if mcp_header in existing or existing_plugin:
             if mcp_header in existing and existing_plugin and block.strip() in existing:
                 return PlannedWrite(path, existing.encode("utf-8"), "generated")
-            raise BootstrapError("existing .codex/config.toml has a conflicting game-exp configuration")
+            raise BootstrapError(
+                "existing .codex/config.toml has a conflicting game-exp configuration"
+            )
 
         prefix = existing
         if prefix and not prefix.endswith("\n"):
