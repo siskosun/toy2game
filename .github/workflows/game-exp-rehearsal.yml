@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           python control/tools/game-exp/rehearsal_control.py prepare             --repo "$GITHUB_REPOSITORY"             --experiment-id "$EXPERIMENT_ID"             --run-id "$RUN_ID"             --run-attempt "$RUN_ATTEMPT"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA"             | tee "$RUNNER_TEMP/rehearsal-prepare.json"
-          python - "$RUNNER_TEMP/rehearsal-prepare.json" "$GITHUB_OUTPUT" <<'PY'
+          PYTHONPATH=control/tools/game-exp python - "$RUNNER_TEMP/rehearsal-prepare.json" "$GITHUB_OUTPUT" <<'PY'
           import json, pathlib, sys
           x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
           from project_policy import load_policy
