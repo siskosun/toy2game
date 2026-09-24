@@ -32,6 +32,7 @@ jobs:
           path: control
           sparse-checkout: |
             tools/game-exp/trusted_writer.py
+            tools/game-exp/protocol_core.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v6

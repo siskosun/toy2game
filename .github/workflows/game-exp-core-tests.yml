@@ -1,0 +1,30 @@
+name: game-exp core tests
+
+on:
+  pull_request:
+    paths:
+      - 'tools/game-exp/**'
+      - '.github/workflows/game-exp-core-tests.yml'
+      - '.github/workflows/game-exp-trusted-writer.yml'
+      - '.github/workflows/game-exp-trusted-writer-selftest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run game-exp unit tests
+        run: python -m unittest discover -s tools/game-exp/tests -v
