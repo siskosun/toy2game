@@ -386,6 +386,7 @@ class ClientTests(unittest.TestCase):
                     "title": "Combat readability",
                     "hypothesis": "roles improve readability",
                     "experiment": {"issue_number": "7"},
+                    "scope": {"allowed": ["games/arena-duel/**"]},
                 },
                 "experiments/EXP-21/state.json": {
                     "experiment_id": "EXP-21",
@@ -401,6 +402,7 @@ class ClientTests(unittest.TestCase):
                     "title": "Binding pilot",
                     "hypothesis": "trusted binding works",
                     "experiment": {"issue_number": "21"},
+                    "scope": {"allowed": ["games/**"]},
                 },
                 "experiments/EXP-21/reviews/req_review.json": {
                     "review_id": "req_review",
@@ -442,6 +444,12 @@ class ClientTests(unittest.TestCase):
             "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK",
         )
         self.assertEqual(result["experiments"][1]["review_outcome"], "PASS")
+        self.assertEqual(result["repo"], "owner/repo")
+        self.assertEqual(result["repository_name"], "repo")
+        self.assertEqual(result["experiments"][0]["repository"], "owner/repo")
+        self.assertEqual(result["experiments"][0]["repository_name"], "repo")
+        self.assertEqual(result["experiments"][0]["prototype_name"], "arena-duel")
+        self.assertEqual(result["experiments"][1]["prototype_name"], "仓库级/未指定原型")
         self.assertEqual(result["experiments"][0]["health"], "PASS")
         self.assertEqual(result["experiments"][1]["health"], "PASS")
         self.assertEqual(transport.last_ledger_paths_ref, transport.head)

@@ -166,7 +166,7 @@ Low-level fallback:
 
 ## Board and Skill
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.1`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.2`.
 
 Normal users do not need to remember MCP tool names. Examples:
 
@@ -178,6 +178,10 @@ Normal users do not need to remember MCP tool names. Examples:
 
 For `打开 game-exp 面板`, the Skill calls `game_exp_board` and renders one consistent protected-Ledger snapshot with:
 
+- repository name and pinned Ledger snapshot;
+- experiment id / GitHub Issue;
+- inferred game prototype name from `scope.allowed`;
+- Chinese lifecycle, health, and next-gate labels;
 - experiment / title;
 - lifecycle;
 - health;
