@@ -110,6 +110,8 @@ class CandidateTests(unittest.TestCase):
         self.workflow_sha = "b" * 40
         self.artifact_digest = "sha256:" + "1" * 64
         self.manifest_digest = digest_object(self.mf)
+        self.dependency_lock_digest = "sha256:" + "4" * 64
+        self.environment_digest = "sha256:" + "5" * 64
         self.candidate_id = "C-42-123-1"
         self.anchor = f"refs/tags/exp-candidate/42/{self.candidate_id}"
         self.release_tag = "game-exp-candidate-123-1"
@@ -136,6 +138,8 @@ class CandidateTests(unittest.TestCase):
             "run_id": "123",
             "run_attempt": "1",
             "policy_digest": candidate_policy_digest(),
+            "dependency_lock_digest": self.dependency_lock_digest,
+            "environment_digest": self.environment_digest,
             "checks": checks(),
             "retention": {
                 "provider": "github-immutable-release",
@@ -156,6 +160,8 @@ class CandidateTests(unittest.TestCase):
             "run_id": "123",
             "run_attempt": "1",
             "policy_digest": candidate_policy_digest(),
+            "dependency_lock_digest": self.dependency_lock_digest,
+            "environment_digest": self.environment_digest,
             "release_tag": self.release_tag,
         }
         values.update(overrides)
@@ -186,6 +192,9 @@ class CandidateTests(unittest.TestCase):
         pointer = plan.writes[pointer_path]
         self.assertEqual(record["artifact_level"], 3)
         self.assertEqual(record["checks"], checks())
+        self.assertEqual(record["dependency_lock_digest"], self.dependency_lock_digest)
+        self.assertEqual(record["environment_digest"], self.environment_digest)
+        self.assertEqual(record["runtime"], self.mf["runtime"])
         self.assertEqual(pointer["candidate_id"], self.candidate_id)
         self.assertEqual(pointer["candidate_digest"], digest_object(record))
         self.assertEqual(digest_object(payload), digest_object(payload))
