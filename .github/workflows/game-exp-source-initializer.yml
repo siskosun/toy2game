@@ -1,0 +1,81 @@
+name: game-exp source initializer
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  initialize-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted control source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/source_initializer.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted source-writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Initialize canonical source refs
+        id: init
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+        run: |
+          set -euo pipefail
+          set +e
+          python control/tools/game-exp/source_initializer.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --experiment-id "$EXPERIMENT_ID" \
+            --ssh-key "$GAME_EXP_WRITER_KEY_PATH" \
+            | tee "$RUNNER_TEMP/game-exp-init-result.json"
+          code=${PIPESTATUS[0]}
+          set -e
+
+          python - "$RUNNER_TEMP/game-exp-init-result.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          result=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          with open(sys.argv[2],"a",encoding="utf-8") as out:
+              out.write(f"result={result.get('status','UNKNOWN')}\n")
+              out.write(f"branch_head={result.get('branch_head','')}\n")
+              out.write(f"initialization_commit={result.get('initialization_commit','')}\n")
+              out.write(f"replayed={str(result.get('replayed',False)).lower()}\n")
+          PY
+          exit "$code"
+
+      - name: Report result
+        if: always()
+        shell: bash
+        run: |
+          echo "result=${{ steps.init.outputs.result }}"
+          echo "branch_head=${{ steps.init.outputs.branch_head }}"
+          echo "initialization_commit=${{ steps.init.outputs.initialization_commit }}"
+          echo "replayed=${{ steps.init.outputs.replayed }}"
