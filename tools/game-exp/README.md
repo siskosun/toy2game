@@ -70,6 +70,20 @@ The CLI keeps a non-authoritative recovery journal under the Git common director
 
 It exists only to remember the original payload digest, expected Ledger head and workflow URL. The remote Ledger remains authoritative.
 
+## Project validation policy
+
+Repository-specific build assumptions are defined in `.game-exp/project-policy.json`, not hard-coded into Candidate, Rehearsal, or archived-snapshot workflows.
+
+Schema v1 currently supports the `node-npm` adapter and declares:
+
+- install/test/build commands as argv arrays (no shell command strings);
+- Candidate paths to package;
+- Candidate paths that must exist in the trusted archive.
+
+The trusted workflows load this policy from the immutable `github.workflow_sha`. Experiment branches cannot alter the policy used to validate themselves. The Candidate receipt records the policy digest, so changing project validation rules changes Candidate identity evidence.
+
+This is the extension point for future adapters such as Godot. Adding an adapter should extend `project_policy.py` and its tests rather than duplicating lifecycle workflows.
+
 ## Tests
 
 ```bash
