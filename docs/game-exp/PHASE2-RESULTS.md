@@ -2,15 +2,15 @@
 
 Repository: `siskosun/toy2game`  
 Protocol baseline: V1.3 / Phase 1 `PROTOCOL_FREEZE_APPROVED`  
-Validated main SHA at report update: `19c56f0b0e3010a63ee9c2ee20c621c43c3f85b5`
+Validated main SHA at report update: `14c7bda5f63d085dbebd22c70c2aee4de32cc34e`
 
 ## Decision
 
-**TRUSTED_DOMAIN_CORE_E2E_PASS**
+**TRUSTED_DOMAIN_CORE_E2E_PASS + CODEX_BOARD_TEXT_MVP_PASS**
 
 The request transport, Trusted Writer, protected Ledger, domain state machine, Candidate/Review/Rehearsal/Integration/Archive controls, CLI and minimal Codex MCP adapter have all been exercised against the real fork. The pilot experiment EXP-21 completed the full lifecycle and was successfully restored from its immutable archived snapshot after the experiment branch was deleted.
 
-This status means the current V1.3 domain workflow is operational on the target repository. It does **not** mean Codex MCP Apps UI is ready; the tested Codex host still keeps MCP Apps rendering behind disabled under-development feature flags.
+This status means the V1.3 domain workflow and the Codex Harness-native Board are operational on the target repository. It does **not** mean graphical Codex MCP Apps UI is ready; the tested Codex host still keeps MCP Apps rendering behind disabled under-development feature flags.
 
 ## Phase 2A — request transport
 
@@ -56,7 +56,7 @@ Codex 0.155.1 feature probe:
 - `codex_apps_mcp_2026_07_28`: under development / false
 - `mcp_2026_07_28`: under development / false
 
-UI decision: **TOOLS_ONLY_FOR_NOW**. Production Experiment Board remains deferred until the Codex host exposes a stable MCP Apps surface.
+UI decision: **TEXT_BOARD_MVP / MCP_APPS_DEFERRED**. The read-only Board is production-usable inside Codex as structured/text output. A persistent graphical MCP Apps panel remains deferred until the Codex host exposes that capability as stable and enabled.
 
 ## Phase 2C — Trusted Domain Core
 
@@ -219,6 +219,62 @@ It verified:
 
 For RETAIN_BRANCH, later branch movement yields `WARN / POST_ARCHIVE_BRANCH_DRIFT`; the immutable final tag remains the official archived snapshot.
 
+## Phase 2D — Codex Skill, Plugin and Harness-native Board
+
+The Harness layer is now implemented and validated, not future work.
+
+### Skill / Plugin
+
+- repo-local plugin: `game-exp@toy2game-local`
+- current plugin version: `0.1.2`
+- Skill: `plugins/game-exp/skills/game-exp/SKILL.md`
+- MCP server: project-local stdio `game-exp`
+- Codex 0.155.1 recognizes the plugin as installed and enabled.
+
+The Skill maps natural-language experiment work to domain-specific MCP tools and preserves the same human gates as the Trusted Domain Core. It explicitly forbids treating `ACCEPTED` as completion and does not allow automated evidence to decide Review PASS/FAIL, PROMISING, SELECTED, or ambiguous Archive branch-retention choices.
+
+### Natural-language Board E2E
+
+Real Codex prompt:
+
+`打开 game-exp 面板。只读，不要执行写操作，也不要运行 shell。按面板格式告诉我当前实验、健康状态、生命周期和下一步 gate。`
+
+Observed behavior:
+
+1. Codex loaded cached `game-exp 0.1.2` Skill.
+2. The Skill contained the `## Codex Board` instructions.
+3. Codex automatically called the read-only `game_exp_board` MCP tool without the user naming that tool.
+4. No shell command or write operation was used by the Board flow.
+5. Codex rendered a compact experiment table with lifecycle, health and next gate.
+
+### Board integrity gate
+
+The Board is a one-Ledger-snapshot projection and now verifies, per experiment:
+
+- Binding request payload digest;
+- Binding `inputs_digest`;
+- canonical Manifest digest.
+
+Known-invalid EXP-19 is therefore shown as:
+
+- lifecycle: `ACTIVE` (historical Ledger state);
+- health: `FAIL`;
+- health code: `BINDING_REQUEST_PAYLOAD_DIGEST_MISMATCH`;
+- next gate: `DO_NOT_USE_RECREATE_EXPERIMENT`.
+
+It is no longer presented as actionable. Valid archived EXP-21 is shown as `health=PASS / BINDING_CHAIN_VERIFIED`.
+
+### Graphical panel status
+
+Tested Codex 0.155.1 feature state:
+
+- `apps`: stable / true
+- `enable_mcp_apps`: under development / false
+- `codex_apps_mcp_2026_07_28`: under development / false
+- `mcp_2026_07_28`: under development / false
+
+Therefore the current supported Codex panel is the Harness-native structured/text Board. Do not enable under-development MCP Apps flags as a production dependency. When graphical MCP Apps becomes stable, it can consume the existing `game_exp_board` projection without becoming authoritative.
+
 ## Repository trust controls
 
 Active controls include:
@@ -233,10 +289,13 @@ Active controls include:
 ## Current architecture
 
 ```text
-Codex / CLI / future Skill
+Codex Plugin + game-exp Skill + text Board
           |
           v
-game-exp Client / MCP tools
+domain-specific game_exp_* MCP tools / CLI
+          |
+          v
+game-exp Client
           |
           v
 controlled GitHub workflow dispatch
@@ -254,11 +313,11 @@ human Review / Decision gates
 
 ## Remaining productization work
 
-The protocol/domain layer is no longer the main blocker. The next work should improve the Harness experience without weakening the trust boundaries:
+The protocol/domain layer, domain-specific MCP tools, Skill/Plugin, and Codex text Board are complete for the current pilot. Remaining work is productization rather than protocol correctness:
 
-1. expose domain-specific MCP tools instead of requiring generic operation JSON;
-2. add a game-exp Skill that maps natural-language experiment work to those tools;
-3. keep CLI for CI/debug/recovery;
-4. defer production Experiment Board UI until Codex MCP Apps is stable and enabled;
-5. add the Board later as a projection over the same Ledger/domain APIs, never as the authority.
+1. run a second real gameplay experiment from creation through Review using the Codex Skill rather than the synthetic protocol pilot;
+2. keep CLI for CI/debug/recovery and keep the Board read-only;
+3. package installation/bootstrap so another developer can enable game-exp in a fresh repository with minimal manual setup;
+4. add a graphical Board only when Codex exposes stable MCP Apps rendering; reuse the existing `game_exp_board` data contract and never make UI authoritative;
+5. continue regression-testing invalid/corrupt historical experiments so the Board blocks them instead of recommending lifecycle work.
 
