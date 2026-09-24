@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Trusted game experiment workflow for Codex using the game-exp MCP control plane.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
