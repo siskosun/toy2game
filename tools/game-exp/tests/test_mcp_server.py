@@ -59,6 +59,21 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("operation", submit["required"])
         self.assertIn("input", submit["required"])
 
+    def test_tool_annotations_distinguish_reads_from_submit(self):
+        tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
+        for name in ("game_exp_status", "game_exp_doctor", "game_exp_request_get"):
+            ann = tools[name].annotations
+            self.assertTrue(ann.read_only_hint)
+            self.assertFalse(ann.destructive_hint)
+            self.assertTrue(ann.idempotent_hint)
+            self.assertTrue(ann.open_world_hint)
+
+        submit = tools["game_exp_request_submit"].annotations
+        self.assertFalse(submit.read_only_hint)
+        self.assertFalse(submit.destructive_hint)
+        self.assertFalse(submit.idempotent_hint)
+        self.assertTrue(submit.open_world_hint)
+
     @patch("mcp_server._client", return_value=FakeClient())
     def test_read_tools_delegate_to_shared_client(self, _):
         status = mcp_server.game_exp_status("owner/repo")

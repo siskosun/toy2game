@@ -75,6 +75,42 @@ Codex / CLI / future MCP
 
 The local journal is recovery metadata only. GitHub's protected Ledger remains authoritative.
 
+## Phase 2B: Codex MCP evidence
+
+The minimal MCP adapter is now real, not a design-only layer. It uses the official Python MCP SDK v2 over stdio and delegates to the same validated request client; it does not gain direct Git authority.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| MCP SDK adapter tests on Linux/Windows/macOS | PASS | GitHub Actions run 35953142760 |
+| Core tests remain independent from optional MCP SDK | PASS | GitHub Actions run 35953142763 |
+| Codex discovers game-exp MCP server/tool | PASS | Codex 0.155.1 emitted an MCP tool call for `game_exp_status` |
+| Codex read chain | PASS | `game_exp_status` returned repo `siskosun/toy2game` and authoritative Ledger head |
+| Codex write-request chain | PASS | request `req-codex-mcp-probe-20260924-1158` |
+| Codex request accepted -> remote reconciliation | PASS | Trusted Writer run 35953652747 -> `COMMITTED` |
+| Codex MCP transport-probe digest | PASS | `sha256:1f0601fd998ad8f8f5f941af4a70c4af0d95f49415a29c2cdd531c7302b26c35` |
+
+The current MCP surface is deliberately narrow:
+
+- `game_exp_status`
+- `game_exp_doctor`
+- `game_exp_request_get`
+- `game_exp_request_submit`
+
+A submitted request is still an operation envelope. `ACCEPTED` is not domain execution, and `COMMITTED` currently proves durable request-record commitment, not that an experiment lifecycle mutation has been applied.
+
+### Codex panel capability spike
+
+On the tested Windows machine, Codex CLI 0.155.1 reports:
+
+- `apps`: stable / true
+- `enable_mcp_apps`: under development / false
+- `codex_apps_mcp_2026_07_28`: under development / false
+- `mcp_2026_07_28`: under development / false
+
+Decision: **TOOLS_ONLY_FOR_NOW**.
+
+Do not build the production Experiment Board as an MCP Apps iframe yet. Preserve headless tools and complete the Trusted Domain Core first. A future UI can consume the same domain projection once the relevant Codex host capability is stable and enabled.
+
 ## Next gate
 
 The next stage is **Trusted Domain Semantics**, not UI.
@@ -87,6 +123,6 @@ Port the frozen Phase 1 semantic rules into the trusted execution path operation
 4. archive Prepare / Claim / Abort / Commit;
 5. retention and rehearsal references.
 
-Only after those mutations are controlled by the trusted semantic core should MCP request tools become the primary Harness entry point.
+Only after those mutations are controlled by the trusted semantic core should domain-specific MCP tools such as `experiment_create`, `decision_submit`, and `archive_experiment` be exposed.
 
-Experiment Board / Codex panel work remains out of scope for this stage.
+The generic request MCP transport is already validated as the current Harness entry point. Experiment Board / Codex panel work remains out of scope until domain semantics exist and the Codex MCP Apps host capability is stable.

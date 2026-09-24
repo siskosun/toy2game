@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
 
 from client import GameExpClient, GitHubTransport
 
@@ -15,19 +16,19 @@ def _client(repo: str | None = None) -> GameExpClient:
     return GameExpClient(GitHubTransport(target))
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_status(repo: str | None = None) -> dict[str, Any]:
     """Return the target repository and authoritative game-exp Ledger head."""
     return _client(repo).status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_doctor(repo: str | None = None) -> dict[str, Any]:
     """Inspect game-exp trust prerequisites without changing repository state."""
     return _client(repo).doctor()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_request_get(
     request_id: str,
     repo: str | None = None,
@@ -36,7 +37,7 @@ def game_exp_request_get(
     return _client(repo).reconcile(request_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 def game_exp_request_submit(
     operation: str,
     input: dict[str, Any],
