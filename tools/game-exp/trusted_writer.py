@@ -128,13 +128,15 @@ def resolve_trusted_candidate(
 
 
 def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | None:
-    if payload.get("kind") != "operation_request" or payload.get("operation") != "experiment.decision":
+    if payload.get("kind") != "operation_request":
+        return None
+    if payload.get("operation") not in {"experiment.decision", "review.record"}:
         return None
 
     actor_login = os.environ.get("GAME_EXP_ACTOR_LOGIN")
     if not actor_login:
         raise DomainError(
-            "trusted GitHub actor login is unavailable",
+            "trusted GitHub actor login is unavailable for human-gated operation",
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
     actor_meta = github_json(
