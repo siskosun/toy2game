@@ -116,3 +116,19 @@ codex mcp list
 Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire; operational logging must go to stderr.
 
 This is intentionally a minimal MCP surface. Domain-specific tools such as `experiment_create`, `decision_submit`, and `archive_experiment` should not be exposed until the Trusted Core validates and applies those domain transitions rather than merely persisting an operation request.
+
+
+## Source initialization
+
+After a valid `experiment.bind` request has produced authoritative Binding/Manifest/State records in the protected Ledger, initialize source refs with:
+
+```powershell
+python tools/game-exp/cli.py --repo owner/repo initialize EXP-21
+```
+
+The client supplies only the canonical experiment ID. The trusted workflow reconstructs all other inputs from `game-exp/ledger`, verifies the original bound request digest and manifest digest, then atomically creates:
+
+- `refs/heads/exp/<issue>` at a new initialization commit whose only change is the deterministic source manifest;
+- an annotated `refs/tags/exp-base/<issue>` that still points to the frozen parent commit and records the initialization commit + initialization-plan digest in its tag message.
+
+Re-running initialization is safe. If the experiment branch has advanced normally, the initializer verifies that the current branch is descended from the recorded initialization commit. Partial or mismatched refs fail closed and are never force-overwritten.
