@@ -43,6 +43,7 @@ PRODUCTION_TOOLS = (
 PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/SKILL.md",
     "plugins/game-exp/skills/game-exp/references/workflow.md",
+    "plugins/game-exp/skills/game-exp/references/github-bridge.md",
     "plugins/game-exp/skills/game-exp/agents/openai.yaml",
 )
 
