@@ -37,6 +37,7 @@ PRODUCTION_TOOLS = (
     "source_initializer.py",
     "trusted_writer.py",
 )
+
 PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/SKILL.md",
     "plugins/game-exp/skills/game-exp/references/workflow.md",
@@ -67,12 +68,17 @@ class PlannedWrite:
     path: pathlib.Path
     content: bytes
     kind: str
+
+
 def _json_bytes(value: object) -> bytes:
     return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def _validate_repo(repo: str) -> str:
     if not REPO_RE.fullmatch(repo):
+        raise BootstrapError("repo must be owner/name")
+    owner, name = repo.split("/", 1)
+    if owner in {".", ".."} or name in {".", ".."}:
         raise BootstrapError("repo must be owner/name")
     return repo
 
@@ -101,13 +107,19 @@ class Bootstrapper:
         writes: list[PlannedWrite] = []
         for rel in _managed_paths():
             if rel == "plugins/game-exp/plugin.json":
-                plugin = json.loads(self._source_bytes(rel).decode("utf-8"))
+                try:
+                    plugin = json.loads(self._source_bytes(rel).decode("utf-8"))
+                except Exception as exc:
+                    raise BootstrapError(f"invalid source plugin.json: {exc}") from exc
+                if not isinstance(plugin, dict):
+                    raise BootstrapError("source plugin.json must be an object")
                 plugin["repository"] = f"https://github.com/{self.repo}"
                 content = _json_bytes(plugin)
             else:
                 content = self._source_bytes(rel)
             writes.append(PlannedWrite(self.target_root / rel, content, "managed"))
         return writes
+
     def _policy_write(self) -> PlannedWrite | None:
         path = self.target_root / ".game-exp/project-policy.json"
         if path.exists():
@@ -134,38 +146,52 @@ class Bootstrapper:
             if not isinstance(name, str) or not name:
                 raise BootstrapError("existing marketplace.json must contain a name")
         else:
-            name = f"{self.repo.split('/', 1)[1]}-local"
+            repo_name = self.repo.split("/", 1)[1]
+            name = f"{repo_name}-local"
             data = {
                 "name": name,
-                "interface": {"displayName": f"{self.repo.split('/', 1)[1]} Plugins"},
+                "interface": {"displayName": f"{repo_name} Plugins"},
                 "plugins": [],
             }
 
         entry = {
             "name": "game-exp",
             "source": {"source": "local", "path": "./plugins/game-exp"},
-            "policy": {"installation": "INSTALLED_BY_DEFAULT", "authentication": "ON_INSTALL"},
+            "policy": {
+                "installation": "INSTALLED_BY_DEFAULT",
+                "authentication": "ON_INSTALL",
+            },
             "category": "Productivity",
         }
-        data["plugins"] = [p for p in data["plugins"] if not (isinstance(p, dict) and p.get("name") == "game-exp")]
+        data["plugins"] = [
+            plugin
+            for plugin in data["plugins"]
+            if not (isinstance(plugin, dict) and plugin.get("name") == "game-exp")
+        ]
         data["plugins"].append(entry)
         return PlannedWrite(path, _json_bytes(data), "generated"), name
+
     def _codex_write(self, marketplace_name: str) -> PlannedWrite:
         path = self.target_root / ".codex/config.toml"
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         mcp_header = "[mcp_servers.game-exp]"
         plugin_header = f'[plugins."game-exp@{marketplace_name}"]'
-        existing_plugin = re.search(r'(?m)^\[plugins\."game-exp@[^"]+"\]\s*$', existing)
+        existing_plugin = re.search(
+            r'(?m)^\[plugins\."game-exp@[^"]+"\]\s*$',
+            existing,
+        )
 
         block = (
             f"{mcp_header}\n"
             'command = "uv"\n'
-            'args = ["run", "--with", "mcp>=2,<3", "python", "tools/game-exp/mcp_server.py"]\n'
+            'args = ["run", "--with", "mcp>=2,<3", "python", '
+            '"tools/game-exp/mcp_server.py"]\n'
             'enabled = true\n'
             f'env = {{ GAME_EXP_REPO = "{self.repo}" }}\n\n'
             f"{plugin_header}\n"
             'enabled = true\n'
         )
+
         if mcp_header in existing or existing_plugin:
             if mcp_header in existing and existing_plugin and block.strip() in existing:
                 return PlannedWrite(path, existing.encode("utf-8"), "generated")
@@ -185,23 +211,22 @@ class Bootstrapper:
         policy = self._policy_write()
         if policy is not None:
             writes.append(policy)
-        marketplace, name = self._marketplace_write()
+        marketplace, marketplace_name = self._marketplace_write()
         writes.append(marketplace)
-        writes.append(self._codex_write(name))
+        writes.append(self._codex_write(marketplace_name))
         self._validate_conflicts(writes)
         return writes
+
     def _validate_conflicts(self, writes: Iterable[PlannedWrite]) -> None:
-        source_root = self.source_root
-        target_root = self.target_root
-        if source_root == target_root:
+        if self.source_root == self.target_root:
             raise BootstrapError("source and target repositories must differ")
-        if not (target_root / ".git").exists():
+        if not (self.target_root / ".git").exists():
             raise BootstrapError("target must be a Git repository working tree")
 
         for item in writes:
             if item.path.exists() and item.kind == "managed":
                 if item.path.read_bytes() != item.content:
-                    rel = item.path.relative_to(target_root).as_posix()
+                    rel = item.path.relative_to(self.target_root).as_posix()
                     raise BootstrapError(f"managed destination already differs: {rel}")
 
     def install(self) -> list[pathlib.Path]:
@@ -226,103 +251,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target", required=True)
     parser.add_argument("--repo", required=True)
     return parser.parse_args()
+
+
 def main() -> int:
     args = _parse_args()
     bootstrap = Bootstrapper(_source_root(), pathlib.Path(args.target), args.repo)
     writes = bootstrap.plan()
+
     if args.command == "plan":
         for item in writes:
             rel = item.path.relative_to(bootstrap.target_root).as_posix()
-            state = "unchanged" if item.path.exists() and item.path.read_bytes() == item.content else "write"
-            print(f"{state}\t{rel}")
+            unchanged = item.path.exists() and item.path.read_bytes() == item.content
+            print(f"{'unchanged' if unchanged else 'write'}\t{rel}")
         return 0
 
     changed = bootstrap.install()
     for path in changed:
-        print(f"installed\t{path.relative_to(bootstrap.target_root).as_posix()}")
-    print("next\tcommit these files, configure Trusted Writer controls, then run game-exp doctor")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main()), existing)
-        block = (
-            f'{mcp_header}\n'
-            'command = "uv"\n'
-            'args = ["run", "--with", "mcp>=2,<3", "python", "tools/game-exp/mcp_server.py"]\n'
-            'enabled = true\n'
-            f'env = {{ GAME_EXP_REPO = "{self.repo}" }}\n\n'
-            f'{plugin_header}\n'
-            'enabled = true\n'
-        )
-        prefix = existing
-        if prefix and not prefix.endswith("\n"):
-            prefix += "\n"
-        if prefix:
-            prefix += "\n"
-        return PlannedWrite(path, (prefix + block).encode("utf-8"), "generated")
-
-    def plan(self) -> list[PlannedWrite]:
-        writes = self._copy_writes()
-        policy = self._policy_write()
-        if policy is not None:
-            writes.append(policy)
-        marketplace, name = self._marketplace_write()
-        writes.append(marketplace)
-        writes.append(self._codex_write(name))
-        self._validate_conflicts(writes)
-        return writes
-    def _validate_conflicts(self, writes: Iterable[PlannedWrite]) -> None:
-        source_root = self.source_root
-        target_root = self.target_root
-        if source_root == target_root:
-            raise BootstrapError("source and target repositories must differ")
-        if not (target_root / ".git").exists():
-            raise BootstrapError("target must be a Git repository working tree")
-
-        for item in writes:
-            if item.path.exists() and item.kind == "managed":
-                if item.path.read_bytes() != item.content:
-                    rel = item.path.relative_to(target_root).as_posix()
-                    raise BootstrapError(f"managed destination already differs: {rel}")
-
-    def install(self) -> list[pathlib.Path]:
-        writes = self.plan()
-        changed: list[pathlib.Path] = []
-        for item in writes:
-            if item.path.exists() and item.path.read_bytes() == item.content:
-                continue
-            item.path.parent.mkdir(parents=True, exist_ok=True)
-            item.path.write_bytes(item.content)
-            changed.append(item.path)
-        return changed
-
-
-def _source_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[2]
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install game-exp into another repository")
-    parser.add_argument("command", choices=("plan", "install"))
-    parser.add_argument("--target", required=True)
-    parser.add_argument("--repo", required=True)
-    return parser.parse_args()
-def main() -> int:
-    args = _parse_args()
-    bootstrap = Bootstrapper(_source_root(), pathlib.Path(args.target), args.repo)
-    writes = bootstrap.plan()
-    if args.command == "plan":
-        for item in writes:
-            rel = item.path.relative_to(bootstrap.target_root).as_posix()
-            state = "unchanged" if item.path.exists() and item.path.read_bytes() == item.content else "write"
-            print(f"{state}\t{rel}")
-        return 0
-
-    changed = bootstrap.install()
-    for path in changed:
-        print(f"installed\t{path.relative_to(bootstrap.target_root).as_posix()}")
-    print("next\tcommit these files, configure Trusted Writer controls, then run game-exp doctor")
+        rel = path.relative_to(bootstrap.target_root).as_posix()
+        print(f"installed\t{rel}")
+    print(
+        "next\tcommit these files, configure Trusted Writer controls, "
+        "then run game-exp doctor"
+    )
     return 0
 
 
