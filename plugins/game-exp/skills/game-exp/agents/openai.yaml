@@ -1,3 +1,3 @@
 interface:
   display_name: "game-exp"
-  short_description: "Run trusted game experiments through MCP or GitHub"
+  short_description: "用中文面板运行可信游戏实验"
