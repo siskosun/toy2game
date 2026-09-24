@@ -1158,9 +1158,9 @@ def _plan_rehearsal(
         repo_dir,
         experiment_id,
     )
-    if state.get("lifecycle") != "PROMISING":
+    if state.get("lifecycle") not in {"PROMISING", "SELECTED"}:
         raise DomainError(
-            f"Rehearsal requires PROMISING lifecycle, got {state.get('lifecycle')!r}",
+            f"Rehearsal requires PROMISING or SELECTED lifecycle, got {state.get('lifecycle')!r}",
             code="DOMAIN_INVALID_TRANSITION",
         )
     candidate_id = state.get("current_candidate_id")
