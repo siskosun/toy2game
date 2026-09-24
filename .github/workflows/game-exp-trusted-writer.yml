@@ -64,6 +64,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          GAME_EXP_ACTOR_LOGIN: ${{ github.actor }}
         run: |
           set -euo pipefail
           set +e
