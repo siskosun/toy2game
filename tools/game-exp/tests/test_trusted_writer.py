@@ -144,6 +144,20 @@ class TrustedResolverTests(unittest.TestCase):
         self.assertEqual(ctx.user_id, "202578583")
         self.assertEqual(ctx.permission, "admin")
 
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_review_actor_uses_same_trusted_permission_resolver(self, api):
+        api.return_value = {
+            "permission": "write",
+            "user": {"login": "siskosun", "id": 202578583},
+        }
+        ctx = resolve_trusted_actor(
+            "siskosun/toy2game",
+            {"kind": "operation_request", "operation": "review.record"},
+        )
+        self.assertEqual(ctx.login, "siskosun")
+        self.assertEqual(ctx.permission, "write")
+
     @patch.dict("os.environ", {}, clear=True)
     def test_decision_actor_requires_trusted_github_login(self):
         with self.assertRaises(DomainError) as ctx:
