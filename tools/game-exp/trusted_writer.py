@@ -127,37 +127,13 @@ def resolve_trusted_candidate(
     )
 
 
-def resolve_trusted_rehearsal(
+def _verify_trusted_rehearsal_value(
     repo: str,
-    payload: dict,
+    value: dict,
     *,
-    authority: str,
-    context_path: str | None,
-) -> TrustedRehearsalContext | None:
-    if payload.get("kind") != "operation_request" or payload.get("operation") != "rehearsal.register":
-        return None
-    if authority != "rehearsal":
-        raise DomainError(
-            "rehearsal.register requires trusted rehearsal authority",
-            code="DOMAIN_AUTHORIZATION_FAILED",
-        )
-    if not context_path:
-        raise DomainError(
-            "trusted Rehearsal context file is required",
-            code="DOMAIN_AUTHORIZATION_FAILED",
-        )
-    try:
-        value = json.loads(Path(context_path).read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise DomainError(
-            f"invalid trusted Rehearsal context: {exc}",
-            code="DOMAIN_AUTHORIZATION_FAILED",
-        ) from exc
-    if not isinstance(value, dict):
-        raise DomainError(
-            "trusted Rehearsal context must be an object",
-            code="DOMAIN_AUTHORIZATION_FAILED",
-        )
+    expected_run_status: str,
+    expected_run_conclusion: str | None,
+) -> TrustedRehearsalContext:
     required = {
         "experiment_id",
         "candidate_id",
@@ -277,7 +253,7 @@ def resolve_trusted_rehearsal(
     current_main = (main_ref.get("object") or {}).get("sha")
     if current_main != main_sha:
         raise DomainError(
-            "Rehearsal is stale because main advanced before finalization",
+            "Rehearsal is stale because main advanced",
             code="DOMAIN_REHEARSAL_CONFLICT",
         )
 
@@ -290,10 +266,11 @@ def resolve_trusted_rehearsal(
         or run_data.get("event") != "workflow_dispatch"
         or run_data.get("path") != ".github/workflows/game-exp-rehearsal.yml"
         or run_data.get("head_sha") != workflow_source_sha
-        or run_data.get("status") != "in_progress"
+        or run_data.get("status") != expected_run_status
+        or run_data.get("conclusion") != expected_run_conclusion
     ):
         raise DomainError(
-            "Rehearsal context is not from the active trusted rehearsal workflow",
+            "Rehearsal workflow evidence does not match required trusted state",
             code="DOMAIN_REHEARSAL_CONFLICT",
         )
 
@@ -312,6 +289,122 @@ def resolve_trusted_rehearsal(
         policy_digest=policy_digest,
         scope_digest=scope_digest,
         checks=tuple(value["checks"]),
+    )
+
+
+def resolve_trusted_rehearsal(
+    repo: str,
+    payload: dict,
+    *,
+    authority: str,
+    context_path: str | None,
+) -> TrustedRehearsalContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "rehearsal.register":
+        return None
+    if authority != "rehearsal":
+        raise DomainError(
+            "rehearsal.register requires trusted rehearsal authority",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if not context_path:
+        raise DomainError(
+            "trusted Rehearsal context file is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    try:
+        value = json.loads(Path(context_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise DomainError(
+            f"invalid trusted Rehearsal context: {exc}",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        ) from exc
+    if not isinstance(value, dict):
+        raise DomainError(
+            "trusted Rehearsal context must be an object",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    return _verify_trusted_rehearsal_value(
+        repo,
+        value,
+        expected_run_status="in_progress",
+        expected_run_conclusion=None,
+    )
+
+
+def resolve_trusted_selection_rehearsal(
+    repo: str,
+    payload: dict,
+    repo_dir: Path,
+) -> TrustedRehearsalContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "experiment.decision":
+        return None
+    input_value = payload.get("input")
+    if not isinstance(input_value, dict) or input_value.get("to_state") != "SELECTED":
+        return None
+    experiment_id = input_value.get("experiment_id")
+    if not isinstance(experiment_id, str) or not experiment_id:
+        raise DomainError("SELECTED decision experiment_id is invalid")
+
+    try:
+        state = json.loads(
+            (repo_dir / f"experiments/{experiment_id}/state.json").read_text(encoding="utf-8")
+        )
+        rehearsal_id = state["current_rehearsal_id"]
+        rehearsal = json.loads(
+            (
+                repo_dir
+                / f"experiments/{experiment_id}/rehearsals/{rehearsal_id}.json"
+            ).read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        raise DomainError(
+            f"cannot resolve current Rehearsal: {exc}",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        ) from exc
+
+    required_record = {
+        "candidate_id",
+        "experiment_id",
+        "github_run_attempt",
+        "github_run_id",
+        "integration_sha",
+        "integration_tree_sha",
+        "kind",
+        "main_sha",
+        "policy_digest",
+        "rehearsal_id",
+        "rehearsal_ref",
+        "scope_digest",
+        "source_sha",
+        "workflow_source_sha",
+        "checks",
+    }
+    if set(rehearsal) != required_record or rehearsal.get("kind") != "rehearsal":
+        raise DomainError(
+            "current Rehearsal record shape is invalid",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        )
+    value = {
+        "experiment_id": rehearsal["experiment_id"],
+        "candidate_id": rehearsal["candidate_id"],
+        "rehearsal_id": rehearsal["rehearsal_id"],
+        "main_sha": rehearsal["main_sha"],
+        "source_sha": rehearsal["source_sha"],
+        "integration_sha": rehearsal["integration_sha"],
+        "integration_tree_sha": rehearsal["integration_tree_sha"],
+        "rehearsal_ref": rehearsal["rehearsal_ref"],
+        "workflow_source_sha": rehearsal["workflow_source_sha"],
+        "run_id": rehearsal["github_run_id"],
+        "run_attempt": rehearsal["github_run_attempt"],
+        "policy_digest": rehearsal["policy_digest"],
+        "scope_digest": rehearsal["scope_digest"],
+        "checks": rehearsal["checks"],
+    }
+    return _verify_trusted_rehearsal_value(
+        repo,
+        value,
+        expected_run_status="completed",
+        expected_run_conclusion="success",
     )
 
 
