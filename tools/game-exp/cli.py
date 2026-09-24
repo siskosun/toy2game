@@ -61,7 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="show target repository and Ledger head")
-    sub.add_parser("doctor", help="validate trusted repository prerequisites")
+    doctor = sub.add_parser("doctor", help="validate trusted repository prerequisites")
+    doctor.add_argument(
+        "--experiment-id",
+        help="optionally include archive health for one experiment",
+    )
 
     req = sub.add_parser("request", help="submit a controlled operation request")
     req.add_argument("operation", help="operation name, e.g. experiment.create")
@@ -124,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             result = client.status()
         elif args.command == "doctor":
-            result = client.doctor()
+            result = client.doctor(args.experiment_id)
         elif args.command == "request":
             input_value = _load_object(args.input, args.input_file, label="input")
             preconditions = _load_object(
@@ -175,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_result(result, as_json=args.json)
     status = result.get("status")
-    return 0 if status in {"PASS", "ACCEPTED", "COMMITTED"} else 1
+    return 0 if status in {"PASS", "WARN", "ACCEPTED", "COMMITTED"} else 1
 
 
 if __name__ == "__main__":

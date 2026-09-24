@@ -21,8 +21,13 @@ class FakeClient:
     def status(self):
         return {"repo": "owner/repo", "ledger_head": "a" * 40}
 
-    def doctor(self):
-        return {"status": "PASS", "repo": "owner/repo", "checks": []}
+    def doctor(self, experiment_id=None):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "experiment_id": experiment_id,
+            "checks": [],
+        }
 
     def reconcile(self, request_id):
         return {"status": "COMMITTED", "request_id": request_id, "repo": "owner/repo"}
@@ -73,6 +78,11 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse(submit.destructive_hint)
         self.assertFalse(submit.idempotent_hint)
         self.assertTrue(submit.open_world_hint)
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_doctor_can_request_archive_health_for_experiment(self, _):
+        result = mcp_server.game_exp_doctor("owner/repo", "EXP-21")
+        self.assertEqual(result["experiment_id"], "EXP-21")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_read_tools_delegate_to_shared_client(self, _):
