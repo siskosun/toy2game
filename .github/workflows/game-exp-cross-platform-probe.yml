@@ -1,0 +1,50 @@
+name: game-exp cross-platform probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run canonicalization and path probe
+        shell: bash
+        run: |
+          python tools/game-exp/phase1_probe.py --output "evidence/${RUNNER_OS}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-probe-${{ runner.os }}
+          path: evidence/*.json
+          retention-days: 7
+
+  compare:
+    needs: probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: game-exp-probe-*
+          path: evidence
+          merge-multiple: true
+      - name: Compare all platforms
+        shell: python
+        run: |
+          import glob, json
+          rows=[json.load(open(p,encoding="utf-8")) for p in sorted(glob.glob("evidence/*.json"))]
+          print(json.dumps(rows,ensure_ascii=False,indent=2))
+          assert len(rows)==3, rows
+          assert len({r["digest"] for r in rows})==1, rows
+          assert all(all(r["checks"].values()) for r in rows), rows
