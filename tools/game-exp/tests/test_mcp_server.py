@@ -9,7 +9,12 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
-import mcp_server  # noqa: E402
+try:
+    import mcp_server  # noqa: E402
+except ModuleNotFoundError as exc:
+    if exc.name != "mcp":
+        raise
+    mcp_server = None
 
 
 class FakeClient:
@@ -31,6 +36,7 @@ class FakeClient:
         }
 
 
+@unittest.skipIf(mcp_server is None, "official MCP SDK not installed")
 class MCPServerTests(unittest.TestCase):
     def test_expected_tools_registered(self):
         tools = asyncio.run(mcp_server.mcp.list_tools())
