@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from domain_core import REHEARSAL_REQUIRED_CHECKS, rehearsal_policy_digest
+from domain_core import DomainError, REHEARSAL_REQUIRED_CHECKS, rehearsal_policy_digest, validate_rehearsal_scope_paths
 from protocol_core import build_operation_payload, canonical_json_bytes, digest_object
 
 EXP_RE = re.compile(r"^EXP-([1-9][0-9]*)$")
@@ -186,23 +186,20 @@ def integration_tree(args: argparse.Namespace) -> dict[str, Any]:
     except UnicodeDecodeError as exc:
         raise RehearsalControlError("candidate changed a non-UTF-8 path") from exc
 
-    included: list[str] = []
-    ignored_metadata: list[str] = []
-    for path in changed:
-        if "\\" in path or path.startswith("/") or "/../" in f"/{path}/":
-            raise RehearsalControlError(f"candidate changed a non-portable path: {path!r}")
-        if path in scope["metadata_paths"]:
-            ignored_metadata.append(path)
-            continue
-        if _matches_any(path, scope["avoid"]):
-            raise RehearsalControlError(
-                f"candidate changed an explicitly avoided path: {path}"
-            )
-        if not _matches_any(path, scope["allowed"]):
-            raise RehearsalControlError(
-                f"candidate changed an out-of-scope path: {path}"
-            )
-        included.append(path)
+    if len(scope["metadata_paths"]) != 1:
+        raise RehearsalControlError("scope must contain exactly one canonical manifest path")
+    manifest_path = scope["metadata_paths"][0]
+    try:
+        checked = validate_rehearsal_scope_paths(
+            changed,
+            allowed=scope["allowed"],
+            avoid=scope["avoid"],
+            manifest_path=manifest_path,
+        )
+    except DomainError as exc:
+        raise RehearsalControlError(str(exc)) from exc
+    ignored_metadata = [path for path in checked if path == manifest_path]
+    included = [path for path in checked if path != manifest_path]
 
     if not included:
         raise RehearsalControlError(
