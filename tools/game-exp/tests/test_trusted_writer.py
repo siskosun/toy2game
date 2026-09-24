@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import sys
 import unittest
 from pathlib import Path
@@ -54,6 +56,9 @@ def candidate_payload():
     artifact_digest = "sha256:" + "1" * 64
     manifest_digest = "sha256:" + "2" * 64
     policy_digest = candidate_policy_digest()
+    lock_bytes = b'{"lock":true}\n'
+    dependency_lock_digest = "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+    environment_digest = "sha256:" + "5" * 64
     release_tag = "game-exp-candidate-123-1"
     return {
         "kind": "operation_request",
@@ -71,6 +76,8 @@ def candidate_payload():
             "run_id": "123",
             "run_attempt": "1",
             "policy_digest": policy_digest,
+            "dependency_lock_digest": dependency_lock_digest,
+            "environment_digest": environment_digest,
             "checks": [],
             "retention": {
                 "provider": "github-immutable-release",
@@ -96,6 +103,8 @@ def candidate_api_evidence(value=None):
             f"game-exp-run-id: {i['run_id']}",
             f"game-exp-run-attempt: {i['run_attempt']}",
             f"game-exp-policy-digest: {i['policy_digest']}",
+            f"game-exp-dependency-lock-digest: {i['dependency_lock_digest']}",
+            f"game-exp-environment-digest: {i['environment_digest']}",
             f"game-exp-release-tag: {i['retention']['release_tag']}",
         ]
     )
@@ -115,6 +124,10 @@ def candidate_api_evidence(value=None):
                     "size": 12345,
                 }
             ],
+        },
+        {
+            "encoding": "base64",
+            "content": base64.b64encode(b'{"lock":true}\n').decode("ascii"),
         },
         {
             "run_attempt": 1,
@@ -159,7 +172,7 @@ class TrustedResolverTests(unittest.TestCase):
         self.assertEqual(ctx.candidate_id, "C-42-123-1")
         self.assertEqual(ctx.source_sha, "c" * 40)
         self.assertEqual(ctx.release_tag, "game-exp-candidate-123-1")
-        self.assertEqual(api.call_count, 4)
+        self.assertEqual(api.call_count, 5)
 
     @patch("trusted_writer.github_json")
     def test_candidate_resolver_rejects_release_asset_digest_mismatch(self, api):
@@ -186,7 +199,7 @@ class TrustedResolverTests(unittest.TestCase):
     def test_candidate_resolver_rejects_wrong_workflow_path(self, api):
         value = candidate_payload()
         evidence = candidate_api_evidence(value)
-        evidence[3]["path"] = ".github/workflows/not-trusted.yml"
+        evidence[4]["path"] = ".github/workflows/not-trusted.yml"
         api.side_effect = evidence
         with self.assertRaisesRegex(DomainError, "trusted candidate workflow"):
             resolve_trusted_candidate("siskosun/toy2game", value)
@@ -195,8 +208,8 @@ class TrustedResolverTests(unittest.TestCase):
     def test_candidate_resolver_rejects_historical_completed_run(self, api):
         value = candidate_payload()
         evidence = candidate_api_evidence(value)
-        evidence[3]["status"] = "completed"
-        evidence[3]["conclusion"] = "success"
+        evidence[4]["status"] = "completed"
+        evidence[4]["conclusion"] = "success"
         api.side_effect = evidence
         with self.assertRaisesRegex(DomainError, "must finalize while"):
             resolve_trusted_candidate("siskosun/toy2game", value)
