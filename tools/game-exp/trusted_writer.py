@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, TrustedRehearsalContext, TrustedRetentionContext, plan_domain_mutation, validate_manifest
+from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, TrustedIntegrationContext, TrustedRehearsalContext, TrustedRetentionContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -512,6 +512,173 @@ def resolve_trusted_retention(
     )
 
 
+def resolve_trusted_integration(
+    repo: str,
+    payload: dict,
+    *,
+    authority: str,
+    context_path: str | None,
+) -> TrustedIntegrationContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "integration.register":
+        return None
+    if authority != "integration":
+        raise DomainError(
+            "integration.register requires trusted integration authority",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if not context_path:
+        raise DomainError(
+            "trusted Integration context file is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    try:
+        value = json.loads(Path(context_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise DomainError(
+            f"invalid trusted Integration context: {exc}",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        ) from exc
+    required = {
+        "experiment_id",
+        "candidate_id",
+        "rehearsal_id",
+        "integration_id",
+        "pr_number",
+        "pr_id",
+        "pr_url",
+        "head_ref",
+        "head_sha",
+        "head_tree_sha",
+        "merge_sha",
+        "merge_tree_sha",
+        "merged_at",
+        "merged_by_login",
+        "merged_by_user_id",
+        "workflow_source_sha",
+        "run_id",
+        "run_attempt",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise DomainError(
+            "trusted Integration context keys mismatch",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+
+    experiment_id = str(value["experiment_id"])
+    match = re.fullmatch(r"EXP-([1-9][0-9]*)", experiment_id)
+    if not match:
+        raise DomainError("trusted Integration experiment_id is invalid")
+    issue = match.group(1)
+    pr_number = str(value["pr_number"])
+    if not re.fullmatch(r"[1-9][0-9]*", pr_number):
+        raise DomainError("trusted Integration pr_number is invalid")
+    expected_id = f"I-{issue}-PR-{pr_number}"
+    if value["integration_id"] != expected_id:
+        raise DomainError(
+            "trusted Integration id is not canonical",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+    expected_head_ref = f"game-exp/integration/{issue}/{value['rehearsal_id']}"
+    if value["head_ref"] != expected_head_ref:
+        raise DomainError(
+            "trusted Integration head ref is not canonical",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    pr = github_json(repo, f"/pulls/{urllib.parse.quote(pr_number, safe='')}")
+    head = pr.get("head") or {}
+    merged_by = pr.get("merged_by") or {}
+    if (
+        pr.get("merged") is not True
+        or str(pr.get("id")) != str(value["pr_id"])
+        or str(pr.get("html_url") or "") != str(value["pr_url"])
+        or (pr.get("base") or {}).get("ref") != "main"
+        or head.get("ref") != value["head_ref"]
+        or head.get("sha") != value["head_sha"]
+        or (head.get("repo") or {}).get("full_name") != repo
+        or pr.get("merge_commit_sha") != value["merge_sha"]
+        or pr.get("merged_at") != value["merged_at"]
+        or merged_by.get("login") != value["merged_by_login"]
+        or str(merged_by.get("id")) != str(value["merged_by_user_id"])
+    ):
+        raise DomainError(
+            "live Integration PR evidence differs from trusted context",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    head_commit = github_json(
+        repo,
+        f"/git/commits/{urllib.parse.quote(str(value['head_sha']), safe='')}",
+    )
+    head_tree = (head_commit.get("tree") or {}).get("sha")
+    if head_tree != value["head_tree_sha"]:
+        raise DomainError(
+            "Integration PR head tree differs from trusted context",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    merge_commit = github_json(
+        repo,
+        f"/git/commits/{urllib.parse.quote(str(value['merge_sha']), safe='')}",
+    )
+    merge_tree = (merge_commit.get("tree") or {}).get("sha")
+    if merge_tree != value["merge_tree_sha"]:
+        raise DomainError(
+            "Integration merge tree differs from trusted context",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    compare = github_json(
+        repo,
+        f"/compare/{urllib.parse.quote(str(value['merge_sha']), safe='')}...main",
+    )
+    merge_base = compare.get("merge_base_commit") or {}
+    if compare.get("status") not in {"ahead", "identical"} or merge_base.get("sha") != value["merge_sha"]:
+        raise DomainError(
+            "Integration merge commit is not in current main history",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    run_id = str(value["run_id"])
+    run_attempt = str(value["run_attempt"])
+    run_data = github_json(
+        repo,
+        f"/actions/runs/{urllib.parse.quote(run_id, safe='')}",
+    )
+    if (
+        str(run_data.get("run_attempt")) != run_attempt
+        or run_data.get("event") != "workflow_dispatch"
+        or run_data.get("path") != ".github/workflows/game-exp-integration-finalize.yml"
+        or run_data.get("head_sha") != value["workflow_source_sha"]
+        or run_data.get("status") != "in_progress"
+    ):
+        raise DomainError(
+            "Integration context is not from the active trusted finalize workflow",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    return TrustedIntegrationContext(
+        experiment_id=experiment_id,
+        candidate_id=str(value["candidate_id"]),
+        rehearsal_id=str(value["rehearsal_id"]),
+        integration_id=str(value["integration_id"]),
+        pr_number=pr_number,
+        pr_id=str(value["pr_id"]),
+        pr_url=str(value["pr_url"]),
+        head_ref=str(value["head_ref"]),
+        head_sha=str(value["head_sha"]),
+        head_tree_sha=str(value["head_tree_sha"]),
+        merge_sha=str(value["merge_sha"]),
+        merge_tree_sha=str(value["merge_tree_sha"]),
+        merged_at=str(value["merged_at"]),
+        merged_by_login=str(value["merged_by_login"]),
+        merged_by_user_id=str(value["merged_by_user_id"]),
+        workflow_source_sha=str(value["workflow_source_sha"]),
+        run_id=run_id,
+        run_attempt=run_attempt,
+    )
+
+
 def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | None:
     if payload.get("kind") != "operation_request":
         return None
@@ -625,7 +792,7 @@ def main() -> int:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--run-attempt", required=True)
     ap.add_argument("--workflow-source-sha", required=True)
-    ap.add_argument("--authority", choices=("request", "candidate", "rehearsal"), default="request")
+    ap.add_argument("--authority", choices=("request", "candidate", "rehearsal", "integration"), default="request")
     ap.add_argument("--trusted-context-json")
     args = ap.parse_args()
 
@@ -716,6 +883,12 @@ def main() -> int:
             payload,
             repo_dir,
         )
+        trusted_integration = resolve_trusted_integration(
+            args.repo,
+            payload,
+            authority=args.authority,
+            context_path=args.trusted_context_json,
+        )
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -727,6 +900,7 @@ def main() -> int:
             trusted_candidate=trusted_candidate,
             trusted_retention=trusted_retention,
             trusted_rehearsal=trusted_selection_rehearsal or trusted_rehearsal,
+            trusted_integration=trusted_integration,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
