@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_retention  # noqa: E402
 
 
 def payload():
@@ -128,6 +128,122 @@ class TrustedResolverTests(unittest.TestCase):
         self.assertEqual(ctx.candidate_id, "C-21-123-1")
         self.assertEqual(ctx.run_id, "123")
         self.assertEqual(ctx.checks[0]["source"], "TRUSTED_OBSERVED")
+
+    @patch("trusted_writer.github_json")
+    def test_promising_retention_resolver_uses_live_immutable_release(self, api):
+        import json
+        import tempfile
+
+        payload = {
+            "kind": "operation_request",
+            "operation": "experiment.decision",
+            "input": {
+                "experiment_id": "EXP-21",
+                "to_state": "PROMISING",
+                "previous_decision_id": "req_review_state",
+                "reason": "promote",
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            candidate_id = "C-21-123-1"
+            state_path = root / "experiments/EXP-21/state.json"
+            candidate_path = root / f"experiments/EXP-21/candidates/{candidate_id}.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            candidate_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"current_candidate_id": candidate_id}),
+                encoding="utf-8",
+            )
+            candidate_path.write_text(
+                json.dumps(
+                    {
+                        "source_sha": "a" * 40,
+                        "artifact_digest": "sha256:" + "c" * 64,
+                        "retention": {
+                            "release_tag": "game-exp-candidate-21-123-1",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            api.return_value = {
+                "id": 9001,
+                "tag_name": "game-exp-candidate-21-123-1",
+                "html_url": "https://github.com/owner/repo/releases/tag/game-exp-candidate-21-123-1",
+                "immutable": True,
+                "draft": False,
+                "prerelease": False,
+                "target_commitish": "a" * 40,
+                "assets": [
+                    {
+                        "id": 8001,
+                        "name": "candidate.tgz",
+                        "state": "uploaded",
+                        "digest": "sha256:" + "c" * 64,
+                    }
+                ],
+            }
+            ctx = resolve_trusted_retention("owner/repo", payload, root)
+        self.assertEqual(ctx.candidate_id, "C-21-123-1")
+        self.assertEqual(ctx.release_id, "9001")
+        self.assertEqual(ctx.asset_id, "8001")
+        self.assertTrue(ctx.immutable)
+        self.assertEqual(ctx.artifact_digest, "sha256:" + "c" * 64)
+
+    @patch("trusted_writer.github_json")
+    def test_promising_retention_resolver_rejects_mutable_release(self, api):
+        import json
+        import tempfile
+
+        payload = {
+            "kind": "operation_request",
+            "operation": "experiment.decision",
+            "input": {
+                "experiment_id": "EXP-21",
+                "to_state": "PROMISING",
+                "previous_decision_id": "req_review_state",
+                "reason": "promote",
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            candidate_id = "C-21-123-1"
+            state_path = root / "experiments/EXP-21/state.json"
+            candidate_path = root / f"experiments/EXP-21/candidates/{candidate_id}.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            candidate_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps({"current_candidate_id": candidate_id}), encoding="utf-8")
+            candidate_path.write_text(
+                json.dumps(
+                    {
+                        "source_sha": "a" * 40,
+                        "artifact_digest": "sha256:" + "c" * 64,
+                        "retention": {"release_tag": "game-exp-candidate-21-123-1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            api.return_value = {
+                "id": 9001,
+                "tag_name": "game-exp-candidate-21-123-1",
+                "html_url": "https://github.com/owner/repo/releases/tag/game-exp-candidate-21-123-1",
+                "immutable": False,
+                "draft": False,
+                "prerelease": False,
+                "target_commitish": "a" * 40,
+                "assets": [
+                    {
+                        "id": 8001,
+                        "name": "candidate.tgz",
+                        "state": "uploaded",
+                        "digest": "sha256:" + "c" * 64,
+                    }
+                ],
+            }
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_retention("owner/repo", payload, root)
+        self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
 
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
