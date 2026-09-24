@@ -51,6 +51,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertRegex(content, r"(?s)^---\nname: game-exp\ndescription: .+?\n---")
         required_tools = {
             "game_exp_status",
+            "game_exp_board",
             "game_exp_doctor",
             "game_exp_experiment_get",
             "game_exp_experiment_bind",
@@ -83,6 +84,24 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertIn("UNKNOWN", content)
         self.assertIn("CONFLICT", content)
         self.assertIn("REJECTED", content)
+
+    def test_skill_has_codex_board_entrypoint(self):
+        content = SKILL.read_text(encoding="utf-8")
+        for phrase in (
+            "## Codex Board",
+            "game_exp_board",
+            "read-only projection",
+            "Next gate",
+            "persistent graphical MCP Apps panel",
+        ):
+            self.assertIn(phrase, content)
+
+    def test_workflow_reference_maps_board_tool(self):
+        content = (PLUGIN / "skills" / "game-exp" / "references" / "workflow.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Open experiment Board / panel", content)
+        self.assertIn("game_exp_board", content)
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))
