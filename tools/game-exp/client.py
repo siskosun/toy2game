@@ -424,6 +424,7 @@ class GameExpClient:
                         "workflow": state,
                     }
                 logs = self.transport.failed_run_logs(workflow_url)
+                domain_error = None
                 if "REQUEST_ID_CONFLICT" in logs:
                     conflict_type = "REQUEST_ID_CONFLICT"
                 elif "HEAD_CONFLICT" in logs:
@@ -449,7 +450,7 @@ class GameExpClient:
                     "repo": self.transport.repo,
                     "workflow": state,
                 }
-                if "domain_error" in locals() and domain_error:
+                if domain_error:
                     result["domain_error"] = domain_error
                 return result
 
