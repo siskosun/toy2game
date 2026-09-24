@@ -16,6 +16,7 @@ class CLIRoutingTests(unittest.TestCase):
         transport = MagicMock()
         client = MagicMock()
         client.status.return_value = {"status": "PASS"}
+        client.board.return_value = {"status": "PASS", "experiments": []}
         client.integrate.return_value = {"status": "ACCEPTED"}
         client.integrate_finalize.return_value = {"status": "ACCEPTED"}
         client.archive.return_value = {"status": "ACCEPTED"}
@@ -27,6 +28,11 @@ class CLIRoutingTests(unittest.TestCase):
         ):
             code = cli.main(argv)
         return code, client
+
+    def test_board_routes_to_client(self):
+        code, client = self.run_cli(["board"])
+        self.assertEqual(code, 0)
+        client.board.assert_called_once_with()
 
     def test_integrate_routes_to_client(self):
         code, client = self.run_cli(["integrate", "EXP-21"])
