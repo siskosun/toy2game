@@ -165,6 +165,42 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(reconciled["conflict_type"], "HEAD_CONFLICT")
 
 
+    def test_failed_workflow_maps_domain_identity_conflict(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        client.submit(
+            operation="experiment.bind",
+            input_value={"manifest": {"placeholder": True}},
+            request_id="req_test_domain_conflict",
+        )
+        transport.state = {
+            "status": "completed",
+            "conclusion": "failure",
+            "url": "https://github.com/owner/repo/actions/runs/123",
+        }
+        transport.logs = '{"status":"DOMAIN_IDENTITY_CONFLICT","error":"trusted identity mismatch"}'
+        reconciled = client.reconcile("req_test_domain_conflict")
+        self.assertEqual(reconciled["status"], "CONFLICT")
+        self.assertEqual(reconciled["conflict_type"], "DOMAIN_IDENTITY_CONFLICT")
+
+    def test_failed_workflow_maps_domain_invalid_to_rejected(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        client.submit(
+            operation="experiment.bind",
+            input_value={"manifest": {"placeholder": True}},
+            request_id="req_test_domain_invalid",
+        )
+        transport.state = {
+            "status": "completed",
+            "conclusion": "failure",
+            "url": "https://github.com/owner/repo/actions/runs/123",
+        }
+        transport.logs = '{"status":"DOMAIN_INVALID","error":"invalid manifest"}'
+        reconciled = client.reconcile("req_test_domain_invalid")
+        self.assertEqual(reconciled["status"], "REJECTED")
+        self.assertEqual(reconciled["domain_error"], "DOMAIN_INVALID")
+
     def test_uncertain_dispatch_keeps_original_expected_head_for_retry(self):
         transport = FakeTransport()
         client = GameExpClient(transport)

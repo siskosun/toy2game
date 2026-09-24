@@ -6,8 +6,12 @@ import os
 import re
 import subprocess
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
+from domain_core import DomainError, TrustedBindingContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -19,6 +23,66 @@ from protocol_core import (
 
 class WriterError(RuntimeError):
     pass
+
+
+def github_json(repo: str, suffix: str) -> dict:
+    token = os.environ.get("GAME_EXP_GITHUB_TOKEN")
+    if not token:
+        raise WriterError("GAME_EXP_GITHUB_TOKEN is required for trusted domain resolution")
+    url = "https://api.github.com/repos/" + repo + suffix
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "game-exp-trusted-writer",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            value = json.load(response)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[-1000:]
+        raise WriterError(f"GitHub trusted resolver failed ({exc.code}) for {suffix}: {body}") from exc
+    except Exception as exc:
+        raise WriterError(f"GitHub trusted resolver failed for {suffix}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise WriterError(f"GitHub trusted resolver returned non-object for {suffix}")
+    return value
+
+
+def resolve_trusted_binding(repo: str, payload: dict) -> TrustedBindingContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "experiment.bind":
+        return None
+
+    input_value = payload.get("input")
+    if not isinstance(input_value, dict) or set(input_value) != {"manifest"}:
+        raise DomainError("experiment.bind input must contain exactly manifest")
+    manifest = validate_manifest(input_value.get("manifest"))
+    exp = manifest["experiment"]
+    issue_number = exp["issue_number"]
+    parent_sha = manifest["parent"]["commit"]
+
+    repo_meta = github_json(repo, "")
+    issue_meta = github_json(repo, f"/issues/{urllib.parse.quote(issue_number, safe='')}")
+    if "pull_request" in issue_meta:
+        raise DomainError("experiment binding requires a GitHub Issue, not a pull request")
+    commit_meta = github_json(repo, f"/commits/{urllib.parse.quote(parent_sha, safe='')}")
+    resolved_sha = commit_meta.get("sha")
+    if resolved_sha != parent_sha:
+        raise DomainError(
+            f"trusted commit resolver returned {resolved_sha!r}, expected {parent_sha!r}",
+            code="DOMAIN_PARENT_CONFLICT",
+        )
+
+    return TrustedBindingContext(
+        host="github.com",
+        repository_id=str(repo_meta.get("id")),
+        issue_id=str(issue_meta.get("id")),
+        issue_number=str(issue_meta.get("number")),
+        parent_sha=resolved_sha,
+    )
 
 
 def run(args, cwd=None, env=None, check=True):
@@ -130,6 +194,16 @@ def main() -> int:
             )
             return 42
 
+        trusted_binding = resolve_trusted_binding(args.repo, payload)
+        domain_plan = plan_domain_mutation(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=args.request_id,
+            payload_digest=payload_digest,
+            repository_full_name=args.repo,
+            trusted_binding=trusted_binding,
+        )
+
         record = {
             "expected_head": args.expected_head,
             "github_run_attempt": str(args.run_attempt),
@@ -139,10 +213,17 @@ def main() -> int:
             "payload_digest": payload_digest,
             "request_id": args.request_id,
             "workflow_source_sha": args.workflow_source_sha,
+            "domain_status": domain_plan.status,
+            "domain_experiment_id": domain_plan.experiment_id,
+            "domain_paths": domain_plan.paths,
         }
         path = repo_dir / target
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(canonical_json_bytes(record) + b"\n")
+        for domain_path, domain_value in domain_plan.writes.items():
+            target_path = repo_dir / domain_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(canonical_json_bytes(domain_value) + b"\n")
 
         run(["git", "config", "user.name", "game-exp-trusted-writer"], cwd=repo_dir)
         run(
@@ -154,7 +235,7 @@ def main() -> int:
             ],
             cwd=repo_dir,
         )
-        run(["git", "add", target], cwd=repo_dir)
+        run(["git", "add", target, *domain_plan.paths], cwd=repo_dir)
         run(["git", "commit", "-m", f"game-exp request {args.request_id}"], cwd=repo_dir)
 
         push = run(
@@ -172,6 +253,9 @@ def main() -> int:
                 ledger_head=head,
                 record_path=target,
                 replayed=False,
+                domain_status=domain_plan.status,
+                domain_experiment_id=domain_plan.experiment_id,
+                domain_paths=domain_plan.paths,
             )
             return 0
 
@@ -189,6 +273,9 @@ def main() -> int:
                 record_path=target,
                 replayed=True,
                 recovered_after_push_uncertainty=True,
+                domain_status=remote.get("domain_status"),
+                domain_experiment_id=remote.get("domain_experiment_id"),
+                domain_paths=remote.get("domain_paths", []),
             )
             return 0
 
@@ -207,6 +294,16 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except DomainError as exc:
+        print(
+            json.dumps(
+                {"status": exc.code, "error": str(exc)},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        raise SystemExit(45)
     except (ProtocolError, WriterError) as exc:
         print(
             json.dumps(

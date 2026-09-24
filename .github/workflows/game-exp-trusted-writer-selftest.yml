@@ -24,6 +24,7 @@ jobs:
           sparse-checkout: |
             tools/game-exp/trusted_writer.py
             tools/game-exp/protocol_core.py
+            tools/game-exp/domain_core.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v6
