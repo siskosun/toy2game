@@ -116,7 +116,7 @@ def _archive_remote_refs(
     *,
     branch_ref: str,
     final_tag_ref: str,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, dict[str, str] | None]:
     branch_name = branch_ref.removeprefix("refs/heads/")
     tag_name = final_tag_ref.removeprefix("refs/tags/")
     branch_suffix = "/git/ref/heads/" + "/".join(
@@ -139,6 +139,7 @@ def _archive_remote_refs(
 
     tag_data = github_json_optional(repo, tag_suffix)
     final_target = None
+    final_metadata = None
     if tag_data is not None:
         obj = tag_data.get("object") or {}
         if obj.get("type") != "tag" or not isinstance(obj.get("sha"), str):
@@ -156,8 +157,20 @@ def _archive_remote_refs(
                 "archive final annotated tag must target a commit",
                 code="DOMAIN_ARCHIVE_CONFLICT",
             )
+        message = annotated.get("message")
+        if not isinstance(message, str):
+            raise DomainError(
+                "archive final annotated tag message is missing",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        metadata: dict[str, str] = {}
+        for line in message.splitlines():
+            if ": " in line:
+                key, value = line.split(": ", 1)
+                metadata[key.strip()] = value.strip()
         final_target = target["sha"]
-    return branch_sha, final_target
+        final_metadata = metadata
+    return branch_sha, final_target, final_metadata
 
 
 def _classify_archive_refs(
@@ -242,7 +255,7 @@ def resolve_trusted_archive(
         mode = input_value.get("mode")
         if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
             raise DomainError("archive mode is invalid")
-        branch_sha, final_target = _archive_remote_refs(
+        branch_sha, final_target, _final_metadata = _archive_remote_refs(
             repo,
             branch_ref=branch_ref,
             final_tag_ref=final_tag_ref,
@@ -312,7 +325,7 @@ def resolve_trusted_archive(
             expected_branch_sha=expected_branch_sha,
         )
 
-    branch_sha, final_target = _archive_remote_refs(
+    branch_sha, final_target, final_metadata = _archive_remote_refs(
         repo,
         branch_ref=branch_ref,
         final_tag_ref=final_tag_ref,
@@ -323,6 +336,24 @@ def resolve_trusted_archive(
         branch_sha=branch_sha,
         final_tag_target=final_target,
     )
+    if final_target is not None:
+        expected_metadata = {
+            "game-exp-experiment": experiment_id,
+            "game-exp-archive-id": archive_id,
+            "game-exp-mode": mode,
+            "game-exp-source-sha": expected_branch_sha,
+        }
+        if final_metadata is None:
+            raise DomainError(
+                "archive final tag metadata is missing",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        for key, expected in expected_metadata.items():
+            if final_metadata.get(key) != expected:
+                raise DomainError(
+                    f"archive final tag metadata mismatch for {key}",
+                    code="DOMAIN_ARCHIVE_CONFLICT",
+                )
     action = "OBSERVE" if operation == "archive.observe" else "COMMIT"
     return TrustedArchiveContext(
         action=action,
