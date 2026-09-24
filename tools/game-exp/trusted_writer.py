@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, TrustedIntegrationContext, TrustedRehearsalContext, TrustedRetentionContext, plan_domain_mutation, validate_manifest
+from domain_core import DomainError, TrustedActorContext, TrustedArchiveContext, TrustedBindingContext, TrustedCandidateContext, TrustedIntegrationContext, TrustedRehearsalContext, TrustedRetentionContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -50,6 +50,292 @@ def github_json(repo: str, suffix: str) -> dict:
     if not isinstance(value, dict):
         raise WriterError(f"GitHub trusted resolver returned non-object for {suffix}")
     return value
+
+
+def github_json_optional(repo: str, suffix: str) -> dict | None:
+    token = os.environ.get("GAME_EXP_GITHUB_TOKEN")
+    if not token:
+        raise WriterError("GAME_EXP_GITHUB_TOKEN is required for trusted domain resolution")
+    url = "https://api.github.com/repos/" + repo + suffix
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "game-exp-trusted-writer",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            value = json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        body = exc.read().decode("utf-8", errors="replace")[-1000:]
+        raise WriterError(
+            f"GitHub trusted resolver failed ({exc.code}) for {suffix}: {body}"
+        ) from exc
+    except Exception as exc:
+        raise WriterError(f"GitHub trusted resolver failed for {suffix}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise WriterError(f"GitHub trusted resolver returned non-object for {suffix}")
+    return value
+
+
+def _ledger_object(repo_dir: Path, path: str, *, where: str) -> dict:
+    try:
+        value = json.loads((repo_dir / path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise DomainError(
+            f"{where}: cannot read authoritative Ledger object {path}: {exc}",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        ) from exc
+    if not isinstance(value, dict):
+        raise DomainError(
+            f"{where}: authoritative Ledger object must be an object",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        )
+    return value
+
+
+def _archive_record_for(
+    repo_dir: Path,
+    experiment_id: str,
+    archive_id: str,
+) -> dict:
+    return _ledger_object(
+        repo_dir,
+        f"experiments/{experiment_id}/archives/{archive_id}.json",
+        where=experiment_id,
+    )
+
+
+def _archive_remote_refs(
+    repo: str,
+    *,
+    branch_ref: str,
+    final_tag_ref: str,
+) -> tuple[str | None, str | None]:
+    branch_name = branch_ref.removeprefix("refs/heads/")
+    tag_name = final_tag_ref.removeprefix("refs/tags/")
+    branch_suffix = "/git/ref/heads/" + "/".join(
+        urllib.parse.quote(part, safe="") for part in branch_name.split("/")
+    )
+    tag_suffix = "/git/ref/tags/" + "/".join(
+        urllib.parse.quote(part, safe="") for part in tag_name.split("/")
+    )
+
+    branch_data = github_json_optional(repo, branch_suffix)
+    branch_sha = None
+    if branch_data is not None:
+        obj = branch_data.get("object") or {}
+        if obj.get("type") != "commit" or not isinstance(obj.get("sha"), str):
+            raise DomainError(
+                "archive branch ref is not a commit ref",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        branch_sha = obj["sha"]
+
+    tag_data = github_json_optional(repo, tag_suffix)
+    final_target = None
+    if tag_data is not None:
+        obj = tag_data.get("object") or {}
+        if obj.get("type") != "tag" or not isinstance(obj.get("sha"), str):
+            raise DomainError(
+                "archive final ref must be an annotated tag",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        annotated = github_json(
+            repo,
+            f"/git/tags/{urllib.parse.quote(obj['sha'], safe='')}",
+        )
+        target = annotated.get("object") or {}
+        if target.get("type") != "commit" or not isinstance(target.get("sha"), str):
+            raise DomainError(
+                "archive final annotated tag must target a commit",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        final_target = target["sha"]
+    return branch_sha, final_target
+
+
+def _classify_archive_refs(
+    *,
+    mode: str,
+    expected_branch_sha: str,
+    branch_sha: str | None,
+    final_tag_target: str | None,
+) -> str:
+    if mode == "ATOMIC_DELETE":
+        if final_tag_target == expected_branch_sha and branch_sha is None:
+            return "REF_COMMITTED"
+        if final_tag_target is None and branch_sha == expected_branch_sha:
+            return "NOT_EXECUTED"
+        return "REF_CONFLICT"
+    if mode == "RETAIN_BRANCH":
+        if (
+            final_tag_target == expected_branch_sha
+            and branch_sha == expected_branch_sha
+        ):
+            return "REF_COMMITTED"
+        if final_tag_target is None and branch_sha == expected_branch_sha:
+            return "NOT_EXECUTED"
+        return "REF_CONFLICT"
+    raise DomainError("unknown archive mode", code="DOMAIN_ARCHIVE_CONFLICT")
+
+
+def resolve_trusted_archive(
+    repo: str,
+    payload: dict,
+    repo_dir: Path,
+    *,
+    authority: str,
+) -> TrustedArchiveContext | None:
+    if payload.get("kind") != "operation_request":
+        return None
+    operation = payload.get("operation")
+    if operation not in {
+        "archive.prepare",
+        "archive.claim",
+        "archive.abort",
+        "archive.observe",
+        "archive.commit",
+    }:
+        return None
+    input_value = payload.get("input")
+    if not isinstance(input_value, dict):
+        raise DomainError("archive input must be an object")
+    experiment_id = input_value.get("experiment_id")
+    if not isinstance(experiment_id, str) or not re.fullmatch(r"EXP-[1-9][0-9]*", experiment_id):
+        raise DomainError("archive experiment_id must be EXP-<number>")
+
+    issue = experiment_id.removeprefix("EXP-")
+    binding = _ledger_object(
+        repo_dir,
+        f"experiments/{experiment_id}/binding.json",
+        where=experiment_id,
+    )
+    initialization = binding.get("initialization")
+    if not isinstance(initialization, dict):
+        raise DomainError(
+            "archive binding initialization is missing",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        )
+    branch_ref = initialization.get("branch_ref")
+    final_tag_ref = initialization.get("final_tag_ref")
+    if (
+        branch_ref != f"refs/heads/exp/{issue}"
+        or final_tag_ref != f"refs/tags/exp-final/{issue}"
+    ):
+        raise DomainError(
+            "archive canonical refs differ from binding",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+
+    if operation == "archive.prepare":
+        if authority != "request":
+            raise DomainError(
+                "archive.prepare must enter through normal human request authority",
+                code="DOMAIN_AUTHORIZATION_FAILED",
+            )
+        mode = input_value.get("mode")
+        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+            raise DomainError("archive mode is invalid")
+        branch_sha, final_target = _archive_remote_refs(
+            repo,
+            branch_ref=branch_ref,
+            final_tag_ref=final_tag_ref,
+        )
+        if branch_sha is None:
+            raise DomainError(
+                "archive prepare requires the experiment branch to exist",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        if final_target is not None:
+            raise DomainError(
+                "archive prepare requires final tag to be absent",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+        return TrustedArchiveContext(
+            action="PREPARE",
+            experiment_id=experiment_id,
+            archive_id=None,
+            mode=mode,
+            branch_ref=branch_ref,
+            final_tag_ref=final_tag_ref,
+            expected_branch_sha=branch_sha,
+        )
+
+    if operation == "archive.abort":
+        return None
+    if authority != "archive":
+        raise DomainError(
+            f"{operation} requires trusted archive authority",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+
+    archive_id = input_value.get("archive_id")
+    if not isinstance(archive_id, str):
+        raise DomainError("archive_id is required")
+    record = _archive_record_for(repo_dir, experiment_id, archive_id)
+    mode = record.get("mode")
+    expected_branch_sha = record.get("expected_branch_sha")
+    if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+        raise DomainError("archive record mode is invalid", code="DOMAIN_ARCHIVE_CONFLICT")
+    if not isinstance(expected_branch_sha, str) or not re.fullmatch(
+        r"[0-9a-f]{40}",
+        expected_branch_sha,
+    ):
+        raise DomainError(
+            "archive expected branch SHA is invalid",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    for key, expected in (
+        ("branch_ref", branch_ref),
+        ("final_tag_ref", final_tag_ref),
+    ):
+        if record.get(key) != expected:
+            raise DomainError(
+                f"archive record canonical ref mismatch for {key}",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+
+    if operation == "archive.claim":
+        return TrustedArchiveContext(
+            action="CLAIM",
+            experiment_id=experiment_id,
+            archive_id=archive_id,
+            mode=mode,
+            branch_ref=branch_ref,
+            final_tag_ref=final_tag_ref,
+            expected_branch_sha=expected_branch_sha,
+        )
+
+    branch_sha, final_target = _archive_remote_refs(
+        repo,
+        branch_ref=branch_ref,
+        final_tag_ref=final_tag_ref,
+    )
+    ref_status = _classify_archive_refs(
+        mode=mode,
+        expected_branch_sha=expected_branch_sha,
+        branch_sha=branch_sha,
+        final_tag_target=final_target,
+    )
+    action = "OBSERVE" if operation == "archive.observe" else "COMMIT"
+    return TrustedArchiveContext(
+        action=action,
+        experiment_id=experiment_id,
+        archive_id=archive_id,
+        mode=mode,
+        branch_ref=branch_ref,
+        final_tag_ref=final_tag_ref,
+        expected_branch_sha=expected_branch_sha,
+        ref_status=ref_status,
+        observed_branch_sha=branch_sha,
+        observed_final_tag_target=final_target,
+    )
 
 
 def resolve_trusted_candidate(
@@ -682,7 +968,12 @@ def resolve_trusted_integration(
 def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | None:
     if payload.get("kind") != "operation_request":
         return None
-    if payload.get("operation") not in {"experiment.decision", "review.record"}:
+    if payload.get("operation") not in {
+        "experiment.decision",
+        "review.record",
+        "archive.prepare",
+        "archive.abort",
+    }:
         return None
 
     actor_login = os.environ.get("GAME_EXP_ACTOR_LOGIN")
@@ -792,7 +1083,7 @@ def main() -> int:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--run-attempt", required=True)
     ap.add_argument("--workflow-source-sha", required=True)
-    ap.add_argument("--authority", choices=("request", "candidate", "rehearsal", "integration"), default="request")
+    ap.add_argument("--authority", choices=("request", "candidate", "rehearsal", "integration", "archive"), default="request")
     ap.add_argument("--trusted-context-json")
     args = ap.parse_args()
 
@@ -889,6 +1180,12 @@ def main() -> int:
             authority=args.authority,
             context_path=args.trusted_context_json,
         )
+        trusted_archive = resolve_trusted_archive(
+            args.repo,
+            payload,
+            repo_dir,
+            authority=args.authority,
+        )
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -901,6 +1198,7 @@ def main() -> int:
             trusted_retention=trusted_retention,
             trusted_rehearsal=trusted_selection_rehearsal or trusted_rehearsal,
             trusted_integration=trusted_integration,
+            trusted_archive=trusted_archive,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
