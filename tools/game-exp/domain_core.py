@@ -371,21 +371,44 @@ def _load_bound_experiment(repo_dir: Path, experiment_id: str):
 
 def _load_current_candidate(repo_dir: Path, experiment_id: str) -> dict[str, Any]:
     pointer_path = f"experiments/{experiment_id}/current_candidate.json"
-    pointer = _read_json_file(
-        repo_dir,
-        pointer_path,
-        where=f"{experiment_id} current candidate",
-    )
+    if not (repo_dir / pointer_path).exists():
+        raise DomainError(
+            "current valid Candidate is required",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    try:
+        pointer = _read_json_file(
+            repo_dir,
+            pointer_path,
+            where=f"{experiment_id} current candidate",
+        )
+    except DomainError as exc:
+        raise DomainError(
+            f"current Candidate pointer is invalid: {exc}",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        ) from exc
     if pointer.get("kind") != "candidate_pointer" or pointer.get("experiment_id") != experiment_id:
         raise DomainError("current candidate pointer identity mismatch", code="DOMAIN_PREREQUISITE_MISSING")
     candidate_id = pointer.get("candidate_id")
     if not isinstance(candidate_id, str):
         raise DomainError("current candidate id missing", code="DOMAIN_PREREQUISITE_MISSING")
-    record = _read_json_file(
-        repo_dir,
-        f"experiments/{experiment_id}/candidates/{candidate_id}.json",
-        where=f"{experiment_id} current candidate",
-    )
+    candidate_path = f"experiments/{experiment_id}/candidates/{candidate_id}.json"
+    if not (repo_dir / candidate_path).exists():
+        raise DomainError(
+            "current Candidate record is missing",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    try:
+        record = _read_json_file(
+            repo_dir,
+            candidate_path,
+            where=f"{experiment_id} current candidate",
+        )
+    except DomainError as exc:
+        raise DomainError(
+            f"current Candidate record is invalid: {exc}",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        ) from exc
     if pointer.get("candidate_digest") != digest_object(record):
         raise DomainError("current candidate pointer digest mismatch", code="DOMAIN_PREREQUISITE_MISSING")
     if (
