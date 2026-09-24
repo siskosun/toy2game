@@ -1,0 +1,153 @@
+name: game-exp integration proposal
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted integration control
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/integration_control.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Resolve selected Rehearsal and current main
+        id: prepare
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/integration_control.py prepare             --repo "$GITHUB_REPOSITORY"             --experiment-id "$EXPERIMENT_ID"             | tee "$RUNNER_TEMP/integration-prepare.json"
+          python - "$RUNNER_TEMP/integration-prepare.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          keys=("experiment_id","issue_number","candidate_id","rehearsal_id","rehearsal_ref","main_sha","source_sha","integration_tree_sha","branch")
+          with open(sys.argv[2],"a",encoding="utf-8") as out:
+              for key in keys:
+                  out.write(f"{key}={x[key]}\n")
+          PY
+
+      - name: Checkout exact current main
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.prepare.outputs.main_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: repo
+
+      - name: Create deterministic proposal commit and branch
+        id: branch
+        shell: bash
+        env:
+          MAIN_SHA: ${{ steps.prepare.outputs.main_sha }}
+          TREE_SHA: ${{ steps.prepare.outputs.integration_tree_sha }}
+          REHEARSAL_REF: ${{ steps.prepare.outputs.rehearsal_ref }}
+          REHEARSAL_ID: ${{ steps.prepare.outputs.rehearsal_id }}
+          CANDIDATE_ID: ${{ steps.prepare.outputs.candidate_id }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+        run: |
+          set -euo pipefail
+          cd repo
+          git config user.name game-exp-integration
+          git config user.email game-exp-integration@users.noreply.github.com
+          git fetch origin "$REHEARSAL_REF"
+          anchored="$(git rev-parse FETCH_HEAD^{})"
+          anchored_tree="$(git rev-parse "$anchored^{tree}")"
+          test "$anchored_tree" = "$TREE_SHA"
+
+          fixed_date="$(git show -s --format=%cI "$MAIN_SHA")"
+          export GIT_AUTHOR_NAME=game-exp-integration
+          export GIT_AUTHOR_EMAIL=game-exp-integration@users.noreply.github.com
+          export GIT_COMMITTER_NAME=game-exp-integration
+          export GIT_COMMITTER_EMAIL=game-exp-integration@users.noreply.github.com
+          export GIT_AUTHOR_DATE="$fixed_date"
+          export GIT_COMMITTER_DATE="$fixed_date"
+          message="game-exp integrate $CANDIDATE_ID via $REHEARSAL_ID"
+          proposal_sha="$(printf '%s\n' "$message" | git commit-tree "$TREE_SHA" -p "$MAIN_SHA")"
+
+          remote_sha="$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+          if [ -z "$remote_sha" ]; then
+            git push origin "$proposal_sha:refs/heads/$BRANCH"
+          else
+            test "$remote_sha" = "$proposal_sha"
+          fi
+          echo "proposal_sha=$proposal_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse Integration PR
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ steps.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ steps.prepare.outputs.candidate_id }}
+          REHEARSAL_ID: ${{ steps.prepare.outputs.rehearsal_id }}
+          MAIN_SHA: ${{ steps.prepare.outputs.main_sha }}
+          TREE_SHA: ${{ steps.prepare.outputs.integration_tree_sha }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          PROPOSAL_SHA: ${{ steps.branch.outputs.proposal_sha }}
+        run: |
+          set -euo pipefail
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 5 --json number,state,mergedAt,url,headRefOid)"
+          count="$(printf '%s' "$existing" | jq 'length')"
+          if [ "$count" -gt 1 ]; then
+            echo "multiple Integration PRs found for $BRANCH" >&2
+            exit 1
+          fi
+          if [ "$count" -eq 0 ]; then
+            body="$(cat <<EOF
+          game-exp trusted Integration proposal.
+
+          Experiment: $EXPERIMENT_ID
+          Candidate: $CANDIDATE_ID
+          Rehearsal: $REHEARSAL_ID
+          Expected base: $MAIN_SHA
+          Expected proposal tree: $TREE_SHA
+          Expected proposal commit: $PROPOSAL_SHA
+
+          Merging this PR is the human-visible code integration step. The experiment is not marked INTEGRATED until the trusted finalize workflow independently verifies the merged PR and writes the protected Ledger.
+          EOF
+          )"
+            gh pr create               --repo "$GITHUB_REPOSITORY"               --base main               --head "$BRANCH"               --title "game-exp integrate $EXPERIMENT_ID ($CANDIDATE_ID)"               --body "$body" >/dev/null
+          else
+            state="$(printf '%s' "$existing" | jq -r '.[0].state')"
+            merged="$(printf '%s' "$existing" | jq -r '.[0].mergedAt // ""')"
+            if [ "$state" = "CLOSED" ] && [ -z "$merged" ]; then
+              echo "existing Integration PR was closed without merge" >&2
+              exit 1
+            fi
+          fi
+          gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number,url,state,mergedAt,headRefOid             | tee "$RUNNER_TEMP/integration-pr.json"
+          echo "pr_number=$(jq -r .number "$RUNNER_TEMP/integration-pr.json")" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$(jq -r .url "$RUNNER_TEMP/integration-pr.json")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-integration-proposal-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/integration-prepare.json
+            ${{ runner.temp }}/integration-pr.json
+          retention-days: 30
+          if-no-files-found: error

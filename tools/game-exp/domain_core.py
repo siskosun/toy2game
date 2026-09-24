@@ -13,6 +13,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
 CANDIDATE_RE = re.compile(r"^C-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 REHEARSAL_RE = re.compile(r"^R-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
+INTEGRATION_RE = re.compile(r"^I-([1-9][0-9]*)-PR-([1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REHEARSAL_REQUIRED_CHECKS = (
     "scope",
@@ -178,6 +179,28 @@ class TrustedRehearsalContext:
     policy_digest: str
     scope_digest: str
     checks: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class TrustedIntegrationContext:
+    experiment_id: str
+    candidate_id: str
+    rehearsal_id: str
+    integration_id: str
+    pr_number: str
+    pr_id: str
+    pr_url: str
+    head_ref: str
+    head_sha: str
+    head_tree_sha: str
+    merge_sha: str
+    merge_tree_sha: str
+    merged_at: str
+    merged_by_login: str
+    merged_by_user_id: str
+    workflow_source_sha: str
+    run_id: str
+    run_attempt: str
 
 
 @dataclass(frozen=True)
@@ -1307,6 +1330,183 @@ def _plan_rehearsal(
     )
 
 
+def _plan_integration(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_integration: TrustedIntegrationContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    if trusted_integration is None:
+        raise DomainError(
+            "trusted Integration context is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_integration.experiment_id != experiment_id:
+        raise DomainError(
+            "trusted Integration experiment identity mismatch",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    if state.get("archive_lock") is not None:
+        raise DomainError(
+            "integration rejected while archive mutation lock is active",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+    if state.get("lifecycle") != "SELECTED":
+        raise DomainError(
+            f"Integration requires SELECTED lifecycle, got {state.get('lifecycle')!r}",
+            code="DOMAIN_INVALID_TRANSITION",
+        )
+
+    candidate_id = state.get("current_candidate_id")
+    rehearsal_id = state.get("current_rehearsal_id")
+    if (
+        not isinstance(candidate_id, str)
+        or not isinstance(rehearsal_id, str)
+        or trusted_integration.candidate_id != candidate_id
+        or trusted_integration.rehearsal_id != rehearsal_id
+    ):
+        raise DomainError(
+            "Integration must bind current Candidate and Rehearsal",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    rehearsal = _read_json_file(
+        repo_dir,
+        f"experiments/{experiment_id}/rehearsals/{rehearsal_id}.json",
+        where=experiment_id,
+    )
+    if (
+        rehearsal.get("kind") != "rehearsal"
+        or rehearsal.get("candidate_id") != candidate_id
+        or rehearsal.get("rehearsal_id") != rehearsal_id
+    ):
+        raise DomainError(
+            "current Rehearsal record is invalid",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    issue_number = experiment_id.removeprefix("EXP-")
+    match = INTEGRATION_RE.fullmatch(trusted_integration.integration_id)
+    if (
+        not match
+        or match.group(1) != issue_number
+        or match.group(2) != trusted_integration.pr_number
+    ):
+        raise DomainError(
+            "Integration id does not bind experiment/PR identity",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+    if not re.fullmatch(r"[1-9][0-9]*", trusted_integration.pr_number):
+        raise DomainError("Integration pr_number must be a positive decimal string")
+    if not re.fullmatch(r"[0-9]+", trusted_integration.pr_id):
+        raise DomainError("Integration pr_id must be a decimal string")
+    if not re.fullmatch(r"[0-9]+", trusted_integration.merged_by_user_id):
+        raise DomainError("Integration merged_by_user_id must be a decimal string")
+    if not re.fullmatch(r"[0-9]+", trusted_integration.run_id):
+        raise DomainError("Integration run_id must be a decimal string")
+    if not re.fullmatch(r"[1-9][0-9]*", trusted_integration.run_attempt):
+        raise DomainError("Integration run_attempt must be a positive decimal string")
+
+    expected_head_ref = f"game-exp/integration/{issue_number}/{rehearsal_id}"
+    if trusted_integration.head_ref != expected_head_ref:
+        raise DomainError(
+            "Integration PR head ref is not canonical",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+    for name, value in (
+        ("head_sha", trusted_integration.head_sha),
+        ("head_tree_sha", trusted_integration.head_tree_sha),
+        ("merge_sha", trusted_integration.merge_sha),
+        ("merge_tree_sha", trusted_integration.merge_tree_sha),
+        ("workflow_source_sha", trusted_integration.workflow_source_sha),
+    ):
+        if not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise DomainError(f"Integration {name} must be a 40-character SHA")
+
+    rehearsal_tree = rehearsal.get("integration_tree_sha")
+    if (
+        trusted_integration.head_tree_sha != rehearsal_tree
+        or trusted_integration.merge_tree_sha != rehearsal_tree
+    ):
+        raise DomainError(
+            "Integration tree differs from selected Rehearsal tree",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+    if not trusted_integration.pr_url or not trusted_integration.merged_at:
+        raise DomainError("Integration PR URL/merged_at is required")
+    if not trusted_integration.merged_by_login:
+        raise DomainError("Integration merged_by_login is required")
+
+    integration_path = (
+        f"experiments/{experiment_id}/integrations/{trusted_integration.integration_id}.json"
+    )
+    if (repo_dir / integration_path).exists():
+        raise DomainError(
+            "integration_id already exists",
+            code="DOMAIN_INTEGRATION_CONFLICT",
+        )
+
+    next_sequence = state["sequence"] + 1
+    record = {
+        "kind": "integration",
+        "integration_id": trusted_integration.integration_id,
+        "experiment_id": experiment_id,
+        "candidate_id": candidate_id,
+        "rehearsal_id": rehearsal_id,
+        "sequence": next_sequence,
+        "pr": {
+            "number": trusted_integration.pr_number,
+            "id": trusted_integration.pr_id,
+            "url": trusted_integration.pr_url,
+            "head_ref": trusted_integration.head_ref,
+            "head_sha": trusted_integration.head_sha,
+            "head_tree_sha": trusted_integration.head_tree_sha,
+            "merge_sha": trusted_integration.merge_sha,
+            "merge_tree_sha": trusted_integration.merge_tree_sha,
+            "merged_at": trusted_integration.merged_at,
+            "merged_by": {
+                "login": trusted_integration.merged_by_login,
+                "user_id": trusted_integration.merged_by_user_id,
+            },
+        },
+        "workflow_source_sha": trusted_integration.workflow_source_sha,
+        "github_run_id": trusted_integration.run_id,
+        "github_run_attempt": trusted_integration.run_attempt,
+        "registered_by_request_id": request_id,
+    }
+
+    next_state = dict(state)
+    seq = next_state.get("integration_sequence", 0)
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        raise DomainError(
+            "invalid integration_sequence",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        )
+    next_state["integration_sequence"] = seq + 1
+    next_state["current_integration_id"] = trusted_integration.integration_id
+    next_state["integrated_by_request_id"] = request_id
+    next_state["lifecycle"] = "INTEGRATED"
+    next_state["sequence"] = next_sequence
+
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            integration_path: record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
 def plan_domain_mutation(
     *,
     repo_dir: Path,
@@ -1319,10 +1519,18 @@ def plan_domain_mutation(
     trusted_candidate: TrustedCandidateContext | None = None,
     trusted_retention: TrustedRetentionContext | None = None,
     trusted_rehearsal: TrustedRehearsalContext | None = None,
+    trusted_integration: TrustedIntegrationContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "integration.register":
+        return _plan_integration(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_integration=trusted_integration,
+        )
     if operation == "rehearsal.register":
         return _plan_rehearsal(
             repo_dir=repo_dir,

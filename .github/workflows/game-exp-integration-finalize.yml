@@ -1,0 +1,121 @@
+name: game-exp integration finalize
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+      pr_number:
+        description: Merged Integration PR number
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted integration control
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/integration_control.py
+            tools/game-exp/trusted_writer.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Independently verify merged Integration PR
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/integration_control.py finalize             --repo "$GITHUB_REPOSITORY"             --experiment-id "$EXPERIMENT_ID"             --pr-number "$PR_NUMBER"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA"             --run-id "$RUN_ID"             --run-attempt "$RUN_ATTEMPT"             | tee "$RUNNER_TEMP/integration-context.json"
+
+      - name: Build protected Ledger request
+        id: payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/integration_control.py payload             --context-json "$RUNNER_TEMP/integration-context.json"             | tee "$RUNNER_TEMP/integration-payload.json"
+          echo "request_id=$(jq -r .request_id "$RUNNER_TEMP/integration-payload.json")" >> "$GITHUB_OUTPUT"
+          echo "payload_b64=$(jq -r .payload_b64 "$RUNNER_TEMP/integration-payload.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Require trusted writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Register INTEGRATED in protected Ledger
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ steps.payload.outputs.request_id }}
+          PAYLOAD_B64: ${{ steps.payload.outputs.payload_b64 }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
+          test -n "$ledger_head"
+
+          run_writer() {
+            python control/tools/game-exp/trusted_writer.py               --repo "$GITHUB_REPOSITORY"               --request-id "$REQUEST_ID"               --expected-head "$1"               --payload-b64 "$PAYLOAD_B64"               --ssh-key "$GAME_EXP_WRITER_KEY_PATH"               --run-id "$RUN_ID"               --run-attempt "$RUN_ATTEMPT"               --workflow-source-sha "$WORKFLOW_SOURCE_SHA"               --authority integration               --trusted-context-json "$RUNNER_TEMP/integration-context.json"
+          }
+
+          set +e
+          run_writer "$ledger_head" | tee "$RUNNER_TEMP/integration-ledger-result.json"
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -eq 42 ]; then
+            ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
+            run_writer "$ledger_head" | tee "$RUNNER_TEMP/integration-ledger-result.json"
+          elif [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+
+          python - "$RUNNER_TEMP/integration-ledger-result.json" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          assert x.get("status") == "COMMITTED", x
+          assert x.get("domain_status") == "APPLIED", x
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-exp-integration-finalize-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/integration-context.json
+            ${{ runner.temp }}/integration-payload.json
+            ${{ runner.temp }}/integration-ledger-result.json
+          retention-days: 30
+          if-no-files-found: warn
