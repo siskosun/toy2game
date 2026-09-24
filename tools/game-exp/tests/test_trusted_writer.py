@@ -259,6 +259,7 @@ class TrustedResolverTests(unittest.TestCase):
             "run_id": "456",
             "run_attempt": "1",
             "policy_digest": "sha256:" + "f" * 64,
+            "scope_digest": "sha256:" + "6" * 64,
             "checks": [
                 {"name": "merge", "status": "PASS", "source": "TRUSTED_OBSERVED"},
             ],
@@ -279,6 +280,7 @@ class TrustedResolverTests(unittest.TestCase):
                 f"game-exp-run-id: {value['run_id']}",
                 f"game-exp-run-attempt: {value['run_attempt']}",
                 f"game-exp-policy-digest: {value['policy_digest']}",
+                f"game-exp-scope-digest: {value['scope_digest']}",
             ]
         )
         return [
