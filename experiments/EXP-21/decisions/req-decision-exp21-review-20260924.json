@@ -1,0 +1,1 @@
+{"actor_claim":"human-pilot-reviewer","decision_id":"req-decision-exp21-review-20260924","experiment_id":"EXP-21","from_state":"ACTIVE","kind":"decision_event","previous_decision_id":null,"reason":"Source initialization and recovery checks passed; move to human review.","sequence":1,"to_state":"REVIEW"}
