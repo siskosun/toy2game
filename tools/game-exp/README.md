@@ -132,3 +132,30 @@ The client supplies only the canonical experiment ID. The trusted workflow recon
 - an annotated `refs/tags/exp-base/<issue>` that still points to the frozen parent commit and records the initialization commit + initialization-plan digest in its tag message.
 
 Re-running initialization is safe. If the experiment branch has advanced normally, the initializer verifies that the current branch is descended from the recorded initialization commit. Partial or mismatched refs fail closed and are never force-overwritten.
+
+
+## Trusted Integration
+
+Integration is deliberately two-phase. A selected experiment is not considered integrated merely because a Rehearsal exists.
+
+Create or reuse the exact Integration PR:
+
+```powershell
+python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate EXP-21
+```
+
+The proposal workflow requires the current lifecycle to be `SELECTED`, requires the current Rehearsal to target the current `main`, and creates a deterministic branch:
+
+`game-exp/integration/<issue>/<rehearsal-id>`
+
+The proposal commit has exactly one parent (the rehearsed main) and its tree is exactly the trusted Rehearsal `integration_tree_sha`. The workflow opens a normal PR against `main`; it does not mark the experiment integrated and it does not bypass the protected-main PR rule.
+
+After that PR is actually merged, finalize it:
+
+```powershell
+python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate-finalize EXP-21 --pr-number 77
+```
+
+The trusted finalize workflow independently verifies the merged PR, head tree, merge tree, merge ancestry in current main, workflow identity, current Candidate and current Rehearsal. Only then does the protected Ledger receive `integration.register` and lifecycle change from `SELECTED` to `INTEGRATED`.
+
+If `main` advances before the Integration PR is prepared, rerun `rehearse EXP-21` first. SELECTED experiments are allowed to refresh their Rehearsal without changing lifecycle.
