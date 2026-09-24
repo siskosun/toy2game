@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 jobs:
   mutate-ledger:
@@ -33,6 +34,7 @@ jobs:
           sparse-checkout: |
             tools/game-exp/trusted_writer.py
             tools/game-exp/protocol_core.py
+            tools/game-exp/domain_core.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v6
@@ -61,6 +63,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           set +e
