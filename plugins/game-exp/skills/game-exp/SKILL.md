@@ -44,7 +44,7 @@ Treat the Board as a structured read-only projection. The host may render it as 
 
 ## Start every workflow from authoritative state
 
-- With MCP, use `game_exp_status` / `game_exp_experiment_get` / `game_exp_doctor` as appropriate.
+- With MCP, use `game_exp_status` / `game_exp_experiment_get` / `game_exp_doctor` as appropriate. Before a new experiment is bound, use repo-level Doctor without `experiment_id`; use experiment-aware Doctor only after the experiment exists in the protected Ledger.
 - Without MCP, read the same authoritative objects from the protected `game-exp/ledger` ref through GitHub. For one experiment, start with `experiments/EXP-N/state.json`, then follow only the current ids in that state to the corresponding records.
 - Pin multi-file reads to one Ledger commit SHA whenever the connector supports an explicit ref; never combine files fetched from moving `game-exp/ledger` at different times.
 - Before a mutation, confirm the current lifecycle, current Candidate/Review/Rehearsal/Integration/Archive ids, and `last_decision_id` when relevant.
