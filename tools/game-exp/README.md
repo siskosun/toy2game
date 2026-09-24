@@ -86,6 +86,7 @@ Normal Harness use should prefer domain tools:
 
 Read / projection:
 - `game_exp_status`
+- `game_exp_board`
 - `game_exp_doctor`
 - `game_exp_experiment_get`
 - `game_exp_request_get`
@@ -104,6 +105,31 @@ Lifecycle / workflow:
 
 Low-level fallback:
 - `game_exp_request_submit`
+
+## Codex Board and Skill
+
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.1.2`.
+
+Normal users do not need to remember MCP tool names. Examples:
+
+- `打开 game-exp 面板`
+- `继续 EXP-42，告诉我下一步`
+- `这个 Candidate 我评审为 PASS`
+- `把 EXP-42 晋级到 PROMISING`
+- `归档 EXP-42，删除实验分支`
+
+For `打开 game-exp 面板`, the Skill calls `game_exp_board` and renders one consistent protected-Ledger snapshot with:
+
+- experiment / title;
+- lifecycle;
+- health;
+- Candidate / Review;
+- Rehearsal / Integration / Archive;
+- next gate.
+
+Board health is a safety gate, not decoration. A failed Binding/request/Manifest digest chain is rendered as `health=FAIL` and `DO_NOT_USE_RECREATE_EXPERIMENT`; the Skill must not recommend normal lifecycle work for that experiment.
+
+The current Codex 0.155.1 host has MCP Apps rendering feature flags disabled/under development. Therefore this is a Harness-native structured/text Board, not a persistent graphical panel. The future graphical Board should reuse the same read-only projection.
 
 Typical Codex flow:
 
@@ -143,7 +169,7 @@ codex mcp list
 
 Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire.
 
-The production Experiment Board is still deferred. On the tested Codex 0.155.1 host, MCP Apps rendering remains behind disabled under-development feature flags. The domain tools and experiment projection are designed so a future Board can consume the same authoritative model without becoming the authority.
+The Harness-native text Board is implemented and validated. Only the graphical MCP Apps Board remains deferred: on the tested Codex 0.155.1 host, MCP Apps rendering remains behind disabled under-development feature flags. Any future graphical Board must consume the same read-only projection without becoming the authority.
 
 
 ## Source initialization
