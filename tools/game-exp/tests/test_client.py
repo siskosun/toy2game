@@ -65,6 +65,12 @@ class FakeTransport:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/791"
 
+    def dispatch_archive(self, experiment_id, mode):
+        self.dispatched.append({"archive": experiment_id, "mode": mode})
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/792"
+
     def ledger_record(self, request_id):
         return self.record
 
@@ -330,6 +336,43 @@ class ClientTests(unittest.TestCase):
     def test_integrate_finalize_rejects_invalid_pr_number(self):
         result = GameExpClient(FakeTransport()).integrate_finalize("EXP-21", "0")
         self.assertEqual(result["status"], "REJECTED")
+
+    def test_archive_dispatches_trusted_workflow(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).archive("EXP-21", "ATOMIC_DELETE")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(
+            transport.dispatched[-1],
+            {"archive": "EXP-21", "mode": "ATOMIC_DELETE"},
+        )
+
+    def test_archive_rejects_invalid_mode_before_dispatch(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).archive("EXP-21", "DELETE")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_archive_uncertain_dispatch_is_retry_safe(self):
+        transport = FakeTransport()
+        transport.dispatch_uncertain = True
+        result = GameExpClient(transport).archive("EXP-21", "RETAIN_BRANCH")
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertTrue(result["retry_safe"])
+
+    def test_archive_abort_submits_human_gated_request(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        result = client.archive_abort(
+            "EXP-21",
+            "A-21-1",
+            "cancel before claim",
+            actor_claim="reviewer",
+            request_id="req_archive_abort_test",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        sent = transport.dispatched[-1]
+        self.assertEqual(sent["request_id"], "req_archive_abort_test")
+        self.assertIn("payload_b64", sent)
 
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
