@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, plan_domain_mutation, validate_manifest
+from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -50,6 +50,81 @@ def github_json(repo: str, suffix: str) -> dict:
     if not isinstance(value, dict):
         raise WriterError(f"GitHub trusted resolver returned non-object for {suffix}")
     return value
+
+
+def resolve_trusted_candidate(
+    payload: dict,
+    *,
+    authority: str,
+    context_path: str | None,
+) -> TrustedCandidateContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "candidate.register":
+        return None
+    if authority != "candidate":
+        raise DomainError(
+            "candidate.register requires trusted candidate authority",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if not context_path:
+        raise DomainError(
+            "trusted Candidate context file is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    try:
+        value = json.loads(Path(context_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise DomainError(
+            f"invalid trusted Candidate context: {exc}",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        ) from exc
+    if not isinstance(value, dict):
+        raise DomainError(
+            "trusted Candidate context must be an object",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    required = {
+        "experiment_id",
+        "candidate_id",
+        "source_sha",
+        "manifest_digest",
+        "artifact_digest",
+        "policy_digest",
+        "workflow_source_sha",
+        "run_id",
+        "run_attempt",
+        "checks",
+        "retention",
+        "attestation",
+    }
+    if set(value) != required:
+        raise DomainError(
+            "trusted Candidate context keys mismatch",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if not isinstance(value["checks"], list):
+        raise DomainError(
+            "trusted Candidate checks must be a list",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if not isinstance(value["retention"], dict) or not isinstance(value["attestation"], dict):
+        raise DomainError(
+            "trusted Candidate retention/attestation must be objects",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    return TrustedCandidateContext(
+        experiment_id=str(value["experiment_id"]),
+        candidate_id=str(value["candidate_id"]),
+        source_sha=str(value["source_sha"]),
+        manifest_digest=str(value["manifest_digest"]),
+        artifact_digest=str(value["artifact_digest"]),
+        policy_digest=str(value["policy_digest"]),
+        workflow_source_sha=str(value["workflow_source_sha"]),
+        run_id=str(value["run_id"]),
+        run_attempt=str(value["run_attempt"]),
+        checks=tuple(value["checks"]),
+        retention=dict(value["retention"]),
+        attestation=dict(value["attestation"]),
+    )
 
 
 def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | None:
@@ -163,6 +238,8 @@ def main() -> int:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--run-attempt", required=True)
     ap.add_argument("--workflow-source-sha", required=True)
+    ap.add_argument("--authority", choices=("request", "candidate"), default="request")
+    ap.add_argument("--trusted-context-json")
     args = ap.parse_args()
 
     validate_request_id(args.request_id)
@@ -231,6 +308,11 @@ def main() -> int:
 
         trusted_binding = resolve_trusted_binding(args.repo, payload)
         trusted_actor = resolve_trusted_actor(args.repo, payload)
+        trusted_candidate = resolve_trusted_candidate(
+            payload,
+            authority=args.authority,
+            context_path=args.trusted_context_json,
+        )
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -239,6 +321,7 @@ def main() -> int:
             repository_full_name=args.repo,
             trusted_binding=trusted_binding,
             trusted_actor=trusted_actor,
+            trusted_candidate=trusted_candidate,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
