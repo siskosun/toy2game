@@ -242,6 +242,23 @@ jobs:
           echo "candidate_id=$candidate_id" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Prove Level-3 release asset is immutable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(gh release delete-asset "$RELEASE_TAG" candidate.tgz \
+            --repo "$GITHUB_REPOSITORY" -y 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          test "$code" -ne 0
+          printf '%s\n' "$out" | grep -F 'Cannot delete asset from an immutable release'
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -qx candidate.tgz
       - name: Build trusted Candidate context and operation
         id: context
         shell: bash
