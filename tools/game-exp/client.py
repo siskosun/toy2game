@@ -1479,12 +1479,25 @@ class GameExpClient:
         archive_health = None
         if experiment_id is not None:
             try:
-                archive_health = self.archive_health(experiment_id)
-                add(
-                    "archive_health",
-                    archive_health["status"],
-                    archive_health,
+                state = self.transport.ledger_json(
+                    f"experiments/{experiment_id}/state.json"
                 )
+                if state is None:
+                    add(
+                        "archive_health",
+                        "SKIP",
+                        {
+                            "code": "EXPERIMENT_NOT_BOUND",
+                            "experiment_id": experiment_id,
+                        },
+                    )
+                else:
+                    archive_health = self.archive_health(experiment_id)
+                    add(
+                        "archive_health",
+                        archive_health["status"],
+                        archive_health,
+                    )
             except Exception as exc:
                 add("archive_health", "UNKNOWN", str(exc))
 
