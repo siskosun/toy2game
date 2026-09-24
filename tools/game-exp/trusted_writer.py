@@ -11,7 +11,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedBindingContext, plan_domain_mutation, validate_manifest
+from domain_core import (
+    DomainError,
+    TrustedBindingContext,
+    TrustedCandidateContext,
+    plan_domain_mutation,
+    validate_manifest,
+)
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -82,6 +88,169 @@ def resolve_trusted_binding(repo: str, payload: dict) -> TrustedBindingContext |
         issue_id=str(issue_meta.get("id")),
         issue_number=str(issue_meta.get("number")),
         parent_sha=resolved_sha,
+    )
+
+
+def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "candidate.attest":
+        return None
+    input_value = payload.get("input")
+    if not isinstance(input_value, dict):
+        raise DomainError("candidate.attest input must be an object")
+
+    names = (
+        "experiment_id",
+        "candidate_id",
+        "source_sha",
+        "source_anchor_ref",
+        "artifact_digest",
+        "manifest_digest",
+        "workflow_source_sha",
+        "run_id",
+        "run_attempt",
+        "policy_digest",
+    )
+    fields = {name: input_value.get(name) for name in names}
+    if not all(isinstance(value, str) and value for value in fields.values()):
+        raise DomainError("candidate.attest trusted-resolver fields are incomplete")
+
+    retention = input_value.get("retention")
+    if not isinstance(retention, dict) or not isinstance(retention.get("release_tag"), str):
+        raise DomainError("candidate.attest retention release_tag missing")
+    release_tag = retention["release_tag"]
+
+    experiment_id = fields["experiment_id"]
+    candidate_id = fields["candidate_id"]
+    source_sha = fields["source_sha"]
+    source_anchor_ref = fields["source_anchor_ref"]
+    artifact_digest = fields["artifact_digest"]
+    manifest_digest = fields["manifest_digest"]
+    workflow_source_sha = fields["workflow_source_sha"]
+    run_id = fields["run_id"]
+    run_attempt = fields["run_attempt"]
+    policy_digest = fields["policy_digest"]
+
+    match = re.fullmatch(r"EXP-([1-9][0-9]*)", experiment_id)
+    if not match:
+        raise DomainError("candidate experiment_id is invalid")
+    issue = match.group(1)
+    expected_ref = f"refs/tags/exp-candidate/{issue}/{candidate_id}"
+    if source_anchor_ref != expected_ref:
+        raise DomainError("candidate source anchor ref is not canonical")
+
+    ref_suffix = "/git/ref/tags/" + "/".join(
+        urllib.parse.quote(part, safe="")
+        for part in f"exp-candidate/{issue}/{candidate_id}".split("/")
+    )
+    ref_data = github_json(repo, ref_suffix)
+    ref_object = ref_data.get("object") or {}
+    if ref_object.get("type") != "tag" or not isinstance(ref_object.get("sha"), str):
+        raise DomainError("candidate source anchor must be an annotated tag")
+    tag_data = github_json(
+        repo,
+        f"/git/tags/{urllib.parse.quote(ref_object['sha'], safe='')}",
+    )
+    tag_object = tag_data.get("object") or {}
+    if tag_object.get("type") != "commit" or tag_object.get("sha") != source_sha:
+        raise DomainError(
+            "candidate source anchor target differs from candidate source_sha",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    message = tag_data.get("message")
+    if not isinstance(message, str):
+        raise DomainError("candidate source anchor message missing")
+    metadata = {}
+    for line in message.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            metadata[key.strip()] = value.strip()
+    expected_metadata = {
+        "game-exp-experiment": experiment_id,
+        "game-exp-candidate-id": candidate_id,
+        "game-exp-source-sha": source_sha,
+        "game-exp-artifact-digest": artifact_digest,
+        "game-exp-manifest-digest": manifest_digest,
+        "game-exp-workflow-source-sha": workflow_source_sha,
+        "game-exp-run-id": run_id,
+        "game-exp-run-attempt": run_attempt,
+        "game-exp-policy-digest": policy_digest,
+        "game-exp-release-tag": release_tag,
+    }
+    for key, value in expected_metadata.items():
+        if metadata.get(key) != value:
+            raise DomainError(
+                f"candidate source anchor metadata mismatch for {key}",
+                code="DOMAIN_CANDIDATE_CONFLICT",
+            )
+
+    release = github_json(
+        repo,
+        f"/releases/tags/{urllib.parse.quote(release_tag, safe='')}",
+    )
+    if release.get("immutable") is not True:
+        raise DomainError("candidate retention release is not immutable")
+    if release.get("target_commitish") != source_sha:
+        raise DomainError(
+            "candidate retention release target differs from source_sha",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise DomainError("candidate retention release assets missing")
+    artifact_assets = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict) and asset.get("name") == "candidate.tgz"
+    ]
+    if len(artifact_assets) != 1:
+        raise DomainError("candidate retention must contain exactly one candidate.tgz")
+    artifact_asset = artifact_assets[0]
+    if (
+        artifact_asset.get("digest") != artifact_digest
+        or not isinstance(artifact_asset.get("size"), int)
+        or artifact_asset["size"] <= 0
+    ):
+        raise DomainError(
+            "candidate retention asset digest/size mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
+    run_data = github_json(
+        repo,
+        f"/actions/runs/{urllib.parse.quote(run_id, safe='')}",
+    )
+    if str(run_data.get("run_attempt")) != run_attempt:
+        raise DomainError(
+            "candidate workflow run_attempt mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    if run_data.get("event") != "workflow_dispatch":
+        raise DomainError("candidate workflow must be workflow_dispatch")
+    if run_data.get("path") != ".github/workflows/game-exp-candidate.yml":
+        raise DomainError("candidate evidence is not from the trusted candidate workflow")
+    if run_data.get("head_sha") != workflow_source_sha:
+        raise DomainError(
+            "candidate workflow source SHA mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    if run_data.get("status") != "in_progress":
+        raise DomainError(
+            "candidate workflow must finalize while its trusted run is in progress",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
+    return TrustedCandidateContext(
+        experiment_id=experiment_id,
+        candidate_id=candidate_id,
+        source_anchor_ref=source_anchor_ref,
+        source_sha=source_sha,
+        artifact_digest=artifact_digest,
+        manifest_digest=manifest_digest,
+        workflow_source_sha=workflow_source_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        policy_digest=policy_digest,
+        release_tag=release_tag,
     )
 
 
@@ -195,6 +364,7 @@ def main() -> int:
             return 42
 
         trusted_binding = resolve_trusted_binding(args.repo, payload)
+        trusted_candidate = resolve_trusted_candidate(args.repo, payload)
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -202,6 +372,7 @@ def main() -> int:
             payload_digest=payload_digest,
             repository_full_name=args.repo,
             trusted_binding=trusted_binding,
+            trusted_candidate=trusted_candidate,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
