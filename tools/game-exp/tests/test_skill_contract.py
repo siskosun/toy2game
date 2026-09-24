@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.1.2")
+        self.assertEqual(manifest["version"], "0.1.3")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -84,6 +84,9 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertIn("UNKNOWN", content)
         self.assertIn("CONFLICT", content)
         self.assertIn("REJECTED", content)
+        self.assertIn("Keep game-exp orchestration self-contained", content)
+        self.assertIn(".ai/HANDOFF.md", content)
+        self.assertIn("without `experiment_id`", content)
 
     def test_skill_has_codex_board_entrypoint(self):
         content = SKILL.read_text(encoding="utf-8")
