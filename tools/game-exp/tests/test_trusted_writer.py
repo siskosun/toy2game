@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate  # noqa: E402
 
 
 def payload():
@@ -68,6 +68,66 @@ class TrustedResolverTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(DomainError, "not a pull request"):
             resolve_trusted_binding("siskosun/toy2game", payload())
+
+    def test_candidate_register_requires_candidate_authority(self):
+        payload = {
+            "kind": "operation_request",
+            "operation": "candidate.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with self.assertRaises(DomainError) as ctx:
+            resolve_trusted_candidate(
+                payload,
+                authority="request",
+                context_path=None,
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
+
+    def test_candidate_context_file_is_loaded_only_with_candidate_authority(self):
+        import json
+        import tempfile
+
+        payload = {
+            "kind": "operation_request",
+            "operation": "candidate.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        value = {
+            "experiment_id": "EXP-21",
+            "candidate_id": "C-21-123-1",
+            "source_sha": "a" * 40,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "artifact_digest": "sha256:" + "c" * 64,
+            "policy_digest": "sha256:" + "d" * 64,
+            "workflow_source_sha": "e" * 40,
+            "run_id": "123",
+            "run_attempt": "1",
+            "checks": [{"name": "build", "status": "PASS", "source": "TRUSTED_OBSERVED"}],
+            "retention": {
+                "provider": "github-immutable-release",
+                "release_tag": "game-exp-candidate-21-123-1",
+                "release_url": "https://github.com/owner/repo/releases/tag/game-exp-candidate-21-123-1",
+                "immutable": True,
+                "artifact_digest": "sha256:" + "c" * 64,
+            },
+            "attestation": {
+                "provider": "github-artifact-attestations",
+                "verified": True,
+                "subject_digest": "sha256:" + "c" * 64,
+                "source_sha": "a" * 40,
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "candidate.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            ctx = resolve_trusted_candidate(
+                payload,
+                authority="candidate",
+                context_path=str(path),
+            )
+        self.assertEqual(ctx.candidate_id, "C-21-123-1")
+        self.assertEqual(ctx.run_id, "123")
+        self.assertEqual(ctx.checks[0]["source"], "TRUSTED_OBSERVED")
 
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
