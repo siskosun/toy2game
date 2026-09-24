@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+HERE = Path(__file__).resolve()
+sys.path.insert(0, str(HERE.parents[1]))
+
+import mcp_server  # noqa: E402
+
+
+class FakeClient:
+    def status(self):
+        return {"repo": "owner/repo", "ledger_head": "a" * 40}
+
+    def doctor(self):
+        return {"status": "PASS", "repo": "owner/repo", "checks": []}
+
+    def reconcile(self, request_id):
+        return {"status": "COMMITTED", "request_id": request_id, "repo": "owner/repo"}
+
+    def submit(self, **kwargs):
+        return {
+            "status": "ACCEPTED",
+            "request_id": kwargs.get("request_id") or "req_generated",
+            "repo": "owner/repo",
+            "operation": kwargs["operation"],
+        }
+
+
+class MCPServerTests(unittest.TestCase):
+    def test_expected_tools_registered(self):
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        names = {tool.name for tool in tools}
+        self.assertEqual(
+            names,
+            {
+                "game_exp_status",
+                "game_exp_doctor",
+                "game_exp_request_get",
+                "game_exp_request_submit",
+            },
+        )
+
+    def test_tool_schemas_are_explicit(self):
+        tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
+        submit = tools["game_exp_request_submit"].input_schema
+        self.assertIn("operation", submit["properties"])
+        self.assertIn("input", submit["properties"])
+        self.assertIn("operation", submit["required"])
+        self.assertIn("input", submit["required"])
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_read_tools_delegate_to_shared_client(self, _):
+        status = mcp_server.game_exp_status("owner/repo")
+        doctor = mcp_server.game_exp_doctor("owner/repo")
+        request = mcp_server.game_exp_request_get("req_123", "owner/repo")
+        self.assertEqual(status["ledger_head"], "a" * 40)
+        self.assertEqual(doctor["status"], "PASS")
+        self.assertEqual(request["status"], "COMMITTED")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_submit_is_request_transport_not_domain_execution(self, _):
+        result = mcp_server.game_exp_request_submit(
+            operation="experiment.create",
+            input={"hypothesis": "three roles"},
+            preconditions={"state": "ACTIVE"},
+            actor_claim="human-reviewer",
+            request_id="req_123",
+            repo="owner/repo",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation"], "experiment.create")
+
+
+if __name__ == "__main__":
+    unittest.main()
