@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.1.1")
+        self.assertEqual(manifest["version"], "0.1.2")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -92,6 +92,8 @@ class GameExpSkillContractTests(unittest.TestCase):
             "game_exp_board",
             "read-only projection",
             "Next gate",
+            "health=FAIL",
+            "DO_NOT_USE_RECREATE_EXPERIMENT",
             "persistent graphical MCP Apps panel",
         ):
             self.assertIn(phrase, content)
