@@ -12,13 +12,108 @@ from protocol_core import ProtocolError, digest_object
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
 CANDIDATE_RE = re.compile(r"^C-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
+REHEARSAL_RE = re.compile(r"^R-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REHEARSAL_REQUIRED_CHECKS = (
+    "scope",
+    "merge",
+    "project_tests",
+    "build",
+    "trusted_tree_recompute",
+    "main_freshness",
+)
 
 
 class DomainError(ProtocolError):
     def __init__(self, message: str, *, code: str = "DOMAIN_INVALID"):
         super().__init__(message)
         self.code = code
+
+
+def rehearsal_policy_digest() -> str:
+    return digest_object(
+        {
+            "schema_version": 1,
+            "merge_mode": "scope-filtered-two-parent",
+            "base": "current-main-at-prepare",
+            "candidate": "current-candidate-source",
+            "scope": "manifest-allowed-strict-except-canonical-manifest",
+            "required_checks": list(REHEARSAL_REQUIRED_CHECKS),
+        }
+    )
+
+
+def _scope_glob_regex(pattern: str) -> re.Pattern[str]:
+    if not isinstance(pattern, str) or not pattern:
+        raise DomainError("scope pattern must be a non-empty string")
+    if "\\" in pattern or pattern.startswith("/") or "//" in pattern:
+        raise DomainError("scope pattern must use normalized relative '/' paths")
+    if unicodedata.normalize("NFC", pattern) != pattern:
+        raise DomainError("scope pattern must be NFC")
+    out: list[str] = ["^"]
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+            continue
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        ch = pattern[i]
+        if ch == "*":
+            out.append("[^/]*")
+        elif ch == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    out.append("$")
+    return re.compile("".join(out))
+
+
+def validate_rehearsal_scope_paths(
+    paths: list[str],
+    *,
+    allowed: list[str],
+    avoid: list[str],
+    manifest_path: str,
+) -> list[str]:
+    if not isinstance(paths, list):
+        raise DomainError("Rehearsal scope paths must be a list")
+    allowed_re = [_scope_glob_regex(pattern) for pattern in allowed]
+    avoid_re = [_scope_glob_regex(pattern) for pattern in avoid]
+    checked: list[str] = []
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            raise DomainError("Rehearsal changed path must be a non-empty string")
+        if (
+            "\\" in path
+            or path.startswith("/")
+            or path.endswith("/")
+            or "//" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or unicodedata.normalize("NFC", path) != path
+        ):
+            raise DomainError(
+                f"Rehearsal changed path is not portable: {path!r}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        if any(regex.fullmatch(path) for regex in avoid_re):
+            raise DomainError(
+                f"Rehearsal changed path matches avoid scope: {path}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        if path != manifest_path and not any(
+            regex.fullmatch(path) for regex in allowed_re
+        ):
+            raise DomainError(
+                f"Rehearsal changed path is outside allowed scope: {path}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        checked.append(path)
+    return sorted(set(checked))
 
 
 @dataclass(frozen=True)
@@ -65,6 +160,24 @@ class TrustedRetentionContext:
     artifact_name: str
     artifact_digest: str
     asset_id: str
+
+
+@dataclass(frozen=True)
+class TrustedRehearsalContext:
+    experiment_id: str
+    candidate_id: str
+    rehearsal_id: str
+    main_sha: str
+    source_sha: str
+    integration_sha: str
+    integration_tree_sha: str
+    rehearsal_ref: str
+    workflow_source_sha: str
+    run_id: str
+    run_attempt: str
+    policy_digest: str
+    scope_digest: str
+    checks: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -881,6 +994,179 @@ def _plan_candidate(
     )
 
 
+def _plan_rehearsal(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    trusted_rehearsal: TrustedRehearsalContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    if trusted_rehearsal is None:
+        raise DomainError(
+            "trusted Rehearsal context is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_rehearsal.experiment_id != experiment_id:
+        raise DomainError(
+            "trusted Rehearsal experiment identity mismatch",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    if state.get("lifecycle") != "PROMISING":
+        raise DomainError(
+            f"Rehearsal requires PROMISING lifecycle, got {state.get('lifecycle')!r}",
+            code="DOMAIN_INVALID_TRANSITION",
+        )
+    candidate_id = state.get("current_candidate_id")
+    if not isinstance(candidate_id, str) or candidate_id != trusted_rehearsal.candidate_id:
+        raise DomainError(
+            "Rehearsal must bind the current Candidate",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+    candidate = _load_candidate(repo_dir, experiment_id, candidate_id)
+    if candidate.get("source_sha") != trusted_rehearsal.source_sha:
+        raise DomainError(
+            "Rehearsal source SHA differs from current Candidate",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+
+    match = REHEARSAL_RE.fullmatch(trusted_rehearsal.rehearsal_id)
+    issue_number = experiment_id.removeprefix("EXP-")
+    if (
+        not match
+        or match.group(1) != issue_number
+        or match.group(2) != trusted_rehearsal.run_id
+        or match.group(3) != trusted_rehearsal.run_attempt
+    ):
+        raise DomainError(
+            "Rehearsal id does not bind experiment/run identity",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+    expected_ref = (
+        f"refs/tags/exp-rehearsal/{issue_number}/{trusted_rehearsal.rehearsal_id}"
+    )
+    if trusted_rehearsal.rehearsal_ref != expected_ref:
+        raise DomainError(
+            "Rehearsal ref is not canonical",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+
+    for name, value in (
+        ("main_sha", trusted_rehearsal.main_sha),
+        ("source_sha", trusted_rehearsal.source_sha),
+        ("integration_sha", trusted_rehearsal.integration_sha),
+        ("integration_tree_sha", trusted_rehearsal.integration_tree_sha),
+        ("workflow_source_sha", trusted_rehearsal.workflow_source_sha),
+    ):
+        if not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise DomainError(f"Rehearsal {name} must be a 40-character SHA")
+    if trusted_rehearsal.policy_digest != rehearsal_policy_digest():
+        raise DomainError(
+            "Rehearsal policy_digest does not match the trusted policy",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+    if not SHA256_RE.fullmatch(trusted_rehearsal.scope_digest):
+        raise DomainError(
+            "Rehearsal scope_digest must be sha256:<64 lowercase hex>",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+    if not re.fullmatch(r"[0-9]+", trusted_rehearsal.run_id):
+        raise DomainError("Rehearsal run_id must be a decimal string")
+    if not re.fullmatch(r"[1-9][0-9]*", trusted_rehearsal.run_attempt):
+        raise DomainError("Rehearsal run_attempt must be a positive decimal string")
+    if trusted_rehearsal.integration_sha in {
+        trusted_rehearsal.main_sha,
+        trusted_rehearsal.source_sha,
+    }:
+        raise DomainError(
+            "Rehearsal integration commit must be a two-parent integration object",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+
+    checks = list(trusted_rehearsal.checks)
+    if not checks:
+        raise DomainError(
+            "Rehearsal requires trusted checks",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    normalized_checks: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise DomainError(f"Rehearsal check {index} must be an object")
+        _expect_keys(check, {"name", "status", "source"}, where=f"Rehearsal check {index}")
+        name = _string(check["name"], f"Rehearsal check {index}.name")
+        if name in seen:
+            raise DomainError("Rehearsal check names must be unique")
+        seen.add(name)
+        if check["status"] != "PASS" or check["source"] != "TRUSTED_OBSERVED":
+            raise DomainError(
+                f"Rehearsal check {name!r} is not trusted PASS",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        normalized_checks.append(
+            {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+        )
+    if seen != set(REHEARSAL_REQUIRED_CHECKS):
+        raise DomainError(
+            "Rehearsal trusted checks do not match the required policy",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+
+    rehearsal_path = (
+        f"experiments/{experiment_id}/rehearsals/{trusted_rehearsal.rehearsal_id}.json"
+    )
+    if (repo_dir / rehearsal_path).exists():
+        raise DomainError(
+            "rehearsal_id already exists",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
+
+    rehearsal = {
+        "kind": "rehearsal",
+        "rehearsal_id": trusted_rehearsal.rehearsal_id,
+        "experiment_id": experiment_id,
+        "candidate_id": candidate_id,
+        "main_sha": trusted_rehearsal.main_sha,
+        "source_sha": trusted_rehearsal.source_sha,
+        "integration_sha": trusted_rehearsal.integration_sha,
+        "integration_tree_sha": trusted_rehearsal.integration_tree_sha,
+        "rehearsal_ref": trusted_rehearsal.rehearsal_ref,
+        "workflow_source_sha": trusted_rehearsal.workflow_source_sha,
+        "github_run_id": trusted_rehearsal.run_id,
+        "github_run_attempt": trusted_rehearsal.run_attempt,
+        "policy_digest": trusted_rehearsal.policy_digest,
+        "scope_digest": trusted_rehearsal.scope_digest,
+        "checks": normalized_checks,
+    }
+    next_state = dict(state)
+    seq = next_state.get("rehearsal_sequence", 0)
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        raise DomainError(
+            "invalid rehearsal_sequence",
+            code="DOMAIN_BOUND_EXPERIMENT_INVALID",
+        )
+    next_state["rehearsal_sequence"] = seq + 1
+    next_state["current_rehearsal_id"] = trusted_rehearsal.rehearsal_id
+    next_state["current_rehearsal_candidate_id"] = candidate_id
+    next_state["current_rehearsal_main_sha"] = trusted_rehearsal.main_sha
+
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            rehearsal_path: rehearsal,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
 def plan_domain_mutation(
     *,
     repo_dir: Path,
@@ -892,10 +1178,17 @@ def plan_domain_mutation(
     trusted_actor: TrustedActorContext | None = None,
     trusted_candidate: TrustedCandidateContext | None = None,
     trusted_retention: TrustedRetentionContext | None = None,
+    trusted_rehearsal: TrustedRehearsalContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "rehearsal.register":
+        return _plan_rehearsal(
+            repo_dir=repo_dir,
+            payload=payload,
+            trusted_rehearsal=trusted_rehearsal,
+        )
     if operation == "review.record":
         return _plan_review(
             repo_dir=repo_dir,

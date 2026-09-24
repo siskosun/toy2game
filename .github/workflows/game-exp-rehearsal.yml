@@ -1,0 +1,389 @@
+name: game-exp trusted rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      experiment_id: ${{ steps.prepare.outputs.experiment_id }}
+      issue_number: ${{ steps.prepare.outputs.issue_number }}
+      candidate_id: ${{ steps.prepare.outputs.candidate_id }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      base_sha: ${{ steps.prepare.outputs.base_sha }}
+      main_sha: ${{ steps.prepare.outputs.main_sha }}
+      scope_b64: ${{ steps.prepare.outputs.scope_b64 }}
+      rehearsal_id: ${{ steps.prepare.outputs.rehearsal_id }}
+      rehearsal_ref: ${{ steps.prepare.outputs.rehearsal_ref }}
+      policy_digest: ${{ steps.prepare.outputs.policy_digest }}
+      workflow_source_sha: ${{ steps.prepare.outputs.workflow_source_sha }}
+      run_id: ${{ steps.prepare.outputs.run_id }}
+      run_attempt: ${{ steps.prepare.outputs.run_attempt }}
+    steps:
+      - name: Checkout trusted rehearsal control
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/rehearsal_control.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Resolve authoritative rehearsal inputs
+        id: prepare
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/rehearsal_control.py prepare             --repo "$GITHUB_REPOSITORY"             --experiment-id "$EXPERIMENT_ID"             --run-id "$RUN_ID"             --run-attempt "$RUN_ATTEMPT"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA"             | tee "$RUNNER_TEMP/rehearsal-prepare.json"
+          python - "$RUNNER_TEMP/rehearsal-prepare.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          keys=(
+              "experiment_id","issue_number","candidate_id","source_sha","base_sha","main_sha",
+              "scope_b64","rehearsal_id","rehearsal_ref","policy_digest","workflow_source_sha",
+              "run_id","run_attempt",
+          )
+          with open(sys.argv[2],"a",encoding="utf-8") as out:
+              for key in keys:
+                  out.write(f"{key}={x[key]}\n")
+          PY
+
+  rehearse:
+    needs: prepare
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact current main
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.main_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout trusted scope control
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/rehearsal_control.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - name: Fetch exact Candidate source and binding base
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git fetch --no-tags origin "$BASE_SHA"
+      - name: Apply only manifest-scoped Candidate changes
+        id: merge
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SCOPE_B64: ${{ needs.prepare.outputs.scope_b64 }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/rehearsal_control.py integration-tree             --repo-dir .             --base-sha "$BASE_SHA"             --source-sha "$SOURCE_SHA"             --main-sha "$MAIN_SHA"             --scope-b64 "$SCOPE_B64"             | tee rehearsal-scope.json
+          tree="$(python -c 'import json; print(json.load(open("rehearsal-scope.json"))["integration_tree_sha"])')"
+          test -n "$tree"
+          echo "integration_tree_sha=$tree" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Project tests on merged tree
+        run: npm test
+      - name: Project build on merged tree
+        run: npm run build
+      - name: Persist untrusted rehearsal observation
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ needs.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ needs.prepare.outputs.candidate_id }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          TREE_SHA: ${{ steps.merge.outputs.integration_tree_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib
+          scope=json.loads(pathlib.Path("rehearsal-scope.json").read_text(encoding="utf-8"))
+          value={
+              "experiment_id":os.environ["EXPERIMENT_ID"],
+              "candidate_id":os.environ["CANDIDATE_ID"],
+              "main_sha":os.environ["MAIN_SHA"],
+              "source_sha":os.environ["SOURCE_SHA"],
+              "integration_tree_sha":os.environ["TREE_SHA"],
+              "scope":scope,
+              "checks":{
+                  "scope":"PASS",
+                  "merge":"PASS",
+                  "project_tests":"PASS",
+                  "build":"PASS",
+              },
+          }
+          pathlib.Path("rehearsal-result.json").write_text(
+              json.dumps(value,sort_keys=True,separators=(",",":"))+"\n",
+              encoding="utf-8",
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-rehearsal-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            rehearsal-result.json
+            rehearsal-scope.json
+          retention-days: 30
+          if-no-files-found: error
+
+  finalize:
+    needs: [prepare, rehearse]
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted rehearsal control only
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/rehearsal_control.py
+            tools/game-exp/trusted_writer.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v5
+        with:
+          name: game-exp-rehearsal-result-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Require trusted writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+      - name: Independently recompute integration tree and create integration commit
+        id: integration
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SCOPE_B64: ${{ needs.prepare.outputs.scope_b64 }}
+        run: |
+          set -euo pipefail
+          observed_tree="$(python -c 'import json; print(json.load(open("rehearsal-result.json"))["integration_tree_sha"])')"
+          work="$RUNNER_TEMP/rehearsal-trusted"
+          git init "$work"
+          cd "$work"
+          git config user.name game-exp-rehearsal-writer
+          git config user.email game-exp-rehearsal-writer@users.noreply.github.com
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags origin "$BASE_SHA"
+          git fetch --no-tags origin "$MAIN_SHA"
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git checkout --detach "$MAIN_SHA"
+
+          python "$GITHUB_WORKSPACE/control/tools/game-exp/rehearsal_control.py" integration-tree             --repo-dir "$work"             --base-sha "$BASE_SHA"             --source-sha "$SOURCE_SHA"             --main-sha "$MAIN_SHA"             --scope-b64 "$SCOPE_B64"             | tee "$RUNNER_TEMP/rehearsal-scope-trusted.json"
+          trusted_tree="$(python -c 'import json; print(json.load(open("'"$RUNNER_TEMP/rehearsal-scope-trusted.json"'"))["integration_tree_sha"])')"
+          [[ "$trusted_tree" =~ ^[0-9a-f]{40}$ ]]
+          test "$trusted_tree" = "$observed_tree"
+
+          current_main="$(python - <<'PY'
+          import json, os, urllib.request
+          repo=os.environ["GITHUB_REPOSITORY"]
+          token=os.environ["GAME_EXP_GITHUB_TOKEN"]
+          req=urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/git/ref/heads/main",
+              headers={
+                  "Accept":"application/vnd.github+json",
+                  "Authorization":f"Bearer {token}",
+                  "X-GitHub-Api-Version":"2022-11-28",
+                  "User-Agent":"game-exp-rehearsal",
+              },
+          )
+          with urllib.request.urlopen(req,timeout=20) as r:
+              print(json.load(r)["object"]["sha"])
+          PY
+          )"
+          test "$current_main" = "$MAIN_SHA"
+
+          export GIT_AUTHOR_NAME=game-exp-rehearsal-writer
+          export GIT_AUTHOR_EMAIL=game-exp-rehearsal-writer@users.noreply.github.com
+          export GIT_COMMITTER_NAME=game-exp-rehearsal-writer
+          export GIT_COMMITTER_EMAIL=game-exp-rehearsal-writer@users.noreply.github.com
+          integration_sha="$(printf 'game-exp trusted rehearsal\n' | git commit-tree "$trusted_tree" -p "$MAIN_SHA" -p "$SOURCE_SHA")"
+          [[ "$integration_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          echo "integration_tree_sha=$trusted_tree" >> "$GITHUB_OUTPUT"
+          echo "integration_sha=$integration_sha" >> "$GITHUB_OUTPUT"
+      - name: Create protected Rehearsal anchor
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ needs.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ needs.prepare.outputs.candidate_id }}
+          REHEARSAL_ID: ${{ needs.prepare.outputs.rehearsal_id }}
+          REHEARSAL_REF: ${{ needs.prepare.outputs.rehearsal_ref }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          INTEGRATION_SHA: ${{ steps.integration.outputs.integration_sha }}
+          INTEGRATION_TREE_SHA: ${{ steps.integration.outputs.integration_tree_sha }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.prepare.outputs.workflow_source_sha }}
+          RUN_ID: ${{ needs.prepare.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.prepare.outputs.run_attempt }}
+          POLICY_DIGEST: ${{ needs.prepare.outputs.policy_digest }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/rehearsal-trusted"
+          cd "$work"
+          git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
+          export GIT_SSH_COMMAND="ssh -i $GAME_EXP_WRITER_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          tag_name="${REHEARSAL_REF#refs/tags/}"
+          cat > "$RUNNER_TEMP/rehearsal-tag-message.txt" <<EOF
+          game-exp rehearsal $REHEARSAL_ID
+
+          game-exp-experiment: $EXPERIMENT_ID
+          game-exp-candidate-id: $CANDIDATE_ID
+          game-exp-rehearsal-id: $REHEARSAL_ID
+          game-exp-main-sha: $MAIN_SHA
+          game-exp-source-sha: $SOURCE_SHA
+          game-exp-integration-sha: $INTEGRATION_SHA
+          game-exp-integration-tree-sha: $INTEGRATION_TREE_SHA
+          game-exp-workflow-source-sha: $WORKFLOW_SOURCE_SHA
+          game-exp-run-id: $RUN_ID
+          game-exp-run-attempt: $RUN_ATTEMPT
+          game-exp-policy-digest: $POLICY_DIGEST
+          game-exp-scope-digest: $(python -c 'import json; print(json.load(open("'"$RUNNER_TEMP/rehearsal-scope-trusted.json"'"))["scope_digest"])')
+          EOF
+          git tag -a "$tag_name" "$INTEGRATION_SHA" -F "$RUNNER_TEMP/rehearsal-tag-message.txt"
+          git push origin "refs/tags/$tag_name:$REHEARSAL_REF"
+      - name: Wait until GitHub exposes the Rehearsal anchor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REHEARSAL_REF: ${{ needs.prepare.outputs.rehearsal_ref }}
+        run: |
+          set -euo pipefail
+          suffix="${REHEARSAL_REF#refs/tags/}"
+          for i in $(seq 1 20); do
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$suffix" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Rehearsal tag did not become visible through GitHub API" >&2
+          exit 1
+      - name: Build trusted Rehearsal context and request
+        id: payload
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ needs.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ needs.prepare.outputs.candidate_id }}
+          REHEARSAL_ID: ${{ needs.prepare.outputs.rehearsal_id }}
+          REHEARSAL_REF: ${{ needs.prepare.outputs.rehearsal_ref }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          INTEGRATION_SHA: ${{ steps.integration.outputs.integration_sha }}
+          INTEGRATION_TREE_SHA: ${{ steps.integration.outputs.integration_tree_sha }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.prepare.outputs.workflow_source_sha }}
+          RUN_ID: ${{ needs.prepare.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.prepare.outputs.run_attempt }}
+          POLICY_DIGEST: ${{ needs.prepare.outputs.policy_digest }}
+        run: |
+          set -euo pipefail
+          SCOPE_DIGEST="$(python -c 'import json; print(json.load(open("'"$RUNNER_TEMP/rehearsal-scope-trusted.json"'"))["scope_digest"])')"
+          python control/tools/game-exp/rehearsal_control.py payload             --experiment-id "$EXPERIMENT_ID"             --candidate-id "$CANDIDATE_ID"             --rehearsal-id "$REHEARSAL_ID"             --main-sha "$MAIN_SHA"             --source-sha "$SOURCE_SHA"             --integration-sha "$INTEGRATION_SHA"             --integration-tree-sha "$INTEGRATION_TREE_SHA"             --rehearsal-ref "$REHEARSAL_REF"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA"             --run-id "$RUN_ID"             --run-attempt "$RUN_ATTEMPT"             --policy-digest "$POLICY_DIGEST"             --scope-digest "$SCOPE_DIGEST"             --context-output "$RUNNER_TEMP/rehearsal-context.json"             | tee "$RUNNER_TEMP/rehearsal-payload.json"
+          echo "request_id=$(jq -r .request_id "$RUNNER_TEMP/rehearsal-payload.json")" >> "$GITHUB_OUTPUT"
+          echo "payload_b64=$(jq -r .payload_b64 "$RUNNER_TEMP/rehearsal-payload.json")" >> "$GITHUB_OUTPUT"
+      - name: Register trusted Rehearsal in protected Ledger
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ steps.payload.outputs.request_id }}
+          PAYLOAD_B64: ${{ steps.payload.outputs.payload_b64 }}
+          RUN_ID: ${{ needs.prepare.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.prepare.outputs.run_attempt }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.prepare.outputs.workflow_source_sha }}
+        run: |
+          set -euo pipefail
+          ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
+          test -n "$ledger_head"
+
+          run_writer() {
+            python control/tools/game-exp/trusted_writer.py               --repo "$GITHUB_REPOSITORY"               --request-id "$REQUEST_ID"               --expected-head "$1"               --payload-b64 "$PAYLOAD_B64"               --ssh-key "$GAME_EXP_WRITER_KEY_PATH"               --run-id "$RUN_ID"               --run-attempt "$RUN_ATTEMPT"               --workflow-source-sha "$WORKFLOW_SOURCE_SHA"               --authority rehearsal               --trusted-context-json "$RUNNER_TEMP/rehearsal-context.json"
+          }
+
+          set +e
+          run_writer "$ledger_head" | tee "$RUNNER_TEMP/rehearsal-ledger-result.json"
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -eq 42 ]; then
+            ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
+            run_writer "$ledger_head" | tee "$RUNNER_TEMP/rehearsal-ledger-result.json"
+          elif [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+
+          python - "$RUNNER_TEMP/rehearsal-ledger-result.json" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          assert x.get("status") == "COMMITTED", x
+          assert x.get("domain_status") == "APPLIED", x
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-exp-rehearsal-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            rehearsal-result.json
+            rehearsal-scope.json
+            ${{ runner.temp }}/rehearsal-scope-trusted.json
+            ${{ runner.temp }}/rehearsal-prepare.json
+            ${{ runner.temp }}/rehearsal-tag-message.txt
+            ${{ runner.temp }}/rehearsal-context.json
+            ${{ runner.temp }}/rehearsal-payload.json
+            ${{ runner.temp }}/rehearsal-ledger-result.json
+          retention-days: 30
+          if-no-files-found: warn
