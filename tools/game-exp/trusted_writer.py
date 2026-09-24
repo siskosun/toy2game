@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedBindingContext, plan_domain_mutation, validate_manifest
+from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -50,6 +50,41 @@ def github_json(repo: str, suffix: str) -> dict:
     if not isinstance(value, dict):
         raise WriterError(f"GitHub trusted resolver returned non-object for {suffix}")
     return value
+
+
+def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "experiment.decision":
+        return None
+
+    actor_login = os.environ.get("GAME_EXP_ACTOR_LOGIN")
+    if not actor_login:
+        raise DomainError(
+            "trusted GitHub actor login is unavailable",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    actor_meta = github_json(
+        repo,
+        f"/collaborators/{urllib.parse.quote(actor_login, safe='')}/permission",
+    )
+    permission = actor_meta.get("permission")
+    user = actor_meta.get("user")
+    if not isinstance(permission, str) or not isinstance(user, dict):
+        raise DomainError(
+            "trusted collaborator permission response is incomplete",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    login = user.get("login")
+    user_id = user.get("id")
+    if login != actor_login or not isinstance(user_id, int):
+        raise DomainError(
+            "trusted collaborator identity mismatch",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    return TrustedActorContext(
+        login=login,
+        user_id=str(user_id),
+        permission=permission,
+    )
 
 
 def resolve_trusted_binding(repo: str, payload: dict) -> TrustedBindingContext | None:
@@ -195,6 +230,7 @@ def main() -> int:
             return 42
 
         trusted_binding = resolve_trusted_binding(args.repo, payload)
+        trusted_actor = resolve_trusted_actor(args.repo, payload)
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -202,6 +238,7 @@ def main() -> int:
             payload_digest=payload_digest,
             repository_full_name=args.repo,
             trusted_binding=trusted_binding,
+            trusted_actor=trusted_actor,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
