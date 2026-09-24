@@ -25,3 +25,6 @@ artifacts/
 /待转换玩具/
 /games/rabbit-trap/reference.png
 /docs/ip-review-*.md
+
+# game-exp local trusted-writer credentials (never commit)
+/.game-exp-trusted/
