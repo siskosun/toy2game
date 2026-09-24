@@ -112,6 +112,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         )
         self.assertIn("Open experiment Board / panel", content)
         self.assertIn("game_exp_board", content)
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "github-bridge.md").exists())
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))
