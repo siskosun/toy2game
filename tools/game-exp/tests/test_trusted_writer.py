@@ -715,7 +715,17 @@ class TrustedResolverTests(unittest.TestCase):
             None,
             {"object": {"type": "tag", "sha": "1" * 40}},
         ]
-        api.return_value = {"object": {"type": "commit", "sha": "b" * 40}}
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: ATOMIC_DELETE",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_archive_fixture(root)
@@ -759,7 +769,17 @@ class TrustedResolverTests(unittest.TestCase):
             {"object": {"type": "commit", "sha": "b" * 40}},
             {"object": {"type": "tag", "sha": "1" * 40}},
         ]
-        api.return_value = {"object": {"type": "commit", "sha": "b" * 40}}
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: RETAIN_BRANCH",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_archive_fixture(root, mode="RETAIN_BRANCH")
@@ -781,7 +801,17 @@ class TrustedResolverTests(unittest.TestCase):
             {"object": {"type": "commit", "sha": "c" * 40}},
             {"object": {"type": "tag", "sha": "1" * 40}},
         ]
-        api.return_value = {"object": {"type": "commit", "sha": "b" * 40}}
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: RETAIN_BRANCH",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_archive_fixture(root, mode="RETAIN_BRANCH")
