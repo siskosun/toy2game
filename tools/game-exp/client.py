@@ -266,6 +266,40 @@ class GitHubTransport:
             )
         return url
 
+    def dispatch_archive(self, experiment_id: str, mode: str) -> str:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+            raise ClientError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
+        proc = _run(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "game-exp-archive.yml",
+                "--repo",
+                self.repo,
+                "--ref",
+                "main",
+                "-f",
+                f"experiment_id={experiment_id}",
+                "-f",
+                f"mode={mode}",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "archive dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                "archive dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
     def ledger_record(self, request_id: str) -> dict[str, Any] | None:
         validate_request_id(request_id)
         endpoint = (
@@ -614,6 +648,85 @@ class GameExpClient:
             "pr_number": str(pr_number),
             "workflow_url": workflow_url,
         }
+
+    def archive(self, experiment_id: str, mode: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "mode": mode,
+                "error": "archive mode must be ATOMIC_DELETE or RETAIN_BRANCH",
+            }
+        try:
+            workflow_url = self.transport.dispatch_archive(experiment_id, mode)
+        except TransportUncertainError as exc:
+            return {
+                "status": "UNKNOWN",
+                "reason": "archive_dispatch_outcome_uncertain",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "mode": mode,
+                "error": str(exc),
+                "retry_safe": True,
+            }
+        return {
+            "status": "ACCEPTED",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "mode": mode,
+            "workflow_url": workflow_url,
+        }
+
+    def archive_abort(
+        self,
+        experiment_id: str,
+        archive_id: str,
+        reason: str,
+        *,
+        actor_claim: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        if not re.fullmatch(r"A-[1-9][0-9]*-[1-9][0-9]*", archive_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+                "error": "archive_id must be A-<issue>-<sequence>",
+            }
+        if not isinstance(reason, str) or not reason.strip():
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+                "error": "archive abort reason is required",
+            }
+        return self.submit(
+            operation="archive.abort",
+            input_value={
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+                "reason": reason,
+            },
+            actor_claim=actor_claim,
+            request_id=request_id,
+        )
 
     def reconcile(self, request_id: str) -> dict[str, Any]:
         rid = validate_request_id(request_id)

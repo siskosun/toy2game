@@ -91,6 +91,25 @@ def build_parser() -> argparse.ArgumentParser:
     integrate_finalize.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
     integrate_finalize.add_argument("--pr-number", required=True, help="merged Integration PR number")
 
+    archive = sub.add_parser("archive", help="run trusted recoverable Archive")
+    archive.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    archive.add_argument(
+        "--mode",
+        choices=("ATOMIC_DELETE", "RETAIN_BRANCH"),
+        default="ATOMIC_DELETE",
+        help="archive ref policy",
+    )
+
+    archive_abort = sub.add_parser(
+        "archive-abort",
+        help="abort an Archive only while it is still PREPARED",
+    )
+    archive_abort.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    archive_abort.add_argument("--archive-id", required=True, help="archive id, e.g. A-21-1")
+    archive_abort.add_argument("--reason", required=True, help="human reason for aborting")
+    archive_abort.add_argument("--actor-claim", help="descriptive actor claim; not an auth boundary")
+    archive_abort.add_argument("--request-id", help="stable idempotency key")
+
     return ap
 
 
@@ -126,6 +145,23 @@ def main(argv: list[str] | None = None) -> int:
             result = client.initialize(args.experiment_id)
         elif args.command == "rehearse":
             result = client.rehearse(args.experiment_id)
+        elif args.command == "integrate":
+            result = client.integrate(args.experiment_id)
+        elif args.command == "integrate-finalize":
+            result = client.integrate_finalize(
+                args.experiment_id,
+                args.pr_number,
+            )
+        elif args.command == "archive":
+            result = client.archive(args.experiment_id, args.mode)
+        elif args.command == "archive-abort":
+            result = client.archive_abort(
+                args.experiment_id,
+                args.archive_id,
+                args.reason,
+                actor_claim=args.actor_claim,
+                request_id=args.request_id,
+            )
         else:
             ap.error("unknown command")
             return 2

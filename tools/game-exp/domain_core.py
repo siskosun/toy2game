@@ -14,6 +14,7 @@ EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
 CANDIDATE_RE = re.compile(r"^C-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 REHEARSAL_RE = re.compile(r"^R-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 INTEGRATION_RE = re.compile(r"^I-([1-9][0-9]*)-PR-([1-9][0-9]*)$")
+ARCHIVE_RE = re.compile(r"^A-([1-9][0-9]*)-([1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REHEARSAL_REQUIRED_CHECKS = (
     "scope",
@@ -201,6 +202,20 @@ class TrustedIntegrationContext:
     workflow_source_sha: str
     run_id: str
     run_attempt: str
+
+
+@dataclass(frozen=True)
+class TrustedArchiveContext:
+    action: str
+    experiment_id: str
+    archive_id: str | None
+    mode: str
+    branch_ref: str
+    final_tag_ref: str
+    expected_branch_sha: str
+    ref_status: str | None = None
+    observed_branch_sha: str | None = None
+    observed_final_tag_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1507,6 +1522,433 @@ def _plan_integration(
     )
 
 
+ARCHIVE_MODES = {"ATOMIC_DELETE", "RETAIN_BRANCH"}
+ARCHIVABLE_LIFECYCLES = {
+    "ACTIVE",
+    "REVIEW",
+    "PROMISING",
+    "SELECTED",
+    "REJECTED",
+    "INTEGRATED",
+}
+
+
+def _require_archive_actor(actor: TrustedActorContext | None) -> TrustedActorContext:
+    if actor is None:
+        raise DomainError(
+            "trusted actor context is required for archive human action",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if actor.permission not in {"admin", "maintain", "write"}:
+        raise DomainError(
+            f"actor {actor.login!r} lacks write permission",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    return actor
+
+
+def _archive_record_path(experiment_id: str, archive_id: str) -> str:
+    return f"experiments/{experiment_id}/archives/{archive_id}.json"
+
+
+def _load_archive_record(
+    repo_dir: Path,
+    experiment_id: str,
+    archive_id: str,
+) -> dict[str, Any]:
+    if not ARCHIVE_RE.fullmatch(archive_id):
+        raise DomainError("archive_id must be A-<issue>-<sequence>")
+    return _read_json_file(
+        repo_dir,
+        _archive_record_path(experiment_id, archive_id),
+        where=experiment_id,
+    )
+
+
+def _require_archive_lock(state: dict[str, Any], archive_id: str) -> dict[str, Any]:
+    lock = state.get("archive_lock")
+    if not isinstance(lock, dict) or lock.get("archive_id") != archive_id:
+        raise DomainError(
+            "archive mutation lock does not match archive_id",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    return lock
+
+
+def _require_archive_context(
+    context: TrustedArchiveContext | None,
+    *,
+    action: str,
+    experiment_id: str,
+    archive_id: str | None = None,
+) -> TrustedArchiveContext:
+    if context is None:
+        raise DomainError(
+            f"trusted archive context is required for {action}",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if context.action != action or context.experiment_id != experiment_id:
+        raise DomainError(
+            "trusted archive context action/experiment mismatch",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    if archive_id is not None and context.archive_id != archive_id:
+        raise DomainError(
+            "trusted archive context archive_id mismatch",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    return context
+
+
+def _archive_actor_record(actor: TrustedActorContext) -> dict[str, str]:
+    return {
+        "login": actor.login,
+        "user_id": actor.user_id,
+        "permission": actor.permission,
+        "source": "github-collaborator-permission",
+    }
+
+
+def _plan_archive_prepare(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_actor: TrustedActorContext | None,
+    trusted_archive: TrustedArchiveContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id", "mode"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    mode = _string(input_value["mode"], "operation.input.mode")
+    if mode not in ARCHIVE_MODES:
+        raise DomainError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
+    actor = _require_archive_actor(trusted_actor)
+    context = _require_archive_context(
+        trusted_archive,
+        action="PREPARE",
+        experiment_id=experiment_id,
+    )
+    if context.mode != mode:
+        raise DomainError("trusted archive mode mismatch", code="DOMAIN_ARCHIVE_CONFLICT")
+
+    binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    lifecycle = state.get("lifecycle")
+    if lifecycle not in ARCHIVABLE_LIFECYCLES:
+        raise DomainError(
+            f"archive prepare is invalid from lifecycle {lifecycle!r}",
+            code="DOMAIN_INVALID_TRANSITION",
+        )
+    if state.get("archive_lock") is not None:
+        raise DomainError(
+            "archive prepare rejected because mutation lock already exists",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+
+    initialization = binding.get("initialization")
+    if not isinstance(initialization, dict):
+        raise DomainError("binding initialization missing", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    expected_branch_ref = initialization.get("branch_ref")
+    expected_final_tag_ref = initialization.get("final_tag_ref")
+    if (
+        context.branch_ref != expected_branch_ref
+        or context.final_tag_ref != expected_final_tag_ref
+    ):
+        raise DomainError(
+            "trusted archive refs differ from canonical binding refs",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    if not re.fullmatch(r"[0-9a-f]{40}", context.expected_branch_sha):
+        raise DomainError("trusted archive expected branch SHA is invalid")
+
+    seq = state.get("archive_sequence", 0)
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        raise DomainError("invalid archive_sequence", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    next_archive_sequence = seq + 1
+    issue = experiment_id.removeprefix("EXP-")
+    archive_id = f"A-{issue}-{next_archive_sequence}"
+    archive_path = _archive_record_path(experiment_id, archive_id)
+    if (repo_dir / archive_path).exists():
+        raise DomainError("archive_id already exists", code="DOMAIN_ARCHIVE_CONFLICT")
+
+    record = {
+        "kind": "archive_operation",
+        "archive_id": archive_id,
+        "experiment_id": experiment_id,
+        "sequence": next_archive_sequence,
+        "phase": "PREPARED",
+        "mode": mode,
+        "prepared_request_id": request_id,
+        "prepared_from_lifecycle": lifecycle,
+        "expected_branch_sha": context.expected_branch_sha,
+        "branch_ref": context.branch_ref,
+        "final_tag_ref": context.final_tag_ref,
+        "prepared_by": _archive_actor_record(actor),
+    }
+    next_state = dict(state)
+    next_state["archive_sequence"] = next_archive_sequence
+    next_state["current_archive_id"] = archive_id
+    next_state["archive_lock"] = {
+        "archive_id": archive_id,
+        "phase": "PREPARED",
+        "prepared_request_id": request_id,
+    }
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            archive_path: record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
+def _plan_archive_claim(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_archive: TrustedArchiveContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id", "archive_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    archive_id = _string(input_value["archive_id"], "operation.input.archive_id")
+    context = _require_archive_context(
+        trusted_archive,
+        action="CLAIM",
+        experiment_id=experiment_id,
+        archive_id=archive_id,
+    )
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    _require_archive_lock(state, archive_id)
+    record = _load_archive_record(repo_dir, experiment_id, archive_id)
+    if record.get("phase") != "PREPARED":
+        raise DomainError(
+            f"archive claim requires PREPARED, got {record.get('phase')!r}",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    for key, expected in (
+        ("mode", context.mode),
+        ("branch_ref", context.branch_ref),
+        ("final_tag_ref", context.final_tag_ref),
+        ("expected_branch_sha", context.expected_branch_sha),
+    ):
+        if record.get(key) != expected:
+            raise DomainError(
+                f"archive claim context mismatch for {key}",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+    next_record = dict(record)
+    next_record["phase"] = "CLAIMED"
+    next_record["claimed_by_request_id"] = request_id
+    next_state = dict(state)
+    next_state["archive_lock"] = {
+        "archive_id": archive_id,
+        "phase": "CLAIMED",
+        "prepared_request_id": record["prepared_request_id"],
+        "claimed_by_request_id": request_id,
+    }
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            _archive_record_path(experiment_id, archive_id): next_record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
+def _plan_archive_abort(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_actor: TrustedActorContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(
+        input_value,
+        {"experiment_id", "archive_id", "reason"},
+        where="operation.input",
+    )
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    archive_id = _string(input_value["archive_id"], "operation.input.archive_id")
+    reason = _string(input_value["reason"], "operation.input.reason")
+    actor = _require_archive_actor(trusted_actor)
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    _require_archive_lock(state, archive_id)
+    record = _load_archive_record(repo_dir, experiment_id, archive_id)
+    if record.get("phase") != "PREPARED":
+        raise DomainError(
+            "archive abort is allowed only while PREPARED and before Claim",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    next_record = dict(record)
+    next_record["phase"] = "ABORTED"
+    next_record["aborted_by_request_id"] = request_id
+    next_record["abort_reason"] = reason
+    next_record["aborted_by"] = _archive_actor_record(actor)
+    next_state = dict(state)
+    next_state["archive_lock"] = None
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            _archive_record_path(experiment_id, archive_id): next_record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
+def _plan_archive_observe(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_archive: TrustedArchiveContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id", "archive_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    archive_id = _string(input_value["archive_id"], "operation.input.archive_id")
+    context = _require_archive_context(
+        trusted_archive,
+        action="OBSERVE",
+        experiment_id=experiment_id,
+        archive_id=archive_id,
+    )
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    _require_archive_lock(state, archive_id)
+    record = _load_archive_record(repo_dir, experiment_id, archive_id)
+    if record.get("phase") not in {"CLAIMED", "REF_CONFLICT"}:
+        raise DomainError(
+            "archive ref observation requires CLAIMED or REF_CONFLICT",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    for key, expected in (
+        ("mode", context.mode),
+        ("branch_ref", context.branch_ref),
+        ("final_tag_ref", context.final_tag_ref),
+        ("expected_branch_sha", context.expected_branch_sha),
+    ):
+        if record.get(key) != expected:
+            raise DomainError(
+                f"archive ref context mismatch for {key}",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+    if context.ref_status not in {"REF_COMMITTED", "REF_CONFLICT"}:
+        raise DomainError(
+            "archive observation must classify REF_COMMITTED or REF_CONFLICT",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    next_record = dict(record)
+    next_record["phase"] = context.ref_status
+    next_record["ref_observed_by_request_id"] = request_id
+    next_record["ref_observation"] = {
+        "branch_sha": context.observed_branch_sha,
+        "final_tag_target": context.observed_final_tag_target,
+    }
+    next_state = dict(state)
+    next_state["archive_lock"] = {
+        "archive_id": archive_id,
+        "phase": context.ref_status,
+        "prepared_request_id": record["prepared_request_id"],
+        "claimed_by_request_id": record.get("claimed_by_request_id"),
+    }
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            _archive_record_path(experiment_id, archive_id): next_record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
+def _plan_archive_commit(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_archive: TrustedArchiveContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id", "archive_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    archive_id = _string(input_value["archive_id"], "operation.input.archive_id")
+    context = _require_archive_context(
+        trusted_archive,
+        action="COMMIT",
+        experiment_id=experiment_id,
+        archive_id=archive_id,
+    )
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    _require_archive_lock(state, archive_id)
+    record = _load_archive_record(repo_dir, experiment_id, archive_id)
+    if record.get("phase") != "REF_COMMITTED":
+        raise DomainError(
+            "archive commit requires REF_COMMITTED",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    if context.ref_status != "REF_COMMITTED":
+        raise DomainError(
+            "archive commit requires fresh REF_COMMITTED verification",
+            code="DOMAIN_ARCHIVE_CONFLICT",
+        )
+    for key, expected in (
+        ("mode", context.mode),
+        ("branch_ref", context.branch_ref),
+        ("final_tag_ref", context.final_tag_ref),
+        ("expected_branch_sha", context.expected_branch_sha),
+    ):
+        if record.get(key) != expected:
+            raise DomainError(
+                f"archive commit context mismatch for {key}",
+                code="DOMAIN_ARCHIVE_CONFLICT",
+            )
+
+    next_record = dict(record)
+    next_record["phase"] = "COMMITTED"
+    next_record["committed_by_request_id"] = request_id
+    next_record["final_ref_observation"] = {
+        "branch_sha": context.observed_branch_sha,
+        "final_tag_target": context.observed_final_tag_target,
+    }
+    next_state = dict(state)
+    sequence = next_state.get("sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise DomainError("invalid lifecycle sequence", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    next_state["sequence"] = sequence + 1
+    next_state["lifecycle"] = "ARCHIVED"
+    next_state["archive_lock"] = None
+    next_state["current_archive_id"] = archive_id
+    next_state["archived_by_request_id"] = request_id
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            _archive_record_path(experiment_id, archive_id): next_record,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
 def plan_domain_mutation(
     *,
     repo_dir: Path,
@@ -1520,10 +1962,47 @@ def plan_domain_mutation(
     trusted_retention: TrustedRetentionContext | None = None,
     trusted_rehearsal: TrustedRehearsalContext | None = None,
     trusted_integration: TrustedIntegrationContext | None = None,
+    trusted_archive: TrustedArchiveContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "archive.prepare":
+        return _plan_archive_prepare(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_actor=trusted_actor,
+            trusted_archive=trusted_archive,
+        )
+    if operation == "archive.claim":
+        return _plan_archive_claim(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_archive=trusted_archive,
+        )
+    if operation == "archive.abort":
+        return _plan_archive_abort(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_actor=trusted_actor,
+        )
+    if operation == "archive.observe":
+        return _plan_archive_observe(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_archive=trusted_archive,
+        )
+    if operation == "archive.commit":
+        return _plan_archive_commit(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_archive=trusted_archive,
+        )
     if operation == "integration.register":
         return _plan_integration(
             repo_dir=repo_dir,

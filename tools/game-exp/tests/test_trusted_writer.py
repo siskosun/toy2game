@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_integration, resolve_trusted_rehearsal, resolve_trusted_retention, resolve_trusted_selection_rehearsal  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_archive, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_integration, resolve_trusted_rehearsal, resolve_trusted_retention, resolve_trusted_selection_rehearsal  # noqa: E402
 
 
 def payload():
@@ -625,6 +625,204 @@ class TrustedResolverTests(unittest.TestCase):
                     context_path=str(path),
                 )
         self.assertEqual(ctx.exception.code, "DOMAIN_INTEGRATION_CONFLICT")
+
+    def _write_archive_fixture(self, root, *, mode="ATOMIC_DELETE", phase="CLAIMED"):
+        import json
+
+        experiment_id = "EXP-21"
+        base = root / f"experiments/{experiment_id}"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "binding.json").write_text(
+            json.dumps(
+                {
+                    "kind": "experiment_identity",
+                    "experiment_id": experiment_id,
+                    "initialization": {
+                        "branch_ref": "refs/heads/exp/21",
+                        "final_tag_ref": "refs/tags/exp-final/21",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        archives = base / "archives"
+        archives.mkdir(parents=True, exist_ok=True)
+        (archives / "A-21-1.json").write_text(
+            json.dumps(
+                {
+                    "kind": "archive_operation",
+                    "archive_id": "A-21-1",
+                    "experiment_id": experiment_id,
+                    "phase": phase,
+                    "mode": mode,
+                    "expected_branch_sha": "b" * 40,
+                    "branch_ref": "refs/heads/exp/21",
+                    "final_tag_ref": "refs/tags/exp-final/21",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _archive_payload(self, operation, **extra):
+        return {
+            "kind": "operation_request",
+            "operation": operation,
+            "input": {"experiment_id": "EXP-21", **extra},
+        }
+
+    @patch("trusted_writer.github_json_optional")
+    def test_archive_prepare_freezes_live_branch_sha(self, optional):
+        import json
+        import tempfile
+
+        optional.side_effect = [
+            {"object": {"type": "commit", "sha": "b" * 40}},
+            None,
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            base = root / "experiments/EXP-21"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "binding.json").write_text(
+                json.dumps(
+                    {
+                        "kind": "experiment_identity",
+                        "experiment_id": "EXP-21",
+                        "initialization": {
+                            "branch_ref": "refs/heads/exp/21",
+                            "final_tag_ref": "refs/tags/exp-final/21",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ctx = resolve_trusted_archive(
+                "owner/repo",
+                self._archive_payload("archive.prepare", mode="ATOMIC_DELETE"),
+                root,
+                authority="request",
+            )
+        self.assertEqual(ctx.action, "PREPARE")
+        self.assertEqual(ctx.expected_branch_sha, "b" * 40)
+        self.assertEqual(ctx.mode, "ATOMIC_DELETE")
+
+    @patch("trusted_writer.github_json")
+    @patch("trusted_writer.github_json_optional")
+    def test_archive_atomic_delete_observe_classifies_ref_committed(self, optional, api):
+        import tempfile
+
+        optional.side_effect = [
+            None,
+            {"object": {"type": "tag", "sha": "1" * 40}},
+        ]
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: ATOMIC_DELETE",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_archive_fixture(root)
+            ctx = resolve_trusted_archive(
+                "owner/repo",
+                self._archive_payload("archive.observe", archive_id="A-21-1"),
+                root,
+                authority="archive",
+            )
+        self.assertEqual(ctx.ref_status, "REF_COMMITTED")
+        self.assertIsNone(ctx.observed_branch_sha)
+        self.assertEqual(ctx.observed_final_tag_target, "b" * 40)
+
+    @patch("trusted_writer.github_json_optional")
+    def test_archive_observe_classifies_not_executed(self, optional):
+        import tempfile
+
+        optional.side_effect = [
+            {"object": {"type": "commit", "sha": "b" * 40}},
+            None,
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_archive_fixture(root)
+            ctx = resolve_trusted_archive(
+                "owner/repo",
+                self._archive_payload("archive.observe", archive_id="A-21-1"),
+                root,
+                authority="archive",
+            )
+        self.assertEqual(ctx.ref_status, "NOT_EXECUTED")
+        self.assertEqual(ctx.observed_branch_sha, "b" * 40)
+        self.assertIsNone(ctx.observed_final_tag_target)
+
+    @patch("trusted_writer.github_json")
+    @patch("trusted_writer.github_json_optional")
+    def test_archive_retain_observe_requires_tag_and_exact_branch(self, optional, api):
+        import tempfile
+
+        optional.side_effect = [
+            {"object": {"type": "commit", "sha": "b" * 40}},
+            {"object": {"type": "tag", "sha": "1" * 40}},
+        ]
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: RETAIN_BRANCH",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_archive_fixture(root, mode="RETAIN_BRANCH")
+            ctx = resolve_trusted_archive(
+                "owner/repo",
+                self._archive_payload("archive.observe", archive_id="A-21-1"),
+                root,
+                authority="archive",
+            )
+        self.assertEqual(ctx.ref_status, "REF_COMMITTED")
+        self.assertEqual(ctx.observed_branch_sha, "b" * 40)
+
+    @patch("trusted_writer.github_json")
+    @patch("trusted_writer.github_json_optional")
+    def test_archive_observe_classifies_branch_drift_as_conflict(self, optional, api):
+        import tempfile
+
+        optional.side_effect = [
+            {"object": {"type": "commit", "sha": "c" * 40}},
+            {"object": {"type": "tag", "sha": "1" * 40}},
+        ]
+        api.return_value = {
+            "object": {"type": "commit", "sha": "b" * 40},
+            "message": "\n".join(
+                [
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    "game-exp-mode: RETAIN_BRANCH",
+                    "game-exp-source-sha: " + "b" * 40,
+                ]
+            ),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_archive_fixture(root, mode="RETAIN_BRANCH")
+            ctx = resolve_trusted_archive(
+                "owner/repo",
+                self._archive_payload("archive.observe", archive_id="A-21-1"),
+                root,
+                authority="archive",
+            )
+        self.assertEqual(ctx.ref_status, "REF_CONFLICT")
+        self.assertEqual(ctx.observed_branch_sha, "c" * 40)
 
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
