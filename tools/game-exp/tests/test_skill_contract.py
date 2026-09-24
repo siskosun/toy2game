@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.3.1")
+        self.assertEqual(manifest["version"], "0.3.2")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -103,6 +103,14 @@ class GameExpSkillContractTests(unittest.TestCase):
             "ChatGPT Work",
             "Codex",
             "host's authorized source-editing capability",
+            "仓库",
+            "游戏原型",
+            "实验标题",
+            "阶段",
+            "健康",
+            "下一步",
+            "仓库级/未指定原型",
+            "禁止继续；重建实验",
         ):
             self.assertIn(phrase, content)
 
