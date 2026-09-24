@@ -307,6 +307,33 @@ class GameExpClient:
                     "expected_payload_digest": old_digest,
                     "new_payload_digest": payload_digest,
                 }
+
+            remote = self.transport.ledger_record(rid)
+            if remote is not None:
+                remote_digest = remote.get("payload_digest")
+                if remote_digest != payload_digest:
+                    result = {
+                        "status": "CONFLICT",
+                        "conflict_type": "REQUEST_ID_CONFLICT",
+                        "request_id": rid,
+                        "repo": self.transport.repo,
+                        "expected_payload_digest": payload_digest,
+                        "remote_payload_digest": remote_digest,
+                        "record": remote,
+                    }
+                else:
+                    result = {
+                        "status": "COMMITTED",
+                        "request_id": rid,
+                        "repo": self.transport.repo,
+                        "payload_digest": remote_digest,
+                        "verified_against_local_request": True,
+                        "record": remote,
+                        "replayed": True,
+                    }
+                self._write_journal({**existing, **result})
+                return result
+
             expected_head = existing["expected_head"]
         else:
             expected_head = self.transport.ledger_head()
