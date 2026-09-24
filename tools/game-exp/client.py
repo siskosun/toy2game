@@ -202,6 +202,70 @@ class GitHubTransport:
             )
         return url
 
+    def dispatch_integration(self, experiment_id: str) -> str:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        proc = _run(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "game-exp-integration.yml",
+                "--repo",
+                self.repo,
+                "--ref",
+                "main",
+                "-f",
+                f"experiment_id={experiment_id}",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "integration proposal dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                "integration proposal dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
+    def dispatch_integration_finalize(self, experiment_id: str, pr_number: str) -> str:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
+            raise ClientError("pr_number must be a positive integer")
+        proc = _run(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "game-exp-integration-finalize.yml",
+                "--repo",
+                self.repo,
+                "--ref",
+                "main",
+                "-f",
+                f"experiment_id={experiment_id}",
+                "-f",
+                f"pr_number={pr_number}",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "integration finalize dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                "integration finalize dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
     def ledger_record(self, request_id: str) -> dict[str, Any] | None:
         validate_request_id(request_id)
         endpoint = (
@@ -483,6 +547,71 @@ class GameExpClient:
             "status": "ACCEPTED",
             "repo": self.transport.repo,
             "experiment_id": experiment_id,
+            "workflow_url": workflow_url,
+        }
+
+    def integrate(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        try:
+            workflow_url = self.transport.dispatch_integration(experiment_id)
+        except TransportUncertainError as exc:
+            return {
+                "status": "UNKNOWN",
+                "reason": "integration_dispatch_outcome_uncertain",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": str(exc),
+                "retry_safe": True,
+            }
+        return {
+            "status": "ACCEPTED",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "workflow_url": workflow_url,
+        }
+
+    def integrate_finalize(self, experiment_id: str, pr_number: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "pr_number": str(pr_number),
+                "error": "pr_number must be a positive integer",
+            }
+        try:
+            workflow_url = self.transport.dispatch_integration_finalize(
+                experiment_id,
+                str(pr_number),
+            )
+        except TransportUncertainError as exc:
+            return {
+                "status": "UNKNOWN",
+                "reason": "integration_finalize_dispatch_outcome_uncertain",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "pr_number": str(pr_number),
+                "error": str(exc),
+                "retry_safe": True,
+            }
+        return {
+            "status": "ACCEPTED",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "pr_number": str(pr_number),
             "workflow_url": workflow_url,
         }
 
