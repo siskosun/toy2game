@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_retention  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_rehearsal, resolve_trusted_retention  # noqa: E402
 
 
 def payload():
@@ -244,6 +244,147 @@ class TrustedResolverTests(unittest.TestCase):
             with self.assertRaises(DomainError) as ctx:
                 resolve_trusted_retention("owner/repo", payload, root)
         self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
+
+    def _rehearsal_context_value(self):
+        return {
+            "experiment_id": "EXP-21",
+            "candidate_id": "C-21-123-1",
+            "rehearsal_id": "R-21-456-1",
+            "main_sha": "a" * 40,
+            "source_sha": "b" * 40,
+            "integration_sha": "c" * 40,
+            "integration_tree_sha": "d" * 40,
+            "rehearsal_ref": "refs/tags/exp-rehearsal/21/R-21-456-1",
+            "workflow_source_sha": "e" * 40,
+            "run_id": "456",
+            "run_attempt": "1",
+            "policy_digest": "sha256:" + "f" * 64,
+            "checks": [
+                {"name": "merge", "status": "PASS", "source": "TRUSTED_OBSERVED"},
+            ],
+        }
+
+    def _rehearsal_api_evidence(self, value=None):
+        value = value or self._rehearsal_context_value()
+        message = "\n".join(
+            [
+                f"game-exp-experiment: {value['experiment_id']}",
+                f"game-exp-candidate-id: {value['candidate_id']}",
+                f"game-exp-rehearsal-id: {value['rehearsal_id']}",
+                f"game-exp-main-sha: {value['main_sha']}",
+                f"game-exp-source-sha: {value['source_sha']}",
+                f"game-exp-integration-sha: {value['integration_sha']}",
+                f"game-exp-integration-tree-sha: {value['integration_tree_sha']}",
+                f"game-exp-workflow-source-sha: {value['workflow_source_sha']}",
+                f"game-exp-run-id: {value['run_id']}",
+                f"game-exp-run-attempt: {value['run_attempt']}",
+                f"game-exp-policy-digest: {value['policy_digest']}",
+            ]
+        )
+        return [
+            {"object": {"type": "tag", "sha": "1" * 40}},
+            {
+                "object": {"type": "commit", "sha": value["integration_sha"]},
+                "message": message,
+            },
+            {
+                "tree": {"sha": value["integration_tree_sha"]},
+                "parents": [
+                    {"sha": value["main_sha"]},
+                    {"sha": value["source_sha"]},
+                ],
+            },
+            {"object": {"sha": value["main_sha"]}},
+            {
+                "run_attempt": 1,
+                "event": "workflow_dispatch",
+                "path": ".github/workflows/game-exp-rehearsal.yml",
+                "head_sha": value["workflow_source_sha"],
+                "status": "in_progress",
+                "conclusion": None,
+            },
+        ]
+
+    @patch("trusted_writer.github_json")
+    def test_rehearsal_resolver_rechecks_anchor_tree_main_and_run(self, api):
+        import json
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        api.side_effect = self._rehearsal_api_evidence(value)
+        payload = {
+            "kind": "operation_request",
+            "operation": "rehearsal.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rehearsal.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            ctx = resolve_trusted_rehearsal(
+                "owner/repo",
+                payload,
+                authority="rehearsal",
+                context_path=str(path),
+            )
+        self.assertEqual(ctx.rehearsal_id, "R-21-456-1")
+        self.assertEqual(ctx.integration_tree_sha, "d" * 40)
+        self.assertEqual(ctx.main_sha, "a" * 40)
+        self.assertEqual(api.call_count, 5)
+
+    @patch("trusted_writer.github_json")
+    def test_rehearsal_resolver_rejects_stale_main(self, api):
+        import json
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        evidence = self._rehearsal_api_evidence(value)
+        evidence[3] = {"object": {"sha": "9" * 40}}
+        api.side_effect = evidence
+        payload = {
+            "kind": "operation_request",
+            "operation": "rehearsal.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rehearsal.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_rehearsal(
+                    "owner/repo",
+                    payload,
+                    authority="rehearsal",
+                    context_path=str(path),
+                )
+        self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
+
+    @patch("trusted_writer.github_json")
+    def test_rehearsal_resolver_rejects_wrong_integration_parents(self, api):
+        import json
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        evidence = self._rehearsal_api_evidence(value)
+        evidence[2]["parents"] = [
+            {"sha": value["source_sha"]},
+            {"sha": value["main_sha"]},
+        ]
+        api.side_effect = evidence
+        payload = {
+            "kind": "operation_request",
+            "operation": "rehearsal.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rehearsal.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_rehearsal(
+                    "owner/repo",
+                    payload,
+                    authority="rehearsal",
+                    context_path=str(path),
+                )
+        self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
 
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
