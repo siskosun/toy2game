@@ -171,6 +171,12 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "CONFLICT")
         self.assertEqual(result["conflict_type"], "LOCAL_REQUEST_ID_CONFLICT")
 
+    def test_status_is_explicit_pass(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).status()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["ledger_head"], transport.head)
+
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
         self.assertEqual(result["status"], "PASS")
