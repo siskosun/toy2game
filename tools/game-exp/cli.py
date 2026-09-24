@@ -81,6 +81,16 @@ def build_parser() -> argparse.ArgumentParser:
     rehearse = sub.add_parser("rehearse", help="run trusted latest-main integration rehearsal")
     rehearse.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
 
+    integrate = sub.add_parser("integrate", help="create or reuse the trusted Integration PR")
+    integrate.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+
+    integrate_finalize = sub.add_parser(
+        "integrate-finalize",
+        help="verify a merged Integration PR and register INTEGRATED",
+    )
+    integrate_finalize.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    integrate_finalize.add_argument("--pr-number", required=True, help="merged Integration PR number")
+
     return ap
 
 
