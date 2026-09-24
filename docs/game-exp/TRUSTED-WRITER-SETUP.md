@@ -1,57 +1,60 @@
-# game-exp Trusted Writer setup
+# game-exp Trusted Writer
 
 Repository: `siskosun/toy2game`
 
-The repository rulesets are already configured so that only a write-capable Deploy Key can bypass the game-exp Ledger and protected ref rules. The GitHub Actions built-in token was tested and is rejected by the Ledger ruleset.
+## Current status
 
-## One-time manual credential setup
+**ACTIVE_AND_VERIFIED**
 
-The private key was generated locally and is intentionally not committed. It is under:
+The trusted write path is configured and has passed the V1.3 Phase 1 gate.
 
-`C:\\Users\\57945\\Documents\\Codex\\game-exp-toy2game-test\\.game-exp-trusted\\writer`
+- one write-capable Deploy Key is registered as `game-exp trusted writer`;
+- repository secret `GAME_EXP_WRITER_KEY` is configured;
+- the Ledger Ruleset permits Deploy Key bypass and rejects ordinary users / `GITHUB_TOKEN`;
+- `main` is PR-only and rejects delete / force-push;
+- the Trusted Writer source is checked out at `${{ github.workflow_sha }}`;
+- the Trusted Writer has passed normal commit, idempotent replay, request-ID conflict, stale-head conflict, lost-response recovery, and negative ordinary-token tests.
 
-The matching public key is:
+Primary evidence:
 
-`C:\\Users\\57945\\Documents\\Codex\\game-exp-toy2game-test\\.game-exp-trusted\\writer.pub`
+- Phase 1 selftest: https://github.com/siskosun/toy2game/actions/runs/35951146384
+- post-refactor selftest: https://github.com/siskosun/toy2game/actions/runs/35952248853
+- Phase 1 report: `docs/game-exp/PHASE1-RESULTS.md`
 
-Run these commands yourself in PowerShell. Do not paste the private key into chat.
+Do not paste, commit, log, or attach the private Deploy Key.
 
-```powershell
-$repo = 'siskosun/toy2game'
-$keyDir = 'C:\\Users\\57945\\Documents\\Codex\\game-exp-toy2game-test\\.game-exp-trusted'
+## Normal verification
 
-$pub = (Get-Content "$keyDir\\writer.pub" -Raw).Trim()
-gh api -X POST "repos/$repo/keys" `
-  -f title='game-exp trusted writer' `
-  -f key="$pub" `
-  -F read_only=false
-
-Get-Content "$keyDir\\writer" -Raw |
-  gh secret set GAME_EXP_WRITER_KEY --repo $repo
-```
-
-After the secret is stored successfully, the local private key can be deleted.
-
-## Verify the trusted writer
+Run:
 
 ```powershell
-$repo = 'siskosun/toy2game'
-$head = gh api "repos/$repo/git/ref/heads/game-exp/ledger" --jq '.object.sha'
-$payload = '{"type":"trusted-writer-probe","schema_version":1}'
-$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
-
-gh workflow run game-exp-trusted-writer.yml --repo $repo --ref main `
-  -f request_id='req-trusted-writer-probe-1' `
-  -f expected_head=$head `
-  -f payload_b64=$b64
+python tools/game-exp/cli.py --repo siskosun/toy2game --json doctor
 ```
 
-The run is valid only if:
-- the workflow concludes successfully;
-- `operations/req-trusted-writer-probe-1.json` exists on `game-exp/ledger`;
-- the Ledger ruleset remains active;
-- an ordinary GitHub token still cannot update `game-exp/ledger`.
+An administrator-capable local GitHub credential should report PASS for:
 
-## Current trust boundary
+- Ledger ref;
+- required Rulesets;
+- exactly one write Deploy Key named `game-exp trusted writer`;
+- `GAME_EXP_WRITER_KEY` repository secret;
+- Immutable Releases.
 
-Until the Deploy Key and repository secret are configured, the repository is intentionally fail-closed: the Ledger is protected, but no trusted writer can mutate it.
+A restricted GitHub Actions token may report admin-only settings as `UNKNOWN`. That is not evidence that the controls are missing.
+
+## Rotation
+
+If the Deploy Key must be rotated:
+
+1. Generate a new Ed25519 key pair locally.
+2. Add the new public key to the repository as a write Deploy Key.
+3. Replace repository secret `GAME_EXP_WRITER_KEY` with the new private key.
+4. Run the Trusted Writer selftest.
+5. Verify the new key can write the protected Ledger while ordinary `GITHUB_TOKEN` still fails with Ruleset rejection.
+6. Delete the old Deploy Key.
+7. Delete any unnecessary local copy of the old private key.
+
+Never disable the Ledger Ruleset merely to simplify key rotation.
+
+## Fail-closed behavior
+
+If the key or secret is unavailable, Trusted Writer mutations must fail. The client must report a proven rejection or `UNKNOWN` when the remote outcome cannot be established; it must never fall back to direct Ledger writes.
