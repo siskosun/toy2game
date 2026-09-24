@@ -24,6 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout trusted control source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/trusted_writer.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Require trusted writer secret
         shell: bash
         env:
@@ -34,13 +48,7 @@ jobs:
           key="$RUNNER_TEMP/game-exp-writer"
           printf '%s\n' "$WRITER_KEY" > "$key"
           chmod 600 "$key"
-          echo "GAME_EXP_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
-
-      - name: Clone authoritative ledger only
-        shell: bash
-        run: |
-          set -euo pipefail
-          GIT_SSH_COMMAND="$GAME_EXP_SSH_COMMAND" git clone             --single-branch             --branch game-exp/ledger             "git@github.com:${GITHUB_REPOSITORY}.git" ledger
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
 
       - name: Validate request and commit with CAS
         id: commit
@@ -51,86 +59,24 @@ jobs:
           PAYLOAD_B64: ${{ inputs.payload_b64 }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          SOURCE_SHA: ${{ github.sha }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          cd ledger
-          current="$(git rev-parse HEAD)"
-          target="operations/${REQUEST_ID}.json"
-          mkdir -p operations
-
-          printf '%s' "$PAYLOAD_B64" | base64 -d > "$RUNNER_TEMP/payload.json"
-          python - "$RUNNER_TEMP/payload.json" <<'PY' > "$RUNNER_TEMP/payload.digest"
-          import hashlib, json, pathlib, sys
-          p=pathlib.Path(sys.argv[1])
-          obj=json.loads(p.read_text(encoding="utf-8"))
-          canonical=json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-          print("sha256:"+hashlib.sha256(canonical).hexdigest())
-          PY
-          digest="$(cat "$RUNNER_TEMP/payload.digest")"
-
-          if git cat-file -e "HEAD:$target" 2>/dev/null; then
-            existing="$(git show "HEAD:$target")"
-            existing_digest="$(printf '%s' "$existing" | python -c 'import json,sys; print(json.load(sys.stdin)["payload_digest"])')"
-            if [ "$existing_digest" = "$digest" ]; then
-              echo "result=COMMITTED" >> "$GITHUB_OUTPUT"
-              echo "ledger_head=$current" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "request id conflict" >&2
-            exit 43
-          fi
-
-          if [ "$current" != "$EXPECTED_HEAD" ]; then
-            echo "ledger head conflict: expected=$EXPECTED_HEAD actual=$current" >&2
-            exit 42
-          fi
-
-          python - "$RUNNER_TEMP/payload.json" "$target" "$REQUEST_ID" "$EXPECTED_HEAD" "$digest" "$RUN_ID" "$RUN_ATTEMPT" "$SOURCE_SHA" <<'PY'
-          import json, pathlib, sys
-          payload_path,target,request_id,expected_head,digest,run_id,attempt,source_sha=sys.argv[1:]
-          payload=json.loads(pathlib.Path(payload_path).read_text(encoding="utf-8"))
-          record={
-            "request_id":request_id,
-            "expected_head":expected_head,
-            "payload_digest":digest,
-            "payload":payload,
-            "issuer":"game-exp-trusted-writer",
-            "github_run_id":run_id,
-            "github_run_attempt":attempt,
-            "workflow_source_sha":source_sha,
-          }
-          pathlib.Path(target).write_text(json.dumps(record,ensure_ascii=False,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
-          PY
-
-          git config user.name "game-exp-trusted-writer"
-          git config user.email "game-exp-trusted-writer@users.noreply.github.com"
-          git add "$target"
-          git commit -m "game-exp request $REQUEST_ID"
-
           set +e
-          GIT_SSH_COMMAND="$GAME_EXP_SSH_COMMAND" git push origin HEAD:game-exp/ledger
-          push_code=$?
+          python control/tools/game-exp/trusted_writer.py             --repo "$GITHUB_REPOSITORY"             --request-id "$REQUEST_ID"             --expected-head "$EXPECTED_HEAD"             --payload-b64 "$PAYLOAD_B64"             --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$RUN_ID"             --run-attempt "$RUN_ATTEMPT"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA"             | tee "$RUNNER_TEMP/game-exp-result.json"
+          code=${PIPESTATUS[0]}
           set -e
 
-          if [ "$push_code" -eq 0 ]; then
-            echo "result=COMMITTED" >> "$GITHUB_OUTPUT"
-            echo "ledger_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          GIT_SSH_COMMAND="$GAME_EXP_SSH_COMMAND" git fetch origin game-exp/ledger
-          if git cat-file -e "origin/game-exp/ledger:$target" 2>/dev/null; then
-            remote_digest="$(git show "origin/game-exp/ledger:$target" | python -c 'import json,sys; print(json.load(sys.stdin)["payload_digest"])')"
-            if [ "$remote_digest" = "$digest" ]; then
-              echo "result=COMMITTED" >> "$GITHUB_OUTPUT"
-              echo "ledger_head=$(git rev-parse origin/game-exp/ledger)" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
-          echo "result=CONFLICT" >> "$GITHUB_OUTPUT"
-          exit 44
+          python - "$RUNNER_TEMP/game-exp-result.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          result=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
+          with open(sys.argv[2],"a",encoding="utf-8") as out:
+              out.write(f"result={result.get('status','UNKNOWN')}\n")
+              out.write(f"ledger_head={result.get('ledger_head','')}\n")
+              out.write(f"payload_digest={result.get('payload_digest','')}\n")
+              out.write(f"replayed={str(result.get('replayed',False)).lower()}\n")
+          PY
+          exit "$code"
 
       - name: Report result
         if: always()
@@ -138,3 +84,5 @@ jobs:
         run: |
           echo "result=${{ steps.commit.outputs.result }}"
           echo "ledger_head=${{ steps.commit.outputs.ledger_head }}"
+          echo "payload_digest=${{ steps.commit.outputs.payload_digest }}"
+          echo "replayed=${{ steps.commit.outputs.replayed }}"
