@@ -51,6 +51,20 @@ class FakeTransport:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/789"
 
+    def dispatch_integration(self, experiment_id):
+        self.dispatched.append({"integration": experiment_id})
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/790"
+
+    def dispatch_integration_finalize(self, experiment_id, pr_number):
+        self.dispatched.append(
+            {"integration_finalize": experiment_id, "pr_number": str(pr_number)}
+        )
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/791"
+
     def ledger_record(self, request_id):
         return self.record
 
@@ -297,6 +311,25 @@ class ClientTests(unittest.TestCase):
         result = GameExpClient(transport).rehearse("EXP-42")
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertTrue(result["retry_safe"])
+
+    def test_integrate_dispatches_proposal_workflow(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).integrate("EXP-21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(transport.dispatched[-1], {"integration": "EXP-21"})
+
+    def test_integrate_finalize_dispatches_merged_pr_verifier(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).integrate_finalize("EXP-21", "77")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(
+            transport.dispatched[-1],
+            {"integration_finalize": "EXP-21", "pr_number": "77"},
+        )
+
+    def test_integrate_finalize_rejects_invalid_pr_number(self):
+        result = GameExpClient(FakeTransport()).integrate_finalize("EXP-21", "0")
+        self.assertEqual(result["status"], "REJECTED")
 
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
