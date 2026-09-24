@@ -11,11 +11,14 @@ sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import (  # noqa: E402
     DomainError,
+    REHEARSAL_REQUIRED_CHECKS,
     TrustedActorContext,
     TrustedBindingContext,
     TrustedCandidateContext,
+    TrustedRehearsalContext,
     TrustedRetentionContext,
     plan_domain_mutation,
+    rehearsal_policy_digest,
 )
 from protocol_core import build_operation_payload, digest_object  # noqa: E402
 
@@ -214,6 +217,69 @@ class PromotionTests(unittest.TestCase):
             trusted_retention=trusted_retention,
         )
 
+    def register_rehearsal(self, **overrides):
+        values = {
+            "experiment_id": "EXP-42",
+            "candidate_id": self.candidate_id,
+            "rehearsal_id": "R-42-456-1",
+            "main_sha": "1" * 40,
+            "source_sha": self.source_sha,
+            "integration_sha": "2" * 40,
+            "integration_tree_sha": "3" * 40,
+            "rehearsal_ref": "refs/tags/exp-rehearsal/42/R-42-456-1",
+            "workflow_source_sha": "4" * 40,
+            "run_id": "456",
+            "run_attempt": "1",
+            "policy_digest": rehearsal_policy_digest(),
+            "scope_digest": "sha256:" + "6" * 64,
+            "checks": tuple(
+                {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+                for name in REHEARSAL_REQUIRED_CHECKS
+            ),
+        }
+        values.update(overrides)
+        context = TrustedRehearsalContext(**values)
+        payload = build_operation_payload(
+            "rehearsal.register",
+            {"experiment_id": "EXP-42"},
+            preconditions={
+                "candidate_id": self.candidate_id,
+                "main_sha": values["main_sha"],
+            },
+        )
+        plan = plan_domain_mutation(
+            repo_dir=self.root,
+            payload=payload,
+            request_id="req_rehearsal",
+            payload_digest=digest_object(payload),
+            repository_full_name="owner/repo",
+            trusted_rehearsal=context,
+        )
+        self.apply(plan)
+        return context
+
+    def select(self, trusted_rehearsal, trusted_retention):
+        payload = build_operation_payload(
+            "experiment.decision",
+            {
+                "experiment_id": "EXP-42",
+                "to_state": "SELECTED",
+                "previous_decision_id": "req_promising",
+                "reason": "select after trusted latest-main rehearsal",
+            },
+            actor_claim="reviewer",
+        )
+        return plan_domain_mutation(
+            repo_dir=self.root,
+            payload=payload,
+            request_id="req_selected",
+            payload_digest=digest_object(payload),
+            repository_full_name="owner/repo",
+            trusted_actor=self.actor,
+            trusted_retention=trusted_retention,
+            trusted_rehearsal=trusted_rehearsal,
+        )
+
     def test_promising_binds_candidate_review_and_runtime_retention(self):
         self.record_review("PASS")
         plan = self.promote(self.retention())
@@ -255,26 +321,53 @@ class PromotionTests(unittest.TestCase):
         self.record_review("PASS")
         promising = self.promote(self.retention())
         self.apply(promising)
-        payload = build_operation_payload(
-            "experiment.decision",
-            {
-                "experiment_id": "EXP-42",
-                "to_state": "SELECTED",
-                "previous_decision_id": "req_promising",
-                "reason": "select",
-            },
-            actor_claim="reviewer",
+        with self.assertRaises(DomainError) as ctx:
+            self.select(None, self.retention())
+        self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
+
+    def test_selected_requires_live_candidate_retention(self):
+        self.record_review("PASS")
+        promising = self.promote(self.retention())
+        self.apply(promising)
+        rehearsal = self.register_rehearsal()
+        with self.assertRaises(DomainError) as ctx:
+            self.select(rehearsal, None)
+        self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
+
+    def test_selected_rejects_rehearsal_evidence_mismatch(self):
+        self.record_review("PASS")
+        promising = self.promote(self.retention())
+        self.apply(promising)
+        rehearsal = self.register_rehearsal()
+        bad = TrustedRehearsalContext(
+            **{
+                **rehearsal.__dict__,
+                "integration_tree_sha": "9" * 40,
+            }
         )
         with self.assertRaises(DomainError) as ctx:
-            plan_domain_mutation(
-                repo_dir=self.root,
-                payload=payload,
-                request_id="req_selected",
-                payload_digest=digest_object(payload),
-                repository_full_name="owner/repo",
-                trusted_actor=self.actor,
-            )
+            self.select(bad, self.retention())
         self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
+
+    def test_selected_freezes_rehearsal_and_retention_evidence(self):
+        self.record_review("PASS")
+        promising = self.promote(self.retention())
+        self.apply(promising)
+        rehearsal = self.register_rehearsal()
+        selected = self.select(rehearsal, self.retention())
+        state = selected.writes["experiments/EXP-42/state.json"]
+        decision = selected.writes["experiments/EXP-42/decisions/req_selected.json"]
+        self.assertEqual(state["lifecycle"], "SELECTED")
+        evidence = decision["selection_evidence"]
+        self.assertEqual(evidence["candidate_id"], self.candidate_id)
+        self.assertEqual(evidence["artifact_digest"], self.artifact_digest)
+        self.assertEqual(evidence["rehearsal"]["rehearsal_id"], "R-42-456-1")
+        self.assertEqual(evidence["rehearsal"]["main_sha"], "1" * 40)
+        self.assertEqual(evidence["rehearsal"]["integration_sha"], "2" * 40)
+        self.assertEqual(evidence["rehearsal"]["integration_tree_sha"], "3" * 40)
+        self.assertEqual(evidence["retention"]["release_id"], "9001")
+        self.assertEqual(evidence["retention"]["asset_id"], "8001")
+        self.assertTrue(evidence["retention"]["immutable"])
 
 
 if __name__ == "__main__":

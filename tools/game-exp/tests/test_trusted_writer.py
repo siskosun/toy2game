@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_rehearsal, resolve_trusted_retention  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_rehearsal, resolve_trusted_retention, resolve_trusted_selection_rehearsal  # noqa: E402
 
 
 def payload():
@@ -385,6 +385,124 @@ class TrustedResolverTests(unittest.TestCase):
                     payload,
                     authority="rehearsal",
                     context_path=str(path),
+                )
+        self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
+
+    def _write_selection_rehearsal_fixture(self, root, value=None):
+        import json
+
+        value = value or self._rehearsal_context_value()
+        state_path = root / "experiments/EXP-21/state.json"
+        rehearsal_path = root / f"experiments/EXP-21/rehearsals/{value['rehearsal_id']}.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "experiment_id": "EXP-21",
+                    "lifecycle": "PROMISING",
+                    "current_candidate_id": value["candidate_id"],
+                    "current_rehearsal_id": value["rehearsal_id"],
+                    "current_rehearsal_candidate_id": value["candidate_id"],
+                    "current_rehearsal_main_sha": value["main_sha"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rehearsal_path.write_text(
+            json.dumps(
+                {
+                    "kind": "rehearsal",
+                    "experiment_id": value["experiment_id"],
+                    "candidate_id": value["candidate_id"],
+                    "rehearsal_id": value["rehearsal_id"],
+                    "main_sha": value["main_sha"],
+                    "source_sha": value["source_sha"],
+                    "integration_sha": value["integration_sha"],
+                    "integration_tree_sha": value["integration_tree_sha"],
+                    "rehearsal_ref": value["rehearsal_ref"],
+                    "workflow_source_sha": value["workflow_source_sha"],
+                    "github_run_id": value["run_id"],
+                    "github_run_attempt": value["run_attempt"],
+                    "policy_digest": value["policy_digest"],
+                    "scope_digest": value["scope_digest"],
+                    "checks": value["checks"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _selected_payload(self):
+        return {
+            "kind": "operation_request",
+            "operation": "experiment.decision",
+            "input": {
+                "experiment_id": "EXP-21",
+                "to_state": "SELECTED",
+                "previous_decision_id": "req_promising",
+                "reason": "select",
+            },
+        }
+
+    @patch("trusted_writer.github_json")
+    def test_selection_rechecks_completed_successful_current_rehearsal(self, api):
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        evidence = self._rehearsal_api_evidence(value)
+        evidence[4]["status"] = "completed"
+        evidence[4]["conclusion"] = "success"
+        api.side_effect = evidence
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_selection_rehearsal_fixture(root, value)
+            ctx = resolve_trusted_selection_rehearsal(
+                "owner/repo",
+                self._selected_payload(),
+                root,
+            )
+        self.assertEqual(ctx.rehearsal_id, value["rehearsal_id"])
+        self.assertEqual(ctx.integration_tree_sha, value["integration_tree_sha"])
+        self.assertEqual(api.call_count, 5)
+
+    @patch("trusted_writer.github_json")
+    def test_selection_rejects_rehearsal_if_main_advanced(self, api):
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        evidence = self._rehearsal_api_evidence(value)
+        evidence[3] = {"object": {"sha": "9" * 40}}
+        evidence[4]["status"] = "completed"
+        evidence[4]["conclusion"] = "success"
+        api.side_effect = evidence
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_selection_rehearsal_fixture(root, value)
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_selection_rehearsal(
+                    "owner/repo",
+                    self._selected_payload(),
+                    root,
+                )
+        self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
+
+    @patch("trusted_writer.github_json")
+    def test_selection_rejects_failed_rehearsal_run(self, api):
+        import tempfile
+
+        value = self._rehearsal_context_value()
+        evidence = self._rehearsal_api_evidence(value)
+        evidence[4]["status"] = "completed"
+        evidence[4]["conclusion"] = "failure"
+        api.side_effect = evidence
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_selection_rehearsal_fixture(root, value)
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_selection_rehearsal(
+                    "owner/repo",
+                    self._selected_payload(),
+                    root,
                 )
         self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
 
