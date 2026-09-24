@@ -226,7 +226,7 @@ class RehearsalControlTests(unittest.TestCase):
         repo, base_sha, source_sha, main_sha, scope_b64 = self._repo_fixture(
             {".github/workflows/evil.yml": "name: evil\n"}
         )
-        with self.assertRaisesRegex(RehearsalControlError, "explicitly avoided"):
+        with self.assertRaisesRegex(RehearsalControlError, "avoid scope"):
             integration_tree(
                 argparse.Namespace(
                     repo_dir=str(repo),
@@ -241,7 +241,7 @@ class RehearsalControlTests(unittest.TestCase):
         repo, base_sha, source_sha, main_sha, scope_b64 = self._repo_fixture(
             {"docs/outside.txt": "outside\n"}
         )
-        with self.assertRaisesRegex(RehearsalControlError, "out-of-scope"):
+        with self.assertRaisesRegex(RehearsalControlError, "outside allowed scope"):
             integration_tree(
                 argparse.Namespace(
                     repo_dir=str(repo),
