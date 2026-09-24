@@ -94,19 +94,28 @@ def run_phase(policy: dict[str, Any], phase: str, cwd: str | os.PathLike[str]) -
 
 def _iter_candidate_files(root: pathlib.Path, includes: list[str]) -> list[tuple[pathlib.Path, str]]:
     items: list[tuple[pathlib.Path, str]] = []
+    seen: set[str] = set()
     root_resolved = root.resolve()
     for rel in includes:
-        source = (root / rel).resolve()
+        declared = root / rel
+        if declared.is_symlink():
+            raise ProjectPolicyError(f"candidate include symlink is forbidden: {rel}")
+        source = declared.resolve()
         if source != root_resolved and root_resolved not in source.parents:
             raise ProjectPolicyError(f"candidate include escapes repository: {rel}")
         if not source.exists():
             raise ProjectPolicyError(f"candidate include missing: {rel}")
         paths = [source] if source.is_file() else sorted(p for p in source.rglob("*") if p.is_file())
         for path in paths:
+            if path.is_symlink():
+                raise ProjectPolicyError(f"candidate file symlink is forbidden: {path}")
             resolved = path.resolve()
             if root_resolved not in resolved.parents:
                 raise ProjectPolicyError(f"candidate file escapes repository: {path}")
             arcname = path.relative_to(root).as_posix()
+            if arcname in seen:
+                raise ProjectPolicyError(f"candidate path included more than once: {arcname}")
+            seen.add(arcname)
             items.append((path, arcname))
     return sorted(items, key=lambda item: item[1])
 def package_candidate(
@@ -139,10 +148,14 @@ def verify_candidate_archive(
     policy = validate_policy(json.loads(json.dumps(policy)))
     with tarfile.open(archive_path, mode="r:gz") as tf:
         names = []
+        seen: set[str] = set()
         for member in tf.getmembers():
             name = _safe_rel_path(member.name.rstrip("/"), "candidate archive member")
-            if member.issym() or member.islnk():
-                raise ProjectPolicyError(f"candidate archive links are forbidden: {name}")
+            if not member.isfile():
+                raise ProjectPolicyError(f"candidate archive contains non-file entry: {name}")
+            if name in seen:
+                raise ProjectPolicyError(f"candidate archive contains duplicate path: {name}")
+            seen.add(name)
             names.append(name)
     name_set = set(names)
     for required in policy["candidate"]["required_paths"]:
