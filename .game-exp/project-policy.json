@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "adapter": "node-npm",
+  "install": {"argv": ["npm", "ci"]},
+  "test": {"argv": ["npm", "test"]},
+  "build": {"argv": ["npm", "run", "build"]},
+  "candidate": {
+    "include": ["dist"],
+    "required_paths": ["dist/index.html", "dist/games"]
+  }
+}
