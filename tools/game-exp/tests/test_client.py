@@ -45,6 +45,12 @@ class FakeTransport:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/456"
 
+    def dispatch_rehearsal(self, experiment_id):
+        self.dispatched.append({"rehearsal": experiment_id})
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/789"
+
     def ledger_record(self, request_id):
         return self.record
 
@@ -269,6 +275,26 @@ class ClientTests(unittest.TestCase):
         transport = FakeTransport()
         transport.dispatch_uncertain = True
         result = GameExpClient(transport).initialize("EXP-42")
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertTrue(result["retry_safe"])
+
+    def test_rehearse_dispatches_only_canonical_experiment_id(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).rehearse("EXP-42")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["experiment_id"], "EXP-42")
+        self.assertEqual(transport.dispatched[-1], {"rehearsal": "EXP-42"})
+
+    def test_rehearse_rejects_noncanonical_id_before_dispatch(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).rehearse("exp/42")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_rehearse_uncertain_dispatch_is_retry_safe(self):
+        transport = FakeTransport()
+        transport.dispatch_uncertain = True
+        result = GameExpClient(transport).rehearse("EXP-42")
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertTrue(result["retry_safe"])
 
