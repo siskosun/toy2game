@@ -231,7 +231,7 @@ class MCPServerTests(unittest.TestCase):
     @patch("mcp_server._client", return_value=FakeClient())
     def test_bind_and_archive_abort_remain_controlled_client_actions(self, _):
         bind = mcp_server.game_exp_experiment_bind(
-            {"schema_version": 1},
+            {"schema_version": 1, "operation_id": "req_bind"},
             request_id="req_bind",
             repo="owner/repo",
         )
@@ -244,6 +244,16 @@ class MCPServerTests(unittest.TestCase):
             repo="owner/repo",
         )
         self.assertEqual(abort["archive_id"], "A-21-1")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_bind_rejects_request_id_different_from_manifest_operation_id(self, _):
+        result = mcp_server.game_exp_experiment_bind(
+            {"schema_version": 1, "operation_id": "req_manifest"},
+            request_id="req_other",
+            repo="owner/repo",
+        )
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("must equal", result["error"])
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_submit_is_request_transport_not_domain_execution(self, _):
