@@ -14,12 +14,33 @@ EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
 CANDIDATE_RE = re.compile(r"^C-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 REHEARSAL_RE = re.compile(r"^R-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REHEARSAL_REQUIRED_CHECKS = (
+    "scope",
+    "merge",
+    "project_tests",
+    "build",
+    "trusted_tree_recompute",
+    "main_freshness",
+)
 
 
 class DomainError(ProtocolError):
     def __init__(self, message: str, *, code: str = "DOMAIN_INVALID"):
         super().__init__(message)
         self.code = code
+
+
+def rehearsal_policy_digest() -> str:
+    return digest_object(
+        {
+            "schema_version": 1,
+            "merge_mode": "scope-filtered-two-parent",
+            "base": "current-main-at-prepare",
+            "candidate": "current-candidate-source",
+            "scope": "manifest-allowed-strict-except-canonical-manifest",
+            "required_checks": list(REHEARSAL_REQUIRED_CHECKS),
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -971,8 +992,11 @@ def _plan_rehearsal(
     ):
         if not re.fullmatch(r"[0-9a-f]{40}", value):
             raise DomainError(f"Rehearsal {name} must be a 40-character SHA")
-    if not SHA256_RE.fullmatch(trusted_rehearsal.policy_digest):
-        raise DomainError("Rehearsal policy_digest must be sha256:<64 lowercase hex>")
+    if trusted_rehearsal.policy_digest != rehearsal_policy_digest():
+        raise DomainError(
+            "Rehearsal policy_digest does not match the trusted policy",
+            code="DOMAIN_REHEARSAL_CONFLICT",
+        )
     if not re.fullmatch(r"[0-9]+", trusted_rehearsal.run_id):
         raise DomainError("Rehearsal run_id must be a decimal string")
     if not re.fullmatch(r"[1-9][0-9]*", trusted_rehearsal.run_attempt):
@@ -1009,6 +1033,11 @@ def _plan_rehearsal(
             )
         normalized_checks.append(
             {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+        )
+    if seen != set(REHEARSAL_REQUIRED_CHECKS):
+        raise DomainError(
+            "Rehearsal trusted checks do not match the required policy",
+            code="DOMAIN_PREREQUISITE_MISSING",
         )
 
     rehearsal_path = (
