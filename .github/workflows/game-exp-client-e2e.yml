@@ -1,0 +1,107 @@
+name: game-exp client e2e
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  client-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Doctor trusted repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json doctor | tee doctor.json
+          python - <<'PY'
+          import json
+          x=json.load(open("doctor.json",encoding="utf-8"))
+          assert x["status"]=="PASS", x
+          PY
+
+      - name: Submit real request
+        id: submit
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_id="req-client-e2e-${GITHUB_RUN_ID}"
+          printf '{"hypothesis":"phase2 client e2e","source_run_id":"%s"}\n' "$GITHUB_RUN_ID" > input.json
+          python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json request experiment.create             --request-id "$request_id" --input-file input.json | tee submit.json
+          python - <<'PY'
+          import json
+          x=json.load(open("submit.json",encoding="utf-8"))
+          assert x["status"]=="ACCEPTED", x
+          assert x["workflow_url"], x
+          PY
+          echo "request_id=$request_id" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile until committed
+        id: reconcile
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.submit.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            set +e
+            python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json reconcile "$REQUEST_ID" > reconcile.json
+            code=$?
+            set -e
+            status="$(python -c 'import json; print(json.load(open("reconcile.json"))["status"])')"
+            cat reconcile.json
+            if [ "$status" = COMMITTED ]; then
+              exit 0
+            fi
+            if [ "$status" = CONFLICT ] || [ "$status" = REJECTED ]; then
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "request did not converge to COMMITTED" >&2
+          exit 1
+
+      - name: Prove idempotent client replay
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.submit.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          before="$(python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json status | python -c 'import json,sys; print(json.load(sys.stdin)["ledger_head"])')"
+          python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json request experiment.create             --request-id "$REQUEST_ID" --input-file input.json | tee replay-submit.json
+          for i in $(seq 1 40); do
+            set +e
+            python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json reconcile "$REQUEST_ID" > replay.json
+            code=$?
+            set -e
+            status="$(python -c 'import json; print(json.load(open("replay.json"))["status"])')"
+            if [ "$status" = COMMITTED ]; then break; fi
+            if [ "$status" = CONFLICT ] || [ "$status" = REJECTED ]; then cat replay.json; exit 1; fi
+            sleep 3
+          done
+          after="$(python tools/game-exp/cli.py --repo "$GITHUB_REPOSITORY" --json status | python -c 'import json,sys; print(json.load(sys.stdin)["ledger_head"])')"
+          cat replay.json
+          test "$before" = "$after"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-client-e2e-${{ github.run_id }}
+          path: |
+            doctor.json
+            submit.json
+            reconcile.json
+            replay-submit.json
+            replay.json
+          retention-days: 30
