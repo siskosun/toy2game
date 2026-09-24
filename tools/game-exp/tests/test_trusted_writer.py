@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_binding  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding  # noqa: E402
 
 
 def payload():
@@ -68,6 +68,44 @@ class TrustedResolverTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(DomainError, "not a pull request"):
             resolve_trusted_binding("siskosun/toy2game", payload())
+
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_decision_actor_resolves_from_github_permission(self, api):
+        api.return_value = {
+            "permission": "admin",
+            "user": {"login": "siskosun", "id": 202578583},
+        }
+        ctx = resolve_trusted_actor(
+            "siskosun/toy2game",
+            {"kind": "operation_request", "operation": "experiment.decision"},
+        )
+        self.assertEqual(ctx.login, "siskosun")
+        self.assertEqual(ctx.user_id, "202578583")
+        self.assertEqual(ctx.permission, "admin")
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_decision_actor_requires_trusted_github_login(self):
+        with self.assertRaises(DomainError) as ctx:
+            resolve_trusted_actor(
+                "siskosun/toy2game",
+                {"kind": "operation_request", "operation": "experiment.decision"},
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
+
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_decision_actor_identity_mismatch_rejected(self, api):
+        api.return_value = {
+            "permission": "admin",
+            "user": {"login": "other", "id": 1},
+        }
+        with self.assertRaises(DomainError) as ctx:
+            resolve_trusted_actor(
+                "siskosun/toy2game",
+                {"kind": "operation_request", "operation": "experiment.decision"},
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
 
     def test_non_binding_request_needs_no_github_resolution(self):
         self.assertIsNone(
