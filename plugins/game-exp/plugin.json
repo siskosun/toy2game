@@ -4,15 +4,19 @@
   "version": "0.1.0",
   "description": "Trusted game experiment workflow for Codex using the game-exp MCP control plane.",
   "repository": "https://github.com/siskosun/toy2game",
-  "keywords": ["game-development", "experiments", "codex"],
+  "keywords": [
+    "game-development",
+    "experiments",
+    "codex"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "Run trusted game experiments from Codex",
+        "shortDescription": "Run trusted game experiments with a Codex Board",
         "developerName": "toy2game",
         "category": "Productivity",
-        "defaultPrompt": "Inspect the current game-exp experiment state and tell me the next valid step."
+        "defaultPrompt": "Open the game-exp Board, summarize experiments that need attention, and tell me the next valid gate without crossing any human decision."
       }
     }
   }
