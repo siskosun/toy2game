@@ -293,6 +293,40 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["status"], "ACCEPTED")
         self.assertEqual(result["operation"], "experiment.create")
 
+    def test_server_run_defaults_to_stdio(self):
+        with patch.dict(mcp_server.os.environ, {}, clear=True):
+            with patch.object(mcp_server.mcp, "run") as run:
+                mcp_server._run_server()
+        run.assert_called_once_with()
+
+    def test_server_run_supports_streamable_http_for_chatgpt(self):
+        env = {
+            "GAME_EXP_MCP_TRANSPORT": "streamable-http",
+            "GAME_EXP_MCP_HOST": "127.0.0.1",
+            "GAME_EXP_MCP_PORT": "9876",
+            "GAME_EXP_MCP_PATH": "/game-exp-mcp",
+        }
+        with patch.dict(mcp_server.os.environ, env, clear=True):
+            with patch.object(mcp_server.mcp, "run") as run:
+                mcp_server._run_server()
+        run.assert_called_once_with(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=9876,
+            streamable_http_path="/game-exp-mcp",
+            stateless_http=True,
+            json_response=True,
+        )
+
+    def test_server_run_rejects_invalid_http_port(self):
+        env = {
+            "GAME_EXP_MCP_TRANSPORT": "streamable-http",
+            "GAME_EXP_MCP_PORT": "not-a-port",
+        }
+        with patch.dict(mcp_server.os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "must be an integer"):
+                mcp_server._run_server()
+
 
 if __name__ == "__main__":
     unittest.main()

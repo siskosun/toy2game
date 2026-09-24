@@ -117,9 +117,9 @@ python -m unittest discover -s tools/game-exp/tests -v
 
 The repository also contains a three-platform GitHub Actions workflow named `game-exp core tests`.
 
-## Codex MCP
+## MCP hosts: Codex and ChatGPT Web
 
-The Codex adapter uses the official Python MCP SDK v2 over stdio and delegates to the same validated Client / Trusted Domain Core. MCP never gets direct Git authority.
+The adapter uses the official Python MCP SDK v2 and delegates to the same validated Client / Trusted Domain Core. MCP never gets direct Git authority. The same tool surface supports local stdio for Codex and Streamable HTTP for ChatGPT Web.
 
 Normal Harness use should prefer domain tools:
 
@@ -147,7 +147,7 @@ Low-level fallback:
 
 ## Codex Board and Skill
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.1.2`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.2.0`.
 
 Normal users do not need to remember MCP tool names. Examples:
 
@@ -208,6 +208,26 @@ codex mcp list
 
 Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire.
 
+### ChatGPT Web over Streamable HTTP
+
+Run the same MCP server locally over Streamable HTTP:
+
+```powershell
+$env:GAME_EXP_REPO="siskosun/toy2game"
+$env:GAME_EXP_MCP_TRANSPORT="streamable-http"
+$env:GAME_EXP_MCP_HOST="127.0.0.1"
+$env:GAME_EXP_MCP_PORT="8765"
+$env:GAME_EXP_MCP_PATH="/mcp"
+python tools/game-exp/mcp_server.py
+```
+
+The local MCP endpoint is then `http://127.0.0.1:8765/mcp`. ChatGPT Web cannot connect to localhost directly. Connect this local endpoint through OpenAI Secure MCP Tunnel, or deploy the same Streamable HTTP server behind a trusted HTTPS endpoint. Do not expose the unauthenticated localhost listener directly to the public internet.
+
+The HTTP mode is stateless and uses JSON responses. The existing stdio mode remains the default, so current Codex configuration does not change.
+
+For ChatGPT Web, the game-exp MCP remains only the lifecycle control plane. Source edits and PR merge actions should use an authorized GitHub/code capability in the host. After the MCP endpoint is registered in ChatGPT developer mode and its tools scan successfully, package or associate the `plugins/game-exp` Skill so the model preserves Review, PROMISING, SELECTED, reconciliation, and Archive gates.
+
+Full write/modify MCP availability and developer-mode permissions depend on the current ChatGPT plan and workspace policy. If the workspace cannot enable write-capable custom MCP apps, the server can still be developed and tested, but the end-to-end web workflow cannot match Codex write behavior yet.
 The Harness-native text Board is implemented and validated. Only the graphical MCP Apps Board remains deferred: on the tested Codex 0.155.1 host, MCP Apps rendering remains behind disabled under-development feature flags. Any future graphical Board must consume the same read-only projection without becoming the authority.
 
 

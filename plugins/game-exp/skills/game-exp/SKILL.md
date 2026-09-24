@@ -1,11 +1,11 @@
 ---
 name: game-exp
-description: Orchestrate trusted game experiments through the game-exp MCP tools and normal Codex coding workflow. Use when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment, especially in Codex. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
+description: Orchestrate trusted game experiments through the game-exp MCP tools and an authorized source-editing workflow. Use in ChatGPT Work or Codex when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
 ---
 
 # game-exp
 
-Use game-exp as the experiment control plane. Use normal Codex editing/Git capabilities for source changes, and use the `game_exp_*` MCP tools for authoritative experiment lifecycle operations.
+Use game-exp as the experiment control plane. Use the host's authorized source-editing capability for source changes, and use the `game_exp_*` MCP tools for authoritative experiment lifecycle operations.
 
 ## Non-negotiable rules
 
@@ -18,13 +18,13 @@ Use game-exp as the experiment control plane. Use normal Codex editing/Git capab
 7. For archived experiments, treat the immutable final tag as the official source snapshot. Do not recreate the deleted `exp/*` branch to "restore" the experiment.
 8. Keep game-exp orchestration self-contained. Do not invoke unrelated planning/handoff workflows, create `.ai/HANDOFF.md` or `.ai/STATE.md`, or add extra approval gates unless the repository's own checked-in instructions explicitly require them or the user explicitly asks for them. The game-exp lifecycle gates remain the control plane for experiment work.
 
-## Codex Board
+## Experiment Board
 
 When the user asks to open the game-exp panel, Board, dashboard, experiment list, or experiment overview:
 
 1. Call `game_exp_board`.
 2. Treat it as a read-only projection over one protected-Ledger snapshot. Never derive authority from the rendered Board itself.
-3. Present a compact Board in Codex with these columns when available:
+3. Present a compact Board in the active host with these columns when available:
    - Experiment
    - Title
    - Lifecycle
@@ -37,7 +37,7 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
 6. If the Board returns `UNKNOWN`, report the snapshot error and do not fill missing rows from local Git state or memory.
 7. For a requested action on one experiment, follow the Board with `game_exp_experiment_get` before mutating it.
 
-This is the current Codex panel experience. Do not claim that it is a persistent graphical MCP Apps panel; it is a Harness-native read-only Board rendered from structured MCP data.
+Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
 ## Start every workflow from authoritative state
 
@@ -49,6 +49,13 @@ This is the current Codex panel experience. Do not claim that it is a persistent
 
 See `references/workflow.md` for the lifecycle/tool map.
 
+## Host capability boundary
+
+- Keep game-exp focused on lifecycle control; do not turn its MCP into a generic source editor.
+- In ChatGPT Work, use an authorized GitHub/code capability for experiment source edits and PR merge actions.
+- In Codex, use normal repository editing/Git capabilities for source changes.
+- If the host cannot edit the source repository, stop at the source-editing step and report that capability gap; do not bypass the protected workflow or broaden game-exp write authority to compensate.
+
 ## Create and implement a new experiment
 
 1. Ensure there is a real GitHub Issue for the experiment. Resolve repository id, Issue id/number, and parent SHA from GitHub or provided authoritative context; never invent them.
@@ -56,7 +63,7 @@ See `references/workflow.md` for the lifecycle/tool map.
 3. Call `game_exp_experiment_bind`. The request id must equal `manifest.operation_id`.
 4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile that same request with `game_exp_request_get`. Continue only after the binding is committed/applied.
 5. Call `game_exp_initialize` to create the canonical experiment branch/base tag.
-6. Work on the canonical `exp/<issue>` branch using normal Codex coding/Git operations. Keep changes inside Manifest `scope.allowed`; treat `scope.avoid` as forbidden. Do not recreate or rename canonical refs.
+6. Work on the canonical `exp/<issue>` branch using the host's authorized source-editing capability (for example GitHub tools in ChatGPT Work or normal Codex Git operations). Keep changes inside Manifest `scope.allowed`; treat `scope.avoid` as forbidden. Do not recreate or rename canonical refs.
 7. Run project checks appropriate to the repository before asking game-exp to build the Candidate.
 
 ## Candidate and human Review

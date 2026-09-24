@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "game-exp": {
+      "type": "streamable-http",
+      "url": "https://REPLACE-WITH-YOUR-SECURE-MCP-ENDPOINT.example/mcp"
+    }
+  }
+}
