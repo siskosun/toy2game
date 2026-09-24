@@ -275,5 +275,41 @@ def game_exp_request_submit(
     )
 
 
+def _http_port() -> int:
+    raw = os.environ.get("GAME_EXP_MCP_PORT", "8765").strip()
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("GAME_EXP_MCP_PORT must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("GAME_EXP_MCP_PORT must be between 1 and 65535")
+    return port
+
+
+def _run_server() -> None:
+    transport = os.environ.get("GAME_EXP_MCP_TRANSPORT", "stdio").strip().lower()
+    if transport == "stdio":
+        mcp.run()
+        return
+    if transport != "streamable-http":
+        raise RuntimeError(
+            "GAME_EXP_MCP_TRANSPORT must be stdio or streamable-http"
+        )
+
+    path = os.environ.get("GAME_EXP_MCP_PATH", "/mcp").strip() or "/mcp"
+    if not path.startswith("/"):
+        raise RuntimeError("GAME_EXP_MCP_PATH must start with /")
+
+    mcp.run(
+        transport="streamable-http",
+        host=os.environ.get("GAME_EXP_MCP_HOST", "127.0.0.1").strip()
+        or "127.0.0.1",
+        port=_http_port(),
+        streamable_http_path=path,
+        stateless_http=True,
+        json_response=True,
+    )
+
+
 if __name__ == "__main__":
-    mcp.run()
+    _run_server()
