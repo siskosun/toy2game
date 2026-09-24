@@ -326,7 +326,7 @@ jobs:
             --environment-digest "$ENVIRONMENT_DIGEST" \
             --release-tag "$RELEASE_TAG" \
             > "$RUNNER_TEMP/candidate-payload.json"
-          payload_b64="$(python -c "import json; print(json.load(open('$RUNNER_TEMP/candidate-payload.json'))['payload_b64'])")"
+          payload_b64="$(jq -r .payload_b64 "$RUNNER_TEMP/candidate-payload.json")"
           ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
           test -n "$ledger_head"
           request_id="req-candidate-${RUN_ID}-${RUN_ATTEMPT}"
