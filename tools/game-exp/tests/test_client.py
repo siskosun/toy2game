@@ -695,6 +695,13 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(archive["status"], "WARN")
         self.assertEqual(archive["detail"]["code"], "POST_ARCHIVE_BRANCH_DRIFT")
 
+    def test_doctor_skips_archive_health_for_unbound_experiment(self):
+        result = GameExpClient(FakeTransport()).doctor("EXP-50")
+        self.assertEqual(result["status"], "PASS")
+        archive = next(row for row in result["checks"] if row["name"] == "archive_health")
+        self.assertEqual(archive["status"], "SKIP")
+        self.assertEqual(archive["detail"]["code"], "EXPERIMENT_NOT_BOUND")
+
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
         self.assertEqual(result["status"], "PASS")
