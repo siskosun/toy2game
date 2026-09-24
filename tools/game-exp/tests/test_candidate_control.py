@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import sys
 import unittest
 from pathlib import Path
@@ -34,6 +36,10 @@ def state(lifecycle="REVIEW"):
 def evidence(source_sha="c" * 40, compare_status="ahead"):
     return [
         {"object": {"type": "commit", "sha": source_sha}},
+        {
+            "encoding": "base64",
+            "content": base64.b64encode(b'{"lock":true}\n').decode("ascii"),
+        },
         {"object": {"type": "tag", "sha": "d" * 40}},
         {
             "object": {"type": "commit", "sha": "a" * 40},
@@ -69,6 +75,10 @@ class CandidateControlTests(unittest.TestCase):
         )
         self.assertEqual(result["release_tag"], "game-exp-candidate-123-1")
         self.assertEqual(result["policy_digest"], candidate_policy_digest())
+        self.assertEqual(
+            result["dependency_lock_digest"],
+            "sha256:" + hashlib.sha256(b'{"lock":true}\n').hexdigest(),
+        )
 
     @patch("candidate_control.github_json")
     @patch("candidate_control.load_authoritative_binding")
@@ -110,6 +120,8 @@ class CandidateControlTests(unittest.TestCase):
             run_id="123",
             run_attempt="1",
             policy_digest=candidate_policy_digest(),
+            dependency_lock_digest="sha256:" + "4" * 64,
+            environment_digest="sha256:" + "5" * 64,
             release_tag="game-exp-candidate-123-1",
         )
         rows = payload["input"]["checks"]
@@ -117,6 +129,8 @@ class CandidateControlTests(unittest.TestCase):
         self.assertTrue(all(row["provenance"] == "TRUSTED_OBSERVED" for row in rows))
         self.assertTrue(all(row["status"] == "PASS" for row in rows))
         self.assertEqual(payload["actor_claim"], "trusted-candidate-workflow")
+        self.assertEqual(payload["input"]["dependency_lock_digest"], "sha256:" + "4" * 64)
+        self.assertEqual(payload["input"]["environment_digest"], "sha256:" + "5" * 64)
 
 
 if __name__ == "__main__":
