@@ -1,0 +1,101 @@
+name: game-exp archived snapshot verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical archived experiment id, e.g. EXP-21
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve archived final tag
+        id: resolve
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPERIMENT_ID" =~ ^EXP-([1-9][0-9]*)$ ]]; then
+            echo "experiment_id must be EXP-<positive integer>" >&2
+            exit 2
+          fi
+          issue="${BASH_REMATCH[1]}"
+          tag="exp-final/$issue"
+          ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag")"
+          object_type="$(jq -r '.object.type' <<<"$ref_json")"
+          tag_object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+          test "$object_type" = "tag"
+          tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")"
+          target_type="$(jq -r '.object.type' <<<"$tag_json")"
+          target_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+          test "$target_type" = "commit"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/exp/$issue" >/dev/null 2>&1; then
+            echo "archived experiment branch still exists" >&2
+            exit 3
+          fi
+          jq -n             --arg experiment_id "$EXPERIMENT_ID"             --arg tag "$tag"             --arg tag_object_sha "$tag_object_sha"             --arg target_sha "$target_sha"             '{experiment_id:$experiment_id,tag:$tag,tag_object_sha:$tag_object_sha,target_sha:$target_sha,branch_absent:true}'             | tee "$RUNNER_TEMP/archive-snapshot-ref.json"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact archived snapshot
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.resolve.outputs.tag }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify checkout and manifest
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          EXPECTED_SHA: ${{ steps.resolve.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA"
+          test -f "experiments/$EXPERIMENT_ID/manifest.yaml"
+          printf '{"checkout_sha":"%s","manifest":"experiments/%s/manifest.yaml"}\n'             "$actual" "$EXPERIMENT_ID" | tee "$RUNNER_TEMP/archive-snapshot-checkout.json"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Project tests from archived snapshot
+        run: npm test
+
+      - name: Project build from archived snapshot
+        run: npm run build
+
+      - name: Record cold-handoff evidence
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          TARGET_SHA: ${{ steps.resolve.outputs.target_sha }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          jq -n             --arg experiment_id "$EXPERIMENT_ID"             --arg tag "$TAG"             --arg target_sha "$TARGET_SHA"             --arg run_id "$GITHUB_RUN_ID"             '{experiment_id:$experiment_id,tag:$tag,target_sha:$target_sha,run_id:$run_id,checkout:"PASS",npm_ci:"PASS",tests:"PASS",build:"PASS"}'             | tee "$RUNNER_TEMP/archive-snapshot-result.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-archive-snapshot-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/archive-snapshot-ref.json
+            ${{ runner.temp }}/archive-snapshot-checkout.json
+            ${{ runner.temp }}/archive-snapshot-result.json
+          retention-days: 30
+          if-no-files-found: error
