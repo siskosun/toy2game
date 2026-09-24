@@ -11,6 +11,8 @@ from protocol_core import ProtocolError, digest_object
 
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
+CANDIDATE_RE = re.compile(r"^C-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class DomainError(ProtocolError):
@@ -33,6 +35,22 @@ class TrustedActorContext:
     login: str
     user_id: str
     permission: str
+
+
+@dataclass(frozen=True)
+class TrustedCandidateContext:
+    experiment_id: str
+    candidate_id: str
+    source_sha: str
+    manifest_digest: str
+    artifact_digest: str
+    policy_digest: str
+    workflow_source_sha: str
+    run_id: str
+    run_attempt: str
+    checks: tuple[dict[str, Any], ...]
+    retention: dict[str, Any]
+    attestation: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -419,6 +437,168 @@ def _plan_decision(
     )
 
 
+def _plan_candidate(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    trusted_candidate: TrustedCandidateContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(input_value, {"experiment_id"}, where="operation.input")
+    experiment_id = _string(input_value["experiment_id"], "operation.input.experiment_id")
+    if trusted_candidate is None:
+        raise DomainError(
+            "trusted Candidate context is required",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_candidate.experiment_id != experiment_id:
+        raise DomainError(
+            "trusted Candidate experiment identity mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
+    binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir,
+        experiment_id,
+    )
+    if state["lifecycle"] not in {"ACTIVE", "REVIEW"}:
+        raise DomainError(
+            f"cannot register Candidate while lifecycle is {state['lifecycle']}",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
+    candidate_match = CANDIDATE_RE.fullmatch(trusted_candidate.candidate_id)
+    if not candidate_match:
+        raise DomainError("invalid trusted candidate_id")
+    issue_number = experiment_id.removeprefix("EXP-")
+    if candidate_match.group(1) != issue_number:
+        raise DomainError(
+            "candidate_id does not match experiment issue number",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    if candidate_match.group(2) != trusted_candidate.run_id:
+        raise DomainError("candidate_id run_id mismatch", code="DOMAIN_CANDIDATE_CONFLICT")
+    if candidate_match.group(3) != trusted_candidate.run_attempt:
+        raise DomainError(
+            "candidate_id run_attempt mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
+    if not re.fullmatch(r"[0-9a-f]{40}", trusted_candidate.source_sha):
+        raise DomainError("Candidate source_sha must be a 40-character commit SHA")
+    init = binding.get("initialization")
+    if not isinstance(init, dict):
+        raise DomainError("binding initialization missing", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    if trusted_candidate.manifest_digest != init.get("manifest_digest"):
+        raise DomainError(
+            "Candidate manifest digest does not match authoritative binding",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+    for name, value in (
+        ("artifact_digest", trusted_candidate.artifact_digest),
+        ("policy_digest", trusted_candidate.policy_digest),
+    ):
+        if not SHA256_RE.fullmatch(value):
+            raise DomainError(f"Candidate {name} must be sha256:<64 lowercase hex>")
+    if not re.fullmatch(r"[0-9]+", trusted_candidate.run_id):
+        raise DomainError("Candidate run_id must be a decimal string")
+    if not re.fullmatch(r"[1-9][0-9]*", trusted_candidate.run_attempt):
+        raise DomainError("Candidate run_attempt must be a positive decimal string")
+    if not re.fullmatch(r"[0-9a-f]{40}", trusted_candidate.workflow_source_sha):
+        raise DomainError("Candidate workflow_source_sha must be a 40-character commit SHA")
+
+    checks = list(trusted_candidate.checks)
+    if not checks:
+        raise DomainError("Candidate requires trusted checks")
+    seen_checks: set[str] = set()
+    normalized_checks: list[dict[str, str]] = []
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise DomainError(f"Candidate check {index} must be an object")
+        _expect_keys(check, {"name", "status", "source"}, where=f"Candidate check {index}")
+        name = _string(check["name"], f"Candidate check {index}.name")
+        if name in seen_checks:
+            raise DomainError("Candidate check names must be unique")
+        seen_checks.add(name)
+        if check["status"] != "PASS" or check["source"] != "TRUSTED_OBSERVED":
+            raise DomainError(
+                f"Candidate check {name!r} is not trusted PASS",
+                code="DOMAIN_PREREQUISITE_MISSING",
+            )
+        normalized_checks.append(
+            {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+        )
+
+    retention = dict(trusted_candidate.retention)
+    _expect_keys(
+        retention,
+        {"provider", "release_tag", "release_url", "immutable", "artifact_digest"},
+        where="Candidate retention",
+    )
+    if retention["provider"] != "github-immutable-release" or retention["immutable"] is not True:
+        raise DomainError(
+            "Candidate retention is not immutable",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    if retention["artifact_digest"] != trusted_candidate.artifact_digest:
+        raise DomainError("Candidate retention digest mismatch", code="DOMAIN_CANDIDATE_CONFLICT")
+    _string(retention["release_tag"], "Candidate retention.release_tag")
+    _string(retention["release_url"], "Candidate retention.release_url")
+
+    attestation = dict(trusted_candidate.attestation)
+    _expect_keys(
+        attestation,
+        {"provider", "verified", "subject_digest", "source_sha"},
+        where="Candidate attestation",
+    )
+    if attestation["provider"] != "github-artifact-attestations" or attestation["verified"] is not True:
+        raise DomainError(
+            "Candidate attestation is not verified",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    if attestation["subject_digest"] != trusted_candidate.artifact_digest:
+        raise DomainError("Candidate attestation digest mismatch", code="DOMAIN_CANDIDATE_CONFLICT")
+    if attestation["source_sha"] != trusted_candidate.source_sha:
+        raise DomainError("Candidate attestation source mismatch", code="DOMAIN_CANDIDATE_CONFLICT")
+
+    candidate_path = (
+        f"experiments/{experiment_id}/candidates/{trusted_candidate.candidate_id}.json"
+    )
+    if (repo_dir / candidate_path).exists():
+        raise DomainError("candidate_id already exists", code="DOMAIN_CANDIDATE_CONFLICT")
+
+    candidate = {
+        "kind": "candidate",
+        "candidate_id": trusted_candidate.candidate_id,
+        "experiment_id": experiment_id,
+        "source_sha": trusted_candidate.source_sha,
+        "manifest_digest": trusted_candidate.manifest_digest,
+        "artifact_digest": trusted_candidate.artifact_digest,
+        "policy_digest": trusted_candidate.policy_digest,
+        "workflow_source_sha": trusted_candidate.workflow_source_sha,
+        "github_run_id": trusted_candidate.run_id,
+        "github_run_attempt": trusted_candidate.run_attempt,
+        "checks": normalized_checks,
+        "retention": retention,
+        "attestation": attestation,
+    }
+    next_state = dict(state)
+    current_seq = next_state.get("candidate_sequence", 0)
+    if not isinstance(current_seq, int) or isinstance(current_seq, bool) or current_seq < 0:
+        raise DomainError("invalid candidate_sequence", code="DOMAIN_BOUND_EXPERIMENT_INVALID")
+    next_state["candidate_sequence"] = current_seq + 1
+    next_state["current_candidate_id"] = trusted_candidate.candidate_id
+
+    return DomainPlan(
+        status="APPLIED",
+        experiment_id=experiment_id,
+        writes={
+            candidate_path: candidate,
+            f"experiments/{experiment_id}/state.json": next_state,
+        },
+    )
+
+
 def plan_domain_mutation(
     *,
     repo_dir: Path,
@@ -428,10 +608,17 @@ def plan_domain_mutation(
     repository_full_name: str,
     trusted_binding: TrustedBindingContext | None = None,
     trusted_actor: TrustedActorContext | None = None,
+    trusted_candidate: TrustedCandidateContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "candidate.register":
+        return _plan_candidate(
+            repo_dir=repo_dir,
+            payload=payload,
+            trusted_candidate=trusted_candidate,
+        )
     if operation == "experiment.decision":
         return _plan_decision(
             repo_dir=repo_dir,
