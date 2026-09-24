@@ -23,6 +23,9 @@ class FakeTransport:
         self.state = None
         self.logs = ""
         self.dispatch_uncertain = False
+        self._ledger_json = {}
+        self._git_refs = {}
+        self._tag_objects = {}
         self._rules = [
             {"name": "game-exp ledger", "enforcement": "active"},
             {"name": "game-exp experiment branches", "enforcement": "active"},
@@ -70,6 +73,15 @@ class FakeTransport:
         if self.dispatch_uncertain:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/792"
+
+    def ledger_json(self, path):
+        return self._ledger_json.get(path)
+
+    def git_ref(self, ref_path):
+        return self._git_refs.get(ref_path)
+
+    def annotated_tag(self, tag_object_sha):
+        return self._tag_objects[tag_object_sha]
 
     def ledger_record(self, request_id):
         return self.record
@@ -373,6 +385,82 @@ class ClientTests(unittest.TestCase):
         sent = transport.dispatched[-1]
         self.assertEqual(sent["request_id"], "req_archive_abort_test")
         self.assertIn("payload_b64", sent)
+
+    def _archive_fixture(self, transport, *, mode, branch_sha):
+        experiment_id = "EXP-21"
+        archive_id = "A-21-1"
+        expected = "b" * 40
+        transport._ledger_json[f"experiments/{experiment_id}/state.json"] = {
+            "kind": "experiment_state",
+            "experiment_id": experiment_id,
+            "lifecycle": "ARCHIVED",
+            "current_archive_id": archive_id,
+        }
+        transport._ledger_json[
+            f"experiments/{experiment_id}/archives/{archive_id}.json"
+        ] = {
+            "kind": "archive_operation",
+            "archive_id": archive_id,
+            "experiment_id": experiment_id,
+            "phase": "COMMITTED",
+            "mode": mode,
+            "expected_branch_sha": expected,
+            "branch_ref": "refs/heads/exp/21",
+            "final_tag_ref": "refs/tags/exp-final/21",
+        }
+        transport._git_refs["tags/exp-final/21"] = {
+            "object": {"type": "tag", "sha": "1" * 40}
+        }
+        transport._tag_objects["1" * 40] = {
+            "object": {"type": "commit", "sha": expected},
+            "message": "\n".join(
+                [
+                    "game-exp archive A-21-1",
+                    "",
+                    "game-exp-experiment: EXP-21",
+                    "game-exp-archive-id: A-21-1",
+                    f"game-exp-mode: {mode}",
+                    f"game-exp-source-sha: {expected}",
+                ]
+            ),
+        }
+        if branch_sha is not None:
+            transport._git_refs["heads/exp/21"] = {
+                "object": {"type": "commit", "sha": branch_sha}
+            }
+
+    def test_archive_health_atomic_delete_passes_with_branch_absent(self):
+        transport = FakeTransport()
+        self._archive_fixture(transport, mode="ATOMIC_DELETE", branch_sha=None)
+        result = GameExpClient(transport).archive_health("EXP-21")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["code"], "ARCHIVE_HEALTHY")
+
+    def test_archive_health_retain_branch_drift_is_warning(self):
+        transport = FakeTransport()
+        self._archive_fixture(transport, mode="RETAIN_BRANCH", branch_sha="c" * 40)
+        result = GameExpClient(transport).archive_health("EXP-21")
+        self.assertEqual(result["status"], "WARN")
+        self.assertEqual(result["code"], "POST_ARCHIVE_BRANCH_DRIFT")
+        self.assertEqual(result["official_snapshot_sha"], "b" * 40)
+        self.assertEqual(result["branch_sha"], "c" * 40)
+
+    def test_archive_health_missing_final_tag_is_failure(self):
+        transport = FakeTransport()
+        self._archive_fixture(transport, mode="ATOMIC_DELETE", branch_sha=None)
+        transport._git_refs.pop("tags/exp-final/21")
+        result = GameExpClient(transport).archive_health("EXP-21")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["code"], "ARCHIVE_FINAL_TAG_MISSING")
+
+    def test_doctor_surfaces_archive_warning_without_overwriting_snapshot(self):
+        transport = FakeTransport()
+        self._archive_fixture(transport, mode="RETAIN_BRANCH", branch_sha="c" * 40)
+        result = GameExpClient(transport).doctor("EXP-21")
+        self.assertEqual(result["status"], "WARN")
+        archive = next(row for row in result["checks"] if row["name"] == "archive_health")
+        self.assertEqual(archive["status"], "WARN")
+        self.assertEqual(archive["detail"]["code"], "POST_ARCHIVE_BRANCH_DRIFT")
 
     def test_doctor_pass(self):
         result = GameExpClient(FakeTransport()).doctor()
