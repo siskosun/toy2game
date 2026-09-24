@@ -1,0 +1,3 @@
+interface:
+  display_name: "game-exp"
+  short_description: "Run trusted game experiments through game-exp MCP"

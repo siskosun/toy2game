@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "game-exp",
+  "version": "0.1.0",
+  "description": "Trusted game experiment workflow for Codex using the game-exp MCP control plane.",
+  "repository": "https://github.com/siskosun/toy2game",
+  "keywords": ["game-development", "experiments", "codex"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "game-exp",
+        "shortDescription": "Run trusted game experiments from Codex",
+        "developerName": "toy2game",
+        "category": "Productivity",
+        "defaultPrompt": "Inspect the current game-exp experiment state and tell me the next valid step."
+      }
+    }
+  }
+}

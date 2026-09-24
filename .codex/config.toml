@@ -1,0 +1,8 @@
+[mcp_servers.game-exp]
+command = "uv"
+args = ["run", "--with", "mcp>=2,<3", "python", "tools/game-exp/mcp_server.py"]
+enabled = true
+env = { GAME_EXP_REPO = "siskosun/toy2game" }
+
+[plugins."game-exp@toy2game-local"]
+enabled = true
