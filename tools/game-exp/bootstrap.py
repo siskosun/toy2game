@@ -19,6 +19,7 @@ PRODUCTION_WORKFLOWS = (
     "game-exp-integration-finalize.yml",
     "game-exp-archive.yml",
     "game-exp-archive-snapshot-verify.yml",
+    "game-exp-github-bridge.yml",
 )
 
 PRODUCTION_TOOLS = (
@@ -29,6 +30,7 @@ PRODUCTION_TOOLS = (
     "client.py",
     "domain_core.py",
     "integration_control.py",
+    "github_bridge.py",
     "mcp_server.py",
     "project_policy.py",
     "protocol_core.py",
@@ -41,6 +43,7 @@ PRODUCTION_TOOLS = (
 PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/SKILL.md",
     "plugins/game-exp/skills/game-exp/references/workflow.md",
+    "plugins/game-exp/skills/game-exp/references/github-bridge.md",
     "plugins/game-exp/skills/game-exp/agents/openai.yaml",
 )
 

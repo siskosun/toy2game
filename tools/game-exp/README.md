@@ -117,6 +117,25 @@ python -m unittest discover -s tools/game-exp/tests -v
 
 The repository also contains a three-platform GitHub Actions workflow named `game-exp core tests`.
 
+## ChatGPT Web without Developer Mode: GitHub Bridge
+
+When a ChatGPT workspace member cannot enable custom MCP Apps, use the repository GitHub connector plus the trusted Issue-comment bridge instead of exposing a local MCP server.
+
+Bridge command shape:
+
+~~~text
+/game-exp
+{"schema_version":1,"request_id":"req_example","action":"rehearse","experiment_id":"EXP-42"}
+~~~
+
+The command must be posted on Issue #42 for `EXP-42`. The bridge workflow independently checks the comment author and repository write permission, posts a request-scoped claim marker, and then routes the action to the same Trusted Writer / lifecycle workflows. A matching result marker is posted after execution.
+
+Supported actions: `bind`, `initialize`, `candidate_build`, `review_record`, `decision_submit`, `rehearse`, `integrate`, `integrate_finalize`, `archive`, `archive_abort`, and read-only `status`.
+
+If a claim exists without a result, treat the request as `UNKNOWN`; inspect the referenced bridge Actions run and the protected Ledger before attempting any retry. Never use a new request id merely to escape uncertainty.
+
+The bridge does not grant source-editing authority. ChatGPT should use its normal authorized GitHub connector for experiment branch edits, PR creation when the trusted Integration workflow cannot open the PR, and explicit user-authorized PR merge actions.
+
 ## MCP hosts: Codex and ChatGPT Web
 
 The adapter uses the official Python MCP SDK v2 and delegates to the same validated Client / Trusted Domain Core. MCP never gets direct Git authority. The same tool surface supports local stdio for Codex and Streamable HTTP for ChatGPT Web.
@@ -145,9 +164,9 @@ Lifecycle / workflow:
 Low-level fallback:
 - `game_exp_request_submit`
 
-## Codex Board and Skill
+## Board and Skill
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.2.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.0`.
 
 Normal users do not need to remember MCP tool names. Examples:
 

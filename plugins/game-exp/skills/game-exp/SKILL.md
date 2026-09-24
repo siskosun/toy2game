@@ -1,11 +1,11 @@
 ---
 name: game-exp
-description: Orchestrate trusted game experiments through the game-exp MCP tools and an authorized source-editing workflow. Use in ChatGPT Work or Codex when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
+description: Orchestrate trusted game experiments through either native game-exp MCP tools or the repository GitHub Issue-comment bridge, plus an authorized source-editing workflow. Use in ChatGPT or Codex when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
 ---
 
 # game-exp
 
-Use game-exp as the experiment control plane. Use the host's authorized source-editing capability for source changes, and use the `game_exp_*` MCP tools for authoritative experiment lifecycle operations.
+Use game-exp as the experiment control plane. Prefer native `game_exp_*` MCP tools when available. If custom MCP Apps are unavailable but an authorized GitHub connector can read/write the repository, use the repository GitHub Bridge described in `references/workflow.md`. Use the host's authorized source-editing capability for source changes.
 
 ## Non-negotiable rules
 
@@ -48,6 +48,22 @@ Treat the Board as a structured read-only projection. The host may render it as 
 - If the requested action conflicts with the current lifecycle, explain the current state and the valid next gate instead of improvising a transition.
 
 See `references/workflow.md` for the lifecycle/tool map.
+
+## Backend routing
+
+1. Prefer native `game_exp_*` MCP tools when they are available.
+2. Otherwise, if the host has an authorized GitHub connector with Issue-comment and repository access, use the GitHub Bridge.
+3. If neither exists, stop at the missing capability; never simulate a lifecycle mutation locally.
+
+For the GitHub Bridge:
+
+- Read authoritative state from `game-exp/ledger` through GitHub before deciding the next action.
+- Post one top-level comment on the experiment's canonical Issue. The first line must be exactly `/game-exp`; the rest must be one strict JSON command from `references/github-bridge.md`.
+- Use one stable `request_id` per logical action. Never post a second command with a new id merely because the bridge response is delayed or uncertain.
+- After posting, read Issue comments for the matching `game-exp-bridge:<request_id>:claim` and `:result` markers and inspect the referenced Actions run when necessary.
+- Treat claim-without-result as `UNKNOWN`. Reconcile against the Ledger or existing bridge run; do not resubmit blindly.
+- The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission. Do not place a different actor identity inside the command.
+- Human-owned gates remain human-owned. The presence of the bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
 
 ## Host capability boundary
 

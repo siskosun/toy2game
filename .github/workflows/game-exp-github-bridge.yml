@@ -1,0 +1,81 @@
+name: game-exp GitHub bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: game-exp-bridge-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    if: >-
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/game-exp')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted bridge control only
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            tools/game-exp/github_bridge.py
+            tools/game-exp/archive_control.py
+            tools/game-exp/archive_runner.py
+            tools/game-exp/client.py
+            tools/game-exp/trusted_writer.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Execute trusted bridge command
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          GAME_EXP_ACTOR_LOGIN: ${{ github.event.comment.user.login }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python tools/game-exp/github_bridge.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --ssh-key "$GAME_EXP_WRITER_KEY_PATH" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --workflow-source-sha "$WORKFLOW_SOURCE_SHA" \
+            | tee "$RUNNER_TEMP/game-exp-bridge-result.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-exp-github-bridge-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/game-exp-bridge-result.json
+          retention-days: 30
+          if-no-files-found: warn

@@ -1,22 +1,23 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.2.0",
-  "description": "Trusted game experiment workflow for ChatGPT and Codex using the game-exp MCP control plane.",
+  "version": "0.3.0",
+  "description": "Trusted game experiment workflow for ChatGPT and Codex using either the game-exp MCP control plane or a GitHub Issue-comment bridge.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
     "experiments",
     "mcp",
     "chatgpt",
-    "codex"
+    "codex",
+    "github-bridge"
   ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "Run trusted game experiments in ChatGPT and Codex",
-        "longDescription": "Orchestrate protected-Ledger game experiments with human Review and selection gates, trusted Rehearsal, Integration, and recoverable Archive.",
+        "shortDescription": "Run trusted game experiments through MCP or GitHub",
+        "longDescription": "Orchestrate protected-Ledger game experiments with human Review and selection gates, trusted Rehearsal, Integration, recoverable Archive, and a GitHub bridge fallback when custom MCP apps are unavailable.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [
