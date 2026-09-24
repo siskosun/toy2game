@@ -93,3 +93,7 @@ The agent must not decide these from automated evidence:
 - Integration finalization verifies merged PR tree against trusted Rehearsal tree.
 - Archive finalization requires the recoverable Archive state machine and verified refs.
 - The Experiment Board, Issue labels, and future UI are projections only.
+
+## Board views
+
+The Board projection contains `overview`, `attention`, `prototypes`, `branches`, and `archive` views. Follow `board.md` for presentation. New experiments should carry stable `manifest.subject`; legacy experiments may use scope-derived fallback identity.

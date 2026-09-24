@@ -20,56 +20,15 @@ Use game-exp as the experiment control plane. Prefer native `game_exp_*` MCP too
 
 ## Experiment Board
 
-When the user asks to open the game-exp panel, Board, dashboard, experiment list, or experiment overview:
+When the user asks to open the game-exp panel, Board, dashboard, experiment list, or a named view:
 
 1. If native MCP is available, call `game_exp_board`.
-2. Otherwise use the authorized GitHub connector against one pinned protected `game-exp/ledger` snapshot.
-3. Render the Board in Chinese by default. Preserve raw lifecycle/health codes in parentheses only when they improve diagnosis.
-4. Show this summary above the table:
-   - `仓库`: full `owner/repo` name;
-   - `Ledger 快照`: pinned Ledger commit SHA;
-   - `实验统计`: total count, lifecycle counts, and abnormal-health count.
-5. Use these table columns:
-   - `实验`
-   - `游戏原型`
-   - `Issue`
-   - `实验标题`
-   - `阶段`
-   - `健康`
-   - `候选 / 评审`
-   - `彩排 / 集成 / 归档`
-   - `下一步`
-6. Resolve `游戏原型` from Board `prototype_name` when available. In GitHub fallback mode derive it from `manifest.scope.allowed`:
-   - a specific `games/<prototype>/**` path -> `<prototype>`;
-   - multiple specific prototypes -> join their names with ` / `;
-   - only broad `games/**` scope -> `仓库级/未指定原型`;
-   - no game scope -> `—`.
-7. Localize lifecycle labels:
-   - `ACTIVE` -> `进行中`
-   - `REVIEW` -> `评审中`
-   - `PROMISING` -> `待选择`
-   - `SELECTED` -> `已选定`
-   - `INTEGRATED` -> `已集成`
-   - `REJECTED` -> `已拒绝`
-   - `ARCHIVED` -> `已归档`.
-8. Localize health labels: `PASS` -> `正常`, `FAIL` -> `异常`, `UNKNOWN` -> `未知`. Keep a non-PASS health code visible.
-9. Localize next gates:
-   - `IMPLEMENT_OR_REVIEW` -> `继续实现 / 进入评审`
-   - `CANDIDATE_BUILD` -> `构建候选版本`
-   - `HUMAN_REVIEW` -> `人工评审`
-   - `HUMAN_PROMOTION` -> `决定是否晋级`
-   - `HUMAN_DECISION` -> `人工决策`
-   - `TRUSTED_REHEARSAL` -> `可信彩排`
-   - `HUMAN_SELECTION_OR_REFRESH_REHEARSAL` -> `人工选择 / 必要时刷新彩排`
-   - `TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL` -> `集成 / 必要时刷新彩排`
-   - `ARCHIVE_OR_RETAIN` -> `选择归档方式`
-   - `ARCHIVE_RECOVERY` -> `恢复归档`
-   - `ARCHIVE` -> `归档`
-   - `TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK` -> `已结束；新工作需新建实验`
-   - `VERIFY_EXPERIMENT_HEALTH` -> `核验实验健康`
-   - `DO_NOT_USE_RECREATE_EXPERIMENT` -> `禁止继续；重建实验`.
-10. Treat `health=FAIL` as blocked. Put abnormal experiments first and never recommend normal lifecycle work for them.
-11. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
+2. Otherwise build the same projection from one pinned protected `game-exp/ledger` snapshot through GitHub.
+3. Render Chinese by default.
+4. Default to `总览`; support `待处理` / `原型` / `分支图` / `归档` as named views.
+5. Follow `references/board.md` for information hierarchy, ordering, labels, and empty-state behavior.
+6. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
+7. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
@@ -110,7 +69,7 @@ For the GitHub Bridge:
 ## Create and implement a new experiment
 
 1. Ensure there is a real GitHub Issue for the experiment. Resolve repository id, Issue id/number, and parent SHA from GitHub or provided authoritative context; never invent them.
-2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
+2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. For every new experiment also include stable `subject`: use `{type: "game-prototype", id, name, root_path}` for one game prototype, or `{type: "repository", id: "repository", name, root_path: "."}` for repository-level work. Keep `subject.id` stable across later path/name changes. `scope` remains the security boundary and must not be used as the long-term subject identity. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
 3. Execute Bind through the active backend: `game_exp_experiment_bind` with MCP, or Bridge action `bind`. The request id must equal `manifest.operation_id`.
 4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile the same logical request. With MCP use `game_exp_request_get`; with GitHub Bridge inspect its claim/result markers plus the protected Ledger. Continue only after the binding is committed/applied.
 5. Execute Initialize through `game_exp_initialize` or Bridge action `initialize` to create the canonical experiment branch/base tag.

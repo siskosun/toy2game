@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.3.2",
-  "description": "Trusted game experiment workflow for ChatGPT and Codex with a Chinese repository/prototype-aware Board, using either native MCP or the GitHub Issue-comment bridge.",
+  "version": "0.4.0",
+  "description": "Trusted game experiment workflow with stable prototype subjects and five Chinese portfolio views, using native MCP or the GitHub Issue-comment bridge.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "中文面板运行可信游戏实验",
-        "longDescription": "Orchestrate protected-Ledger game experiments with human Review and selection gates, trusted Rehearsal, Integration, recoverable Archive, and a GitHub bridge fallback when custom MCP apps are unavailable.",
+        "shortDescription": "五视图管理可信游戏实验与原型",
+        "longDescription": "Manage protected-Ledger game experiments across repositories and prototypes with stable subject identity, Chinese Overview/Attention/Prototype/Branch/Archive views, human gates, trusted Rehearsal, Integration, and recoverable Archive.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [

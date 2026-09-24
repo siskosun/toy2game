@@ -26,6 +26,12 @@ def manifest(request_id="req_bind_1"):
             "issue_number": "123",
         },
         "title": "Three role combat",
+        "subject": {
+            "type": "game-prototype",
+            "id": "three-role-combat",
+            "name": "Three Role Combat",
+            "root_path": "games/three-role-combat",
+        },
         "operation_id": request_id,
         "parent": {"experiment": None, "commit": "a" * 40},
         "hypothesis": "Three roles improve readability.",
@@ -113,6 +119,39 @@ class DomainBindingTests(unittest.TestCase):
         self.assertEqual(digest_object(payload), before)
         self.assertEqual(value["scope"]["allowed"], ["games/**"])
         self.assertEqual(value["scope"]["avoid"], ["infra/**"])
+
+    def test_legacy_manifest_without_subject_remains_valid(self):
+        value = manifest()
+        value.pop("subject")
+        plan = self.plan(value)
+        self.assertEqual(plan.status, "APPLIED")
+        self.assertNotIn(
+            "subject",
+            plan.writes["experiments/EXP-123/manifest.json"],
+        )
+
+    def test_subject_is_persisted_without_mutation(self):
+        value = manifest()
+        plan = self.plan(value)
+        stored = plan.writes["experiments/EXP-123/manifest.json"]
+        self.assertEqual(stored["subject"], value["subject"])
+
+    def test_subject_rejects_glob_root_path(self):
+        value = manifest()
+        value["subject"]["root_path"] = "games/three-role-*"
+        with self.assertRaisesRegex(DomainError, "concrete path"):
+            self.plan(value)
+
+    def test_repository_subject_requires_canonical_identity(self):
+        value = manifest()
+        value["subject"] = {
+            "type": "repository",
+            "id": "repo",
+            "name": "Repository-wide",
+            "root_path": ".",
+        }
+        with self.assertRaisesRegex(DomainError, "id=repository"):
+            self.plan(value)
 
     def test_trusted_issue_identity_mismatch_is_rejected(self):
         value = manifest()

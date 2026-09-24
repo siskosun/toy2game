@@ -26,6 +26,7 @@ Rules:
 - Do not include unknown keys.
 - Do not put actor identity, tokens, secrets, or repository credentials in the JSON.
 - For `bind`, `request_id` must equal `manifest.operation_id`.
+- New manifests should include stable `subject`; old manifests without it remain valid for compatibility.
 - Human-gated commands may be posted only after the user explicitly made that decision.
 
 ## Result markers and reconciliation
@@ -52,7 +53,7 @@ If a claim exists without a result, treat the bridge request as `UNKNOWN`. Inspe
 ### bind
 
 ~~~json
-{"schema_version":1,"request_id":"req_bind_42","action":"bind","manifest":{"schema_version":1,"experiment":{"host":"github.com","repository_id":"...","issue_id":"...","issue_number":"42"},"title":"...","operation_id":"req_bind_42","parent":{"experiment":null,"commit":"..."},"hypothesis":"...","success_criteria":["..."],"kill_criteria":["..."],"scope":{"allowed":["games/example/**"],"avoid":[".github/**","tools/game-exp/**","plugins/**",".game-exp/**"]},"runtime":{"godot":"...","export_templates":"...","addons_lock":"..."},"review":{"protocol":"blind-playtest-v1"},"created_at":"..."}}
+{"schema_version":1,"request_id":"req_bind_42","action":"bind","manifest":{"schema_version":1,"experiment":{"host":"github.com","repository_id":"...","issue_id":"...","issue_number":"42"},"title":"...","subject":{"type":"game-prototype","id":"example-game","name":"Example Game","root_path":"games/example-game"},"operation_id":"req_bind_42","parent":{"experiment":null,"commit":"..."},"hypothesis":"...","success_criteria":["..."],"kill_criteria":["..."],"scope":{"allowed":["games/example/**"],"avoid":[".github/**","tools/game-exp/**","plugins/**",".game-exp/**"]},"runtime":{"godot":"...","export_templates":"...","addons_lock":"..."},"review":{"protocol":"blind-playtest-v1"},"created_at":"..."}}
 ~~~
 
 ### initialize

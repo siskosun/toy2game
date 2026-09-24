@@ -166,7 +166,17 @@ Low-level fallback:
 
 ## Board and Skill
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.3.2`.
+v0.4 adds stable Manifest `subject` identity and a portfolio-style Board:
+
+- `总览`: blockers, human gates, and active work first;
+- `待处理`: only experiments requiring attention;
+- `原型`: Repository -> Subject/Prototype -> Experiment grouping;
+- `分支图`: canonical experiment branch/tag lanes;
+- `归档`: terminal experiments separated from active work.
+
+New experiments should bind a stable `subject` (`game-prototype` or `repository`). Legacy experiments without `subject` remain valid and fall back to `scope.allowed` inference for Board grouping.
+
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.4.0`.
 
 Normal users do not need to remember MCP tool names. Examples:
 

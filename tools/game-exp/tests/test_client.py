@@ -384,9 +384,16 @@ class ClientTests(unittest.TestCase):
                 },
                 "experiments/EXP-7/manifest.json": {
                     "title": "Combat readability",
+                    "subject": {
+                        "type": "game-prototype",
+                        "id": "arena-duel",
+                        "name": "Arena Duel",
+                        "root_path": "games/arena-duel",
+                    },
                     "hypothesis": "roles improve readability",
                     "experiment": {"issue_number": "7"},
                     "scope": {"allowed": ["games/arena-duel/**"]},
+                    "created_at": "2026-09-24T10:00:00Z",
                 },
                 "experiments/EXP-21/state.json": {
                     "experiment_id": "EXP-21",
@@ -403,6 +410,7 @@ class ClientTests(unittest.TestCase):
                     "hypothesis": "trusted binding works",
                     "experiment": {"issue_number": "21"},
                     "scope": {"allowed": ["games/**"]},
+                    "created_at": "2026-09-24T11:00:00Z",
                 },
                 "experiments/EXP-21/reviews/req_review.json": {
                     "review_id": "req_review",
@@ -448,8 +456,40 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["repository_name"], "repo")
         self.assertEqual(result["experiments"][0]["repository"], "owner/repo")
         self.assertEqual(result["experiments"][0]["repository_name"], "repo")
-        self.assertEqual(result["experiments"][0]["prototype_name"], "arena-duel")
+        self.assertEqual(result["experiments"][0]["prototype_name"], "Arena Duel")
+        self.assertEqual(result["experiments"][0]["subject_id"], "arena-duel")
+        self.assertEqual(result["experiments"][0]["subject_source"], "manifest")
         self.assertEqual(result["experiments"][1]["prototype_name"], "仓库级/未指定原型")
+        self.assertEqual(result["experiments"][1]["subject_source"], "scope-fallback")
+        self.assertEqual(result["attention_count"], 1)
+        self.assertEqual(
+            result["views"]["overview"],
+            {
+                "attention_ids": ["EXP-7"],
+                "active_ids": ["EXP-7"],
+                "archived_count": 1,
+            },
+        )
+        self.assertEqual(
+            result["views"]["attention"]["experiment_ids"],
+            ["EXP-7"],
+        )
+        self.assertEqual(
+            result["views"]["prototypes"]["groups"][0]["subject"]["name"],
+            "Arena Duel",
+        )
+        self.assertEqual(
+            result["views"]["prototypes"]["groups"][0]["attention_count"],
+            1,
+        )
+        self.assertEqual(
+            result["views"]["branches"]["lanes"][0]["experiment_id"],
+            "EXP-7",
+        )
+        self.assertEqual(
+            result["views"]["archive"]["experiment_ids"],
+            ["EXP-21"],
+        )
         self.assertEqual(result["experiments"][0]["health"], "PASS")
         self.assertEqual(result["experiments"][1]["health"], "PASS")
         self.assertEqual(transport.last_ledger_paths_ref, transport.head)
@@ -516,6 +556,10 @@ class ClientTests(unittest.TestCase):
             "BINDING_REQUEST_PAYLOAD_DIGEST_MISMATCH",
         )
         self.assertEqual(row["next_gate"], "DO_NOT_USE_RECREATE_EXPERIMENT")
+        self.assertTrue(row["attention"]["required"])
+        self.assertEqual(row["attention"]["priority"], 0)
+        self.assertEqual(row["attention"]["reason"], "HEALTH_FAIL")
+        self.assertEqual(result["views"]["attention"]["experiment_ids"], ["EXP-19"])
         self.assertEqual(result["counts_by_health"], {"FAIL": 1})
 
     def test_candidate_dispatches_trusted_workflow(self):

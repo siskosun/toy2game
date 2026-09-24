@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.3.2")
+        self.assertEqual(manifest["version"], "0.4.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -97,22 +97,36 @@ class GameExpSkillContractTests(unittest.TestCase):
             "## Experiment Board",
             "game_exp_board",
             "read-only projection",
-            "下一步",
             "health=FAIL",
-            "DO_NOT_USE_RECREATE_EXPERIMENT",
             "ChatGPT Work",
             "Codex",
             "host's authorized source-editing capability",
-            "仓库",
-            "游戏原型",
-            "实验标题",
-            "阶段",
-            "健康",
-            "下一步",
-            "仓库级/未指定原型",
-            "禁止继续；重建实验",
+            "总览",
+            "待处理",
+            "原型",
+            "分支图",
+            "归档",
+            "stable `subject`",
         ):
             self.assertIn(phrase, content)
+
+        board = (
+            PLUGIN / "skills" / "game-exp" / "references" / "board.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "Repository -> Subject/Prototype -> Experiment",
+            "需要处理",
+            "当前进行",
+            "仓库级/未指定原型",
+            "禁止继续；重建实验",
+            "DO_NOT_USE_RECREATE_EXPERIMENT",
+            "views.overview.attention_ids",
+            "views.prototypes.groups",
+            "views.branches.lanes",
+            "views.archive.experiment_ids",
+        ):
+            self.assertIn(phrase, board)
+
 
     def test_workflow_reference_maps_board_tool(self):
         content = (PLUGIN / "skills" / "game-exp" / "references" / "workflow.md").read_text(
@@ -121,6 +135,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertIn("Open experiment Board / panel", content)
         self.assertIn("game_exp_board", content)
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "github-bridge.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "board.md").exists())
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))
