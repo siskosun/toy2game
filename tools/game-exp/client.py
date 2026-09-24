@@ -752,16 +752,110 @@ class GameExpClient:
             return "仓库级/未指定原型"
         return None
 
+    @classmethod
+    def _board_subject(cls, manifest: dict[str, Any]) -> dict[str, Any]:
+        subject = manifest.get("subject")
+        if isinstance(subject, dict):
+            subject_type = subject.get("type")
+            subject_id = subject.get("id")
+            subject_name = subject.get("name")
+            root_path = subject.get("root_path")
+            if all(
+                isinstance(value, str) and value
+                for value in (
+                    subject_type,
+                    subject_id,
+                    subject_name,
+                    root_path,
+                )
+            ):
+                return {
+                    "type": subject_type,
+                    "id": subject_id,
+                    "name": subject_name,
+                    "root_path": root_path,
+                    "source": "manifest",
+                }
+
+        prototype_name = cls._board_prototype_name(manifest)
+        if prototype_name is None or prototype_name == "仓库级/未指定原型":
+            return {
+                "type": "repository",
+                "id": "repository",
+                "name": "仓库级/未指定原型",
+                "root_path": None,
+                "source": "scope-fallback",
+            }
+        if " / " in prototype_name:
+            return {
+                "type": "multi-prototype",
+                "id": prototype_name,
+                "name": prototype_name,
+                "root_path": None,
+                "source": "scope-fallback",
+            }
+        return {
+            "type": "game-prototype",
+            "id": prototype_name,
+            "name": prototype_name,
+            "root_path": f"games/{prototype_name}",
+            "source": "scope-fallback",
+        }
+
+    @staticmethod
+    def _board_attention(
+        health: dict[str, str],
+        next_gate: str,
+    ) -> dict[str, Any]:
+        if health["status"] == "FAIL":
+            return {
+                "required": True,
+                "priority": 0,
+                "reason": "HEALTH_FAIL",
+            }
+        if health["status"] == "UNKNOWN":
+            return {
+                "required": True,
+                "priority": 1,
+                "reason": "HEALTH_UNKNOWN",
+            }
+        if next_gate == "ARCHIVE_RECOVERY":
+            return {
+                "required": True,
+                "priority": 2,
+                "reason": "ARCHIVE_RECOVERY",
+            }
+        if next_gate in {
+            "HUMAN_REVIEW",
+            "HUMAN_PROMOTION",
+            "HUMAN_DECISION",
+            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL",
+            "ARCHIVE_OR_RETAIN",
+        }:
+            return {
+                "required": True,
+                "priority": 3,
+                "reason": "HUMAN_GATE",
+            }
+        return {
+            "required": False,
+            "priority": None,
+            "reason": None,
+        }
+
     def _board_experiment_health(
         self,
         experiment_id: str,
         manifest: dict[str, Any],
         snapshot_head: str,
+        *,
+        binding: dict[str, Any] | None = None,
     ) -> dict[str, str]:
-        binding = self.transport.ledger_json(
-            f"experiments/{experiment_id}/binding.json",
-            ref=snapshot_head,
-        )
+        if binding is None:
+            binding = self.transport.ledger_json(
+                f"experiments/{experiment_id}/binding.json",
+                ref=snapshot_head,
+            )
         if not isinstance(binding, dict):
             return {"status": "UNKNOWN", "code": "BINDING_MISSING"}
 
@@ -846,6 +940,10 @@ class GameExpClient:
                 f"experiments/{experiment_id}/manifest.json",
                 ref=snapshot_head,
             )
+            binding = self.transport.ledger_json(
+                f"experiments/{experiment_id}/binding.json",
+                ref=snapshot_head,
+            )
             if state is None or manifest is None:
                 return {
                     "status": "UNKNOWN",
@@ -869,6 +967,7 @@ class GameExpClient:
                 experiment_id,
                 manifest,
                 snapshot_head,
+                binding=binding if isinstance(binding, dict) else None,
             )
 
             review_id = state.get("current_review_id")
@@ -886,13 +985,38 @@ class GameExpClient:
                 if isinstance(raw_issue, str):
                     issue_number = raw_issue
 
+            next_gate = (
+                "DO_NOT_USE_RECREATE_EXPERIMENT"
+                if health["status"] == "FAIL"
+                else (
+                    "VERIFY_EXPERIMENT_HEALTH"
+                    if health["status"] == "UNKNOWN"
+                    else self._board_next_gate(state, review)
+                )
+            )
+            subject = self._board_subject(manifest)
+            initialization = (
+                binding.get("initialization")
+                if isinstance(binding, dict)
+                else None
+            )
+            if not isinstance(initialization, dict):
+                initialization = {}
+
             item = {
                 "repository": self.transport.repo,
                 "repository_name": self.transport.repo.split("/", 1)[-1],
                 "experiment_id": experiment_id,
                 "issue_number": issue_number,
                 "title": manifest.get("title"),
-                "prototype_name": self._board_prototype_name(manifest),
+                "created_at": manifest.get("created_at"),
+                "subject": subject,
+                "subject_type": subject["type"],
+                "subject_id": subject["id"],
+                "subject_name": subject["name"],
+                "subject_root_path": subject["root_path"],
+                "subject_source": subject["source"],
+                "prototype_name": subject["name"],
                 "hypothesis": manifest.get("hypothesis"),
                 "lifecycle": lifecycle,
                 "candidate_id": state.get("current_candidate_id"),
@@ -904,21 +1028,132 @@ class GameExpClient:
                 "integration_id": state.get("current_integration_id"),
                 "archive_id": state.get("current_archive_id"),
                 "archive_lock": state.get("archive_lock"),
+                "parent_sha": (
+                    binding.get("parent_sha")
+                    if isinstance(binding, dict)
+                    else None
+                ),
+                "branch_ref": initialization.get("branch_ref"),
+                "base_tag_ref": initialization.get("base_tag_ref"),
+                "final_tag_ref": initialization.get("final_tag_ref"),
                 "health": health["status"],
                 "health_code": health["code"],
-                "next_gate": (
-                    "DO_NOT_USE_RECREATE_EXPERIMENT"
-                    if health["status"] == "FAIL"
-                    else (
-                        "VERIFY_EXPERIMENT_HEALTH"
-                        if health["status"] == "UNKNOWN"
-                        else self._board_next_gate(state, review)
-                    )
-                ),
+                "next_gate": next_gate,
+                "attention": self._board_attention(health, next_gate),
             }
             items.append(item)
             counts[lifecycle] = counts.get(lifecycle, 0) + 1
-            health_counts[health["status"]] = health_counts.get(health["status"], 0) + 1
+            health_counts[health["status"]] = (
+                health_counts.get(health["status"], 0) + 1
+            )
+
+        by_id = {item["experiment_id"]: item for item in items}
+        attention_ids = [
+            item["experiment_id"]
+            for item in sorted(
+                items,
+                key=lambda row: (
+                    (
+                        row["attention"]["priority"]
+                        if row["attention"]["required"]
+                        else 99
+                    ),
+                    int(row["experiment_id"].removeprefix("EXP-")),
+                ),
+            )
+            if item["attention"]["required"]
+        ]
+        active_ids = [
+            item["experiment_id"]
+            for item in items
+            if item["lifecycle"] not in {"ARCHIVED", "REJECTED"}
+        ]
+        archive_ids = [
+            item["experiment_id"]
+            for item in items
+            if item["lifecycle"] == "ARCHIVED"
+        ]
+
+        groups: dict[str, dict[str, Any]] = {}
+        for item in items:
+            key = f'{item["subject_type"]}:{item["subject_id"]}'
+            group = groups.setdefault(
+                key,
+                {
+                    "subject": item["subject"],
+                    "experiment_ids": [],
+                    "counts_by_lifecycle": {},
+                    "counts_by_health": {},
+                    "attention_count": 0,
+                },
+            )
+            group["experiment_ids"].append(item["experiment_id"])
+            lifecycle_counts = group["counts_by_lifecycle"]
+            lifecycle_counts[item["lifecycle"]] = (
+                lifecycle_counts.get(item["lifecycle"], 0) + 1
+            )
+            group_health = group["counts_by_health"]
+            group_health[item["health"]] = group_health.get(item["health"], 0) + 1
+            if item["attention"]["required"]:
+                group["attention_count"] += 1
+
+        prototype_groups = []
+        for group in groups.values():
+            group["experiment_ids"].sort(
+                key=lambda value: int(value.removeprefix("EXP-"))
+            )
+            group["count"] = len(group["experiment_ids"])
+            group["active_count"] = sum(
+                1
+                for experiment_id in group["experiment_ids"]
+                if by_id[experiment_id]["lifecycle"]
+                not in {"ARCHIVED", "REJECTED"}
+            )
+            group["archived_count"] = sum(
+                1
+                for experiment_id in group["experiment_ids"]
+                if by_id[experiment_id]["lifecycle"] == "ARCHIVED"
+            )
+            latest = max(
+                group["experiment_ids"],
+                key=lambda value: (
+                    str(by_id[value].get("created_at") or ""),
+                    int(value.removeprefix("EXP-")),
+                ),
+            )
+            group["latest_experiment_id"] = latest
+            group["latest_created_at"] = by_id[latest].get("created_at")
+            group["counts_by_lifecycle"] = dict(
+                sorted(group["counts_by_lifecycle"].items())
+            )
+            group["counts_by_health"] = dict(
+                sorted(group["counts_by_health"].items())
+            )
+            prototype_groups.append(group)
+
+        prototype_groups.sort(
+            key=lambda group: (
+                0 if group["attention_count"] else 1,
+                str(group["subject"].get("name") or ""),
+            )
+        )
+
+        branch_lanes = [
+            {
+                "experiment_id": item["experiment_id"],
+                "subject_name": item["subject_name"],
+                "lifecycle": item["lifecycle"],
+                "parent_sha": item["parent_sha"],
+                "branch_ref": item["branch_ref"],
+                "base_tag_ref": item["base_tag_ref"],
+                "final_tag_ref": item["final_tag_ref"],
+                "candidate_id": item["candidate_id"],
+                "rehearsal_id": item["rehearsal_id"],
+                "integration_id": item["integration_id"],
+                "archive_id": item["archive_id"],
+            }
+            for item in items
+        ]
 
         return {
             "status": "PASS",
@@ -926,9 +1161,29 @@ class GameExpClient:
             "repository_name": self.transport.repo.split("/", 1)[-1],
             "snapshot_head": snapshot_head,
             "count": len(items),
+            "attention_count": len(attention_ids),
             "counts_by_lifecycle": dict(sorted(counts.items())),
             "counts_by_health": dict(sorted(health_counts.items())),
             "experiments": items,
+            "views": {
+                "overview": {
+                    "attention_ids": attention_ids,
+                    "active_ids": active_ids,
+                    "archived_count": len(archive_ids),
+                },
+                "attention": {
+                    "experiment_ids": attention_ids,
+                },
+                "prototypes": {
+                    "groups": prototype_groups,
+                },
+                "branches": {
+                    "lanes": branch_lanes,
+                },
+                "archive": {
+                    "experiment_ids": archive_ids,
+                },
+            },
         }
 
     @staticmethod
