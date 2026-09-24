@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
@@ -109,6 +111,8 @@ def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateConte
         "run_id",
         "run_attempt",
         "policy_digest",
+        "dependency_lock_digest",
+        "environment_digest",
     )
     fields = {name: input_value.get(name) for name in names}
     if not all(isinstance(value, str) and value for value in fields.values()):
@@ -129,6 +133,8 @@ def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateConte
     run_id = fields["run_id"]
     run_attempt = fields["run_attempt"]
     policy_digest = fields["policy_digest"]
+    dependency_lock_digest = fields["dependency_lock_digest"]
+    environment_digest = fields["environment_digest"]
 
     match = re.fullmatch(r"EXP-([1-9][0-9]*)", experiment_id)
     if not match:
@@ -174,6 +180,8 @@ def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateConte
         "game-exp-run-id": run_id,
         "game-exp-run-attempt": run_attempt,
         "game-exp-policy-digest": policy_digest,
+        "game-exp-dependency-lock-digest": dependency_lock_digest,
+        "game-exp-environment-digest": environment_digest,
         "game-exp-release-tag": release_tag,
     }
     for key, value in expected_metadata.items():
@@ -215,6 +223,24 @@ def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateConte
             code="DOMAIN_CANDIDATE_CONFLICT",
         )
 
+    lock_data = github_json(
+        repo,
+        f"/contents/package-lock.json?ref={urllib.parse.quote(source_sha, safe='')}",
+    )
+    encoded_lock = lock_data.get("content")
+    if lock_data.get("encoding") != "base64" or not isinstance(encoded_lock, str):
+        raise DomainError("candidate dependency lock cannot be read from source")
+    try:
+        lock_bytes = base64.b64decode(encoded_lock, validate=False)
+    except Exception as exc:
+        raise DomainError("candidate dependency lock base64 is invalid") from exc
+    actual_lock_digest = "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+    if actual_lock_digest != dependency_lock_digest:
+        raise DomainError(
+            "candidate dependency lock digest mismatch",
+            code="DOMAIN_CANDIDATE_CONFLICT",
+        )
+
     run_data = github_json(
         repo,
         f"/actions/runs/{urllib.parse.quote(run_id, safe='')}",
@@ -250,6 +276,8 @@ def resolve_trusted_candidate(repo: str, payload: dict) -> TrustedCandidateConte
         run_id=run_id,
         run_attempt=run_attempt,
         policy_digest=policy_digest,
+        dependency_lock_digest=dependency_lock_digest,
+        environment_digest=environment_digest,
         release_tag=release_tag,
     )
 
