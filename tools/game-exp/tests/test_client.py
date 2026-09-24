@@ -127,6 +127,33 @@ class ClientTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
+    def _add_valid_board_binding(
+        self,
+        transport: FakeTransport,
+        experiment_id: str,
+        manifest: dict,
+    ):
+        request_id = "req_bind_" + experiment_id.lower().replace("-", "_")
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.bind",
+            "input": {"manifest": manifest},
+            "preconditions": {},
+        }
+        digest = digest_object(payload)
+        transport._ledger_json[f"experiments/{experiment_id}/binding.json"] = {
+            "request_id": request_id,
+            "inputs_digest": digest,
+            "initialization": {"manifest_digest": digest_object(manifest)},
+        }
+        transport._ledger_json[f"operations/{request_id}.json"] = {
+            "request_id": request_id,
+            "payload_digest": digest,
+            "payload": payload,
+        }
+        return request_id
+
     def test_submit_then_reconcile_committed(self):
         transport = FakeTransport()
         client = GameExpClient(transport)
@@ -382,6 +409,17 @@ class ClientTests(unittest.TestCase):
             }
         )
 
+        self._add_valid_board_binding(
+            transport,
+            "EXP-7",
+            transport._ledger_json["experiments/EXP-7/manifest.json"],
+        )
+        self._add_valid_board_binding(
+            transport,
+            "EXP-21",
+            transport._ledger_json["experiments/EXP-21/manifest.json"],
+        )
+
         result = GameExpClient(transport).board()
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["snapshot_head"], transport.head)
@@ -390,6 +428,7 @@ class ClientTests(unittest.TestCase):
             result["counts_by_lifecycle"],
             {"ARCHIVED": 1, "REVIEW": 1},
         )
+        self.assertEqual(result["counts_by_health"], {"PASS": 2})
         self.assertEqual(
             [row["experiment_id"] for row in result["experiments"]],
             ["EXP-7", "EXP-21"],
@@ -403,6 +442,8 @@ class ClientTests(unittest.TestCase):
             "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK",
         )
         self.assertEqual(result["experiments"][1]["review_outcome"], "PASS")
+        self.assertEqual(result["experiments"][0]["health"], "PASS")
+        self.assertEqual(result["experiments"][1]["health"], "PASS")
         self.assertEqual(transport.last_ledger_paths_ref, transport.head)
         self.assertTrue(transport._ledger_json_refs)
         self.assertTrue(
@@ -426,9 +467,48 @@ class ClientTests(unittest.TestCase):
                 },
             }
         )
+        self._add_valid_board_binding(
+            transport,
+            "EXP-9",
+            transport._ledger_json["experiments/EXP-9/manifest.json"],
+        )
         result = GameExpClient(transport).board()
         self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["experiments"][0]["health"], "PASS")
         self.assertEqual(result["experiments"][0]["next_gate"], "ARCHIVE_RECOVERY")
+
+    def test_board_blocks_corrupted_binding_request_digest(self):
+        transport = FakeTransport()
+        manifest = {
+            "title": "Corrupt pilot",
+            "hypothesis": "must not be actionable",
+            "experiment": {"issue_number": "19"},
+        }
+        transport._ledger_paths = [
+            "experiments/EXP-19/state.json",
+            "experiments/EXP-19/manifest.json",
+            "experiments/EXP-19/binding.json",
+        ]
+        transport._ledger_json["experiments/EXP-19/state.json"] = {
+            "experiment_id": "EXP-19",
+            "lifecycle": "ACTIVE",
+            "archive_lock": None,
+        }
+        transport._ledger_json["experiments/EXP-19/manifest.json"] = manifest
+        request_id = self._add_valid_board_binding(transport, "EXP-19", manifest)
+        transport._ledger_json[f"operations/{request_id}.json"]["payload"]["input"][
+            "manifest"
+        ]["title"] = "mutated after digest"
+
+        result = GameExpClient(transport).board()
+        row = result["experiments"][0]
+        self.assertEqual(row["health"], "FAIL")
+        self.assertEqual(
+            row["health_code"],
+            "BINDING_REQUEST_PAYLOAD_DIGEST_MISMATCH",
+        )
+        self.assertEqual(row["next_gate"], "DO_NOT_USE_RECREATE_EXPERIMENT")
+        self.assertEqual(result["counts_by_health"], {"FAIL": 1})
 
     def test_candidate_dispatches_trusted_workflow(self):
         transport = FakeTransport()

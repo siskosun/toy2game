@@ -27,12 +27,14 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
    - Experiment
    - Title
    - Lifecycle
+   - Health
    - Candidate / Review
    - Rehearsal / Integration / Archive
    - Next gate
-4. Put experiments needing a human gate at the top of the explanation, but do not rank or auto-decide the human outcome.
-5. If the Board returns `UNKNOWN`, report the snapshot error and do not fill missing rows from local Git state or memory.
-6. For a requested action on one experiment, follow the Board with `game_exp_experiment_get` before mutating it.
+4. Treat `health=FAIL` as blocked: show the health code prominently and never recommend lifecycle work for that experiment. If the next gate is `DO_NOT_USE_RECREATE_EXPERIMENT`, tell the user to create a fresh experiment instead.
+5. Put blocked/invalid experiments first, then experiments needing a human gate. Do not rank or auto-decide the human outcome.
+6. If the Board returns `UNKNOWN`, report the snapshot error and do not fill missing rows from local Git state or memory.
+7. For a requested action on one experiment, follow the Board with `game_exp_experiment_get` before mutating it.
 
 This is the current Codex panel experience. Do not claim that it is a persistent graphical MCP Apps panel; it is a Harness-native read-only Board rendered from structured MCP data.
 

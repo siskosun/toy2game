@@ -718,6 +718,62 @@ class GameExpClient:
                 result[key] = None
         return result
 
+    def _board_experiment_health(
+        self,
+        experiment_id: str,
+        manifest: dict[str, Any],
+        snapshot_head: str,
+    ) -> dict[str, str]:
+        binding = self.transport.ledger_json(
+            f"experiments/{experiment_id}/binding.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(binding, dict):
+            return {"status": "UNKNOWN", "code": "BINDING_MISSING"}
+
+        request_id = binding.get("request_id")
+        inputs_digest = binding.get("inputs_digest")
+        initialization = binding.get("initialization")
+        if (
+            not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(inputs_digest, str)
+            or not isinstance(initialization, dict)
+        ):
+            return {"status": "FAIL", "code": "BINDING_RECORD_INVALID"}
+
+        request = self.transport.ledger_json(
+            f"operations/{request_id}.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(request, dict):
+            return {"status": "UNKNOWN", "code": "BINDING_REQUEST_MISSING"}
+
+        stored_digest = request.get("payload_digest")
+        payload = request.get("payload")
+        if not isinstance(stored_digest, str) or not isinstance(payload, dict):
+            return {"status": "FAIL", "code": "BINDING_REQUEST_INVALID"}
+
+        actual_digest = digest_object(payload)
+        if actual_digest != stored_digest:
+            return {
+                "status": "FAIL",
+                "code": "BINDING_REQUEST_PAYLOAD_DIGEST_MISMATCH",
+            }
+        if inputs_digest != stored_digest:
+            return {
+                "status": "FAIL",
+                "code": "BINDING_INPUTS_DIGEST_MISMATCH",
+            }
+
+        manifest_digest = initialization.get("manifest_digest")
+        if not isinstance(manifest_digest, str):
+            return {"status": "FAIL", "code": "BINDING_MANIFEST_DIGEST_MISSING"}
+        if digest_object(manifest) != manifest_digest:
+            return {"status": "FAIL", "code": "BINDING_MANIFEST_DIGEST_MISMATCH"}
+
+        return {"status": "PASS", "code": "BINDING_CHAIN_VERIFIED"}
+
     def board(self) -> dict[str, Any]:
         try:
             snapshot_head = self.transport.ledger_head()
@@ -746,6 +802,7 @@ class GameExpClient:
 
         items: list[dict[str, Any]] = []
         counts: dict[str, int] = {}
+        health_counts: dict[str, int] = {}
         for experiment_id in experiment_ids:
             state = self.transport.ledger_json(
                 f"experiments/{experiment_id}/state.json",
@@ -773,6 +830,12 @@ class GameExpClient:
                     "reason": "board_state_invalid",
                     "experiment_id": experiment_id,
                 }
+
+            health = self._board_experiment_health(
+                experiment_id,
+                manifest,
+                snapshot_head,
+            )
 
             review_id = state.get("current_review_id")
             review = None
@@ -804,10 +867,21 @@ class GameExpClient:
                 "integration_id": state.get("current_integration_id"),
                 "archive_id": state.get("current_archive_id"),
                 "archive_lock": state.get("archive_lock"),
-                "next_gate": self._board_next_gate(state, review),
+                "health": health["status"],
+                "health_code": health["code"],
+                "next_gate": (
+                    "DO_NOT_USE_RECREATE_EXPERIMENT"
+                    if health["status"] == "FAIL"
+                    else (
+                        "VERIFY_EXPERIMENT_HEALTH"
+                        if health["status"] == "UNKNOWN"
+                        else self._board_next_gate(state, review)
+                    )
+                ),
             }
             items.append(item)
             counts[lifecycle] = counts.get(lifecycle, 0) + 1
+            health_counts[health["status"]] = health_counts.get(health["status"], 0) + 1
 
         return {
             "status": "PASS",
@@ -815,6 +889,7 @@ class GameExpClient:
             "snapshot_head": snapshot_head,
             "count": len(items),
             "counts_by_lifecycle": dict(sorted(counts.items())),
+            "counts_by_health": dict(sorted(health_counts.items())),
             "experiments": items,
         }
 
