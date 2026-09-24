@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,19 @@ def prepare_candidate(
     if not SHA_RE.fullmatch(source_sha):
         raise CandidateControlError("experiment source SHA is invalid")
 
+    lock_data = github_json(
+        repo,
+        f"/contents/package-lock.json?ref={urllib.parse.quote(source_sha, safe='')}",
+    )
+    encoded_lock = lock_data.get("content")
+    if lock_data.get("encoding") != "base64" or not isinstance(encoded_lock, str):
+        raise CandidateControlError("package-lock.json cannot be read at candidate source")
+    try:
+        lock_bytes = base64.b64decode(encoded_lock, validate=False)
+    except Exception as exc:
+        raise CandidateControlError("package-lock.json base64 is invalid") from exc
+    dependency_lock_digest = "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+
     tag_ref = f"refs/tags/exp-base/{issue}"
     tag_ref_data = github_json(
         repo,
@@ -142,6 +156,7 @@ def prepare_candidate(
         "base_tag_ref": tag_ref,
         "initialization_commit": init_sha,
         "manifest_digest": binding["initialization"]["manifest_digest"],
+        "dependency_lock_digest": dependency_lock_digest,
         "candidate_id": candidate_id,
         "source_anchor_ref": source_anchor_ref,
         "release_tag": release_tag,
@@ -164,6 +179,8 @@ def candidate_payload(
     run_id: str,
     run_attempt: str,
     policy_digest: str,
+    dependency_lock_digest: str,
+    environment_digest: str,
     release_tag: str,
 ) -> dict[str, Any]:
     checks = [
@@ -184,6 +201,8 @@ def candidate_payload(
             "run_id": run_id,
             "run_attempt": run_attempt,
             "policy_digest": policy_digest,
+            "dependency_lock_digest": dependency_lock_digest,
+            "environment_digest": environment_digest,
             "checks": checks,
             "retention": {
                 "provider": "github-immutable-release",
@@ -218,6 +237,8 @@ def main() -> int:
         "run-id",
         "run-attempt",
         "policy-digest",
+        "dependency-lock-digest",
+        "environment-digest",
         "release-tag",
     ):
         payload.add_argument("--" + name, required=True)
@@ -245,6 +266,8 @@ def main() -> int:
         run_id=args.run_id,
         run_attempt=args.run_attempt,
         policy_digest=args.policy_digest,
+        dependency_lock_digest=args.dependency_lock_digest,
+        environment_digest=args.environment_digest,
         release_tag=args.release_tag,
     )
     raw = canonical_json_bytes(value)
