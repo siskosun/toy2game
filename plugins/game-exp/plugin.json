@@ -1,22 +1,32 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.1.3",
-  "description": "Trusted game experiment workflow for Codex using the game-exp MCP control plane.",
+  "version": "0.2.0",
+  "description": "Trusted game experiment workflow for ChatGPT and Codex using the game-exp MCP control plane.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
     "experiments",
+    "mcp",
+    "chatgpt",
     "codex"
   ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "Run trusted game experiments with a Codex Board",
+        "shortDescription": "Run trusted game experiments in ChatGPT and Codex",
+        "longDescription": "Orchestrate protected-Ledger game experiments with human Review and selection gates, trusted Rehearsal, Integration, and recoverable Archive.",
         "developerName": "toy2game",
         "category": "Productivity",
-        "defaultPrompt": "Open the game-exp Board, summarize experiments that need attention, and tell me the next valid gate without crossing any human decision."
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Open the game-exp Board and tell me which experiments need attention without crossing a human gate.",
+          "Continue the current game-exp experiment until the next human decision is required."
+        ]
       }
     }
   }
