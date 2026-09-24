@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import DomainError  # noqa: E402
-from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_rehearsal, resolve_trusted_retention, resolve_trusted_selection_rehearsal  # noqa: E402
+from trusted_writer import resolve_trusted_actor, resolve_trusted_binding, resolve_trusted_candidate, resolve_trusted_integration, resolve_trusted_rehearsal, resolve_trusted_retention, resolve_trusted_selection_rehearsal  # noqa: E402
 
 
 def payload():
@@ -505,6 +505,126 @@ class TrustedResolverTests(unittest.TestCase):
                     root,
                 )
         self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
+
+    def _integration_context_value(self):
+        return {
+            "experiment_id": "EXP-21",
+            "candidate_id": "C-21-123-1",
+            "rehearsal_id": "R-21-456-1",
+            "integration_id": "I-21-PR-77",
+            "pr_number": "77",
+            "pr_id": "9001",
+            "pr_url": "https://github.com/owner/repo/pull/77",
+            "head_ref": "game-exp/integration/21/R-21-456-1",
+            "head_sha": "a" * 40,
+            "head_tree_sha": "b" * 40,
+            "merge_sha": "c" * 40,
+            "merge_tree_sha": "b" * 40,
+            "merged_at": "2026-09-24T16:30:00Z",
+            "merged_by_login": "reviewer",
+            "merged_by_user_id": "101",
+            "workflow_source_sha": "d" * 40,
+            "run_id": "789",
+            "run_attempt": "1",
+        }
+
+    @patch("trusted_writer.github_json")
+    def test_integration_resolver_rechecks_pr_trees_ancestry_and_workflow(self, api):
+        import json
+        import tempfile
+
+        value = self._integration_context_value()
+        api.side_effect = [
+            {
+                "id": 9001,
+                "html_url": value["pr_url"],
+                "merged": True,
+                "merged_at": value["merged_at"],
+                "merged_by": {"login": "reviewer", "id": 101},
+                "base": {"ref": "main"},
+                "head": {
+                    "ref": value["head_ref"],
+                    "sha": value["head_sha"],
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "merge_commit_sha": value["merge_sha"],
+            },
+            {"tree": {"sha": value["head_tree_sha"]}},
+            {"tree": {"sha": value["merge_tree_sha"]}},
+            {
+                "status": "ahead",
+                "merge_base_commit": {"sha": value["merge_sha"]},
+            },
+            {
+                "run_attempt": 1,
+                "event": "workflow_dispatch",
+                "path": ".github/workflows/game-exp-integration-finalize.yml",
+                "head_sha": value["workflow_source_sha"],
+                "status": "in_progress",
+            },
+        ]
+        payload = {
+            "kind": "operation_request",
+            "operation": "integration.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "integration.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            ctx = resolve_trusted_integration(
+                "owner/repo",
+                payload,
+                authority="integration",
+                context_path=str(path),
+            )
+        self.assertEqual(ctx.integration_id, "I-21-PR-77")
+        self.assertEqual(ctx.merge_tree_sha, "b" * 40)
+        self.assertEqual(api.call_count, 5)
+
+    @patch("trusted_writer.github_json")
+    def test_integration_resolver_rejects_merge_not_in_main_history(self, api):
+        import json
+        import tempfile
+
+        value = self._integration_context_value()
+        api.side_effect = [
+            {
+                "id": 9001,
+                "html_url": value["pr_url"],
+                "merged": True,
+                "merged_at": value["merged_at"],
+                "merged_by": {"login": "reviewer", "id": 101},
+                "base": {"ref": "main"},
+                "head": {
+                    "ref": value["head_ref"],
+                    "sha": value["head_sha"],
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "merge_commit_sha": value["merge_sha"],
+            },
+            {"tree": {"sha": value["head_tree_sha"]}},
+            {"tree": {"sha": value["merge_tree_sha"]}},
+            {
+                "status": "diverged",
+                "merge_base_commit": {"sha": "9" * 40},
+            },
+        ]
+        payload = {
+            "kind": "operation_request",
+            "operation": "integration.register",
+            "input": {"experiment_id": "EXP-21"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "integration.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(DomainError) as ctx:
+                resolve_trusted_integration(
+                    "owner/repo",
+                    payload,
+                    authority="integration",
+                    context_path=str(path),
+                )
+        self.assertEqual(ctx.exception.code, "DOMAIN_INTEGRATION_CONFLICT")
 
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
