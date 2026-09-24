@@ -80,16 +80,44 @@ The repository also contains a three-platform GitHub Actions workflow named `gam
 
 ## Codex MCP
 
-Phase 2B exposes the already-validated request core through the official Python MCP SDK v2. The MCP adapter does not write Git refs itself and does not add domain lifecycle authority.
+The Codex adapter uses the official Python MCP SDK v2 over stdio and delegates to the same validated Client / Trusted Domain Core. MCP never gets direct Git authority.
 
-Tools:
+Normal Harness use should prefer domain tools:
 
-- `game_exp_status`: read repository/Ledger status.
-- `game_exp_doctor`: inspect trust prerequisites.
-- `game_exp_request_get`: reconcile one request from remote evidence.
-- `game_exp_request_submit`: submit one operation envelope through the Trusted Writer.
+Read / projection:
+- `game_exp_status`
+- `game_exp_doctor`
+- `game_exp_experiment_get`
+- `game_exp_request_get`
 
-`game_exp_request_submit` returning `ACCEPTED` means only that GitHub accepted the workflow dispatch. It does **not** mean the requested domain operation has been executed. Resolve it with `game_exp_request_get` until it becomes `COMMITTED`, `CONFLICT`, `REJECTED`, or remains `UNKNOWN`.
+Lifecycle / workflow:
+- `game_exp_experiment_bind`
+- `game_exp_initialize`
+- `game_exp_candidate_build`
+- `game_exp_review_record`
+- `game_exp_decision_submit`
+- `game_exp_rehearse`
+- `game_exp_integrate`
+- `game_exp_integrate_finalize`
+- `game_exp_archive`
+- `game_exp_archive_abort`
+
+Low-level fallback:
+- `game_exp_request_submit`
+
+Typical Codex flow:
+
+1. Call `game_exp_experiment_get` before changing an existing experiment.
+2. Use the domain tool for the next lifecycle action.
+3. If a request-style tool returns `ACCEPTED` or `UNKNOWN`, resolve it with `game_exp_request_get`.
+4. Re-read `game_exp_experiment_get` after the authoritative mutation lands.
+5. Never infer success from a button/tool call alone; the protected Ledger and trusted workflows remain authoritative.
+
+`game_exp_review_record` defaults to the current Candidate when candidate_id is omitted. `game_exp_decision_submit` defaults to the current protected `last_decision_id` when previous_decision_id is omitted, preserving optimistic-concurrency binding without forcing the user to copy IDs manually.
+
+The MCP caller does not authenticate Review or Decision authority. The Trusted Writer independently resolves the GitHub actor and repository permission.
+
+`game_exp_experiment_bind` uses `manifest.operation_id` as its request id. If a request_id is also supplied, it must match exactly.
 
 Install the MCP dependency into an isolated local environment:
 
@@ -113,9 +141,9 @@ Verify:
 codex mcp list
 ```
 
-Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire; operational logging must go to stderr.
+Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire.
 
-This is intentionally a minimal MCP surface. Domain-specific tools such as `experiment_create`, `decision_submit`, and `archive_experiment` should not be exposed until the Trusted Core validates and applies those domain transitions rather than merely persisting an operation request.
+The production Experiment Board is still deferred. On the tested Codex 0.155.1 host, MCP Apps rendering remains behind disabled under-development feature flags. The domain tools and experiment projection are designed so a future Board can consume the same authoritative model without becoming the authority.
 
 
 ## Source initialization

@@ -172,6 +172,36 @@ class GitHubTransport:
             )
         return url
 
+    def dispatch_candidate(self, experiment_id: str) -> str:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        proc = _run(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "game-exp-candidate.yml",
+                "--repo",
+                self.repo,
+                "--ref",
+                "main",
+                "-f",
+                f"experiment_id={experiment_id}",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "candidate dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                "candidate dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
     def dispatch_rehearsal(self, experiment_id: str) -> str:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
             raise ClientError("experiment_id must be EXP-<positive integer>")
@@ -589,6 +619,97 @@ class GameExpClient:
         }
         self._write_journal(result)
         return result
+
+    def experiment_get(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json"
+        )
+        if state is None:
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "reason": "experiment_not_found_in_ledger",
+            }
+        binding = self.transport.ledger_json(
+            f"experiments/{experiment_id}/binding.json"
+        )
+        manifest = self.transport.ledger_json(
+            f"experiments/{experiment_id}/manifest.json"
+        )
+
+        result: dict[str, Any] = {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "state": state,
+            "binding": binding,
+            "manifest": manifest,
+        }
+        current_paths = {
+            "candidate": (
+                state.get("current_candidate_id"),
+                "candidates",
+            ),
+            "review": (
+                state.get("current_review_id"),
+                "reviews",
+            ),
+            "rehearsal": (
+                state.get("current_rehearsal_id"),
+                "rehearsals",
+            ),
+            "integration": (
+                state.get("current_integration_id"),
+                "integrations",
+            ),
+            "archive": (
+                state.get("current_archive_id"),
+                "archives",
+            ),
+        }
+        for key, (object_id, folder) in current_paths.items():
+            if isinstance(object_id, str) and object_id:
+                result[key] = self.transport.ledger_json(
+                    f"experiments/{experiment_id}/{folder}/{object_id}.json"
+                )
+            else:
+                result[key] = None
+        return result
+
+    def candidate(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        try:
+            workflow_url = self.transport.dispatch_candidate(experiment_id)
+        except TransportUncertainError as exc:
+            return {
+                "status": "UNKNOWN",
+                "reason": "candidate_dispatch_outcome_uncertain",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": str(exc),
+                "retry_safe": False,
+            }
+        return {
+            "status": "ACCEPTED",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "workflow_url": workflow_url,
+        }
 
     def initialize(self, experiment_id: str) -> dict[str, Any]:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
