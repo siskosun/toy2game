@@ -47,12 +47,32 @@ def game_exp_experiment_bind(
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Submit a canonical experiment Manifest for trusted GitHub identity binding."""
-    return _client(repo).submit(
+    """Submit a canonical experiment Manifest for trusted GitHub identity binding.
+
+    The protocol binds Manifest operation_id to the request id. If request_id is
+    omitted, manifest.operation_id is used as the idempotency key.
+    """
+    client = _client(repo)
+    manifest_request_id = manifest.get("operation_id")
+    if not isinstance(manifest_request_id, str) or not manifest_request_id:
+        return {
+            "status": "REJECTED",
+            "repo": client.transport.repo,
+            "error": "manifest.operation_id is required",
+        }
+    if request_id is not None and request_id != manifest_request_id:
+        return {
+            "status": "REJECTED",
+            "repo": client.transport.repo,
+            "request_id": request_id,
+            "manifest_operation_id": manifest_request_id,
+            "error": "request_id must equal manifest.operation_id",
+        }
+    return client.submit(
         operation="experiment.bind",
         input_value={"manifest": manifest},
         actor_claim=actor_claim,
-        request_id=request_id,
+        request_id=manifest_request_id,
     )
 
 
