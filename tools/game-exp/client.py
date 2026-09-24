@@ -15,6 +15,7 @@ from protocol_core import (
 )
 
 RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:$|[/?#])")
+EXPERIMENT_ID_RE = re.compile(r"^EXP-[1-9][0-9]*$")
 
 
 class ClientError(RuntimeError):
@@ -138,6 +139,36 @@ class GitHubTransport:
         if not RUN_URL_RE.search(url):
             raise TransportUncertainError(
                 "workflow dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
+    def dispatch_initializer(self, experiment_id: str) -> str:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        proc = _run(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "game-exp-source-initializer.yml",
+                "--repo",
+                self.repo,
+                "--ref",
+                "main",
+                "-f",
+                f"experiment_id={experiment_id}",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                "source initializer dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                "source initializer dispatch returned no run URL; outcome is uncertain"
             )
         return url
 
@@ -372,6 +403,32 @@ class GameExpClient:
         }
         self._write_journal(result)
         return result
+
+    def initialize(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        try:
+            workflow_url = self.transport.dispatch_initializer(experiment_id)
+        except TransportUncertainError as exc:
+            return {
+                "status": "UNKNOWN",
+                "reason": "initializer_dispatch_outcome_uncertain",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": str(exc),
+                "retry_safe": True,
+            }
+        return {
+            "status": "ACCEPTED",
+            "repo": self.transport.repo,
+            "experiment_id": experiment_id,
+            "workflow_url": workflow_url,
+        }
 
     def reconcile(self, request_id: str) -> dict[str, Any]:
         rid = validate_request_id(request_id)
