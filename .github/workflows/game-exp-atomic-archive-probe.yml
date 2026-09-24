@@ -1,0 +1,52 @@
+name: game-exp atomic archive probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  atomic-archive-race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Run stale-executor archive race
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="$(git rev-parse HEAD)"
+          branch="game-exp-test/archive-actions"
+          tag="game-exp-test/archive-actions-final"
+
+          git push origin ":refs/heads/$branch" >/dev/null 2>&1 || true
+          git push origin ":refs/tags/$tag" >/dev/null 2>&1 || true
+          git push origin "$base:refs/heads/$branch"
+
+          git switch --detach "$base"
+          printf 'concurrent B\n' > game-exp-archive-actions.txt
+          git add game-exp-archive-actions.txt
+          git commit -m "game-exp archive concurrent B"
+          b="$(git rev-parse HEAD)"
+          git push origin "$b:refs/heads/$branch"
+
+          set +e
+          out="$(git push --atomic --force-with-lease="refs/heads/$branch:$base" origin "$base:refs/tags/$tag" ":refs/heads/$branch" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          test "$code" -ne 0
+
+          remote_branch="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          remote_tag="$(git ls-remote origin "refs/tags/$tag" | cut -f1)"
+          printf 'BASE=%s\nB=%s\nREMOTE_BRANCH=%s\nREMOTE_TAG=%s\n' "$base" "$b" "$remote_branch" "$remote_tag"
+          test "$remote_branch" = "$b"
+          test -z "$remote_tag"
+
+          git push origin ":refs/heads/$branch"
