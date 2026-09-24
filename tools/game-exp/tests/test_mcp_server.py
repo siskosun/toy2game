@@ -27,6 +27,22 @@ class FakeClient:
     def status(self):
         return {"repo": "owner/repo", "ledger_head": "a" * 40}
 
+    def board(self):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "snapshot_head": "a" * 40,
+            "count": 1,
+            "counts_by_lifecycle": {"REVIEW": 1},
+            "experiments": [
+                {
+                    "experiment_id": "EXP-21",
+                    "lifecycle": "REVIEW",
+                    "next_gate": "HUMAN_REVIEW",
+                }
+            ],
+        }
+
     def doctor(self, experiment_id=None):
         return {
             "status": "PASS",
@@ -114,6 +130,7 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_status",
                 "game_exp_doctor",
                 "game_exp_experiment_get",
+                "game_exp_board",
                 "game_exp_experiment_bind",
                 "game_exp_initialize",
                 "game_exp_candidate_build",
@@ -143,6 +160,7 @@ class MCPServerTests(unittest.TestCase):
             "game_exp_status",
             "game_exp_doctor",
             "game_exp_experiment_get",
+            "game_exp_board",
             "game_exp_request_get",
         ):
             ann = tools[name].annotations
@@ -180,6 +198,13 @@ class MCPServerTests(unittest.TestCase):
     def test_experiment_projection_delegates_to_client(self, _):
         result = mcp_server.game_exp_experiment_get("EXP-21", "owner/repo")
         self.assertEqual(result["state"]["lifecycle"], "REVIEW")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_board_projection_delegates_to_client(self, _):
+        result = mcp_server.game_exp_board("owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["experiments"][0]["next_gate"], "HUMAN_REVIEW")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_review_defaults_to_current_candidate(self, _):
