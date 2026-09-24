@@ -300,6 +300,64 @@ class GitHubTransport:
             )
         return url
 
+    def ledger_json(self, path: str) -> dict[str, Any] | None:
+        endpoint = (
+            f"repos/{self.repo}/contents/{path}"
+            "?ref=game-exp%2Fledger"
+        )
+        proc = _run(
+            [
+                "gh",
+                "api",
+                "-H",
+                "Accept: application/vnd.github.raw+json",
+                endpoint,
+            ],
+            check=False,
+        )
+        if proc.returncode != 0:
+            text = (proc.stdout + "\n" + proc.stderr).lower()
+            if "404" in text or "not found" in text:
+                return None
+            raise ClientError(
+                f"failed reading Ledger JSON {path} ({proc.returncode}): {proc.stderr}"
+            )
+        try:
+            value = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise ClientError(f"Ledger JSON is invalid at {path}") from exc
+        if not isinstance(value, dict):
+            raise ClientError(f"Ledger JSON must be an object at {path}")
+        return value
+
+    def git_ref(self, ref_path: str) -> dict[str, Any] | None:
+        proc = _run(
+            ["gh", "api", f"repos/{self.repo}/git/ref/{ref_path}"],
+            check=False,
+        )
+        if proc.returncode != 0:
+            text = (proc.stdout + "\n" + proc.stderr).lower()
+            if "404" in text or "not found" in text:
+                return None
+            raise ClientError(
+                f"failed reading Git ref {ref_path} ({proc.returncode}): {proc.stderr}"
+            )
+        value = _json_output(proc)
+        if not isinstance(value, dict):
+            raise ClientError(f"Git ref response must be an object: {ref_path}")
+        return value
+
+    def annotated_tag(self, tag_object_sha: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{40}", tag_object_sha):
+            raise ClientError("annotated tag object SHA must be 40 lowercase hex")
+        proc = _run(
+            ["gh", "api", f"repos/{self.repo}/git/tags/{tag_object_sha}"],
+        )
+        value = _json_output(proc)
+        if not isinstance(value, dict):
+            raise ClientError("annotated tag response must be an object")
+        return value
+
     def ledger_record(self, request_id: str) -> dict[str, Any] | None:
         validate_request_id(request_id)
         endpoint = (
@@ -826,7 +884,167 @@ class GameExpClient:
             "ledger_head": self.transport.ledger_head(),
         }
 
-    def doctor(self) -> dict[str, Any]:
+    def archive_health(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_EXPERIMENT_ID_INVALID",
+                "experiment_id": experiment_id,
+            }
+        issue = experiment_id.removeprefix("EXP-")
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json"
+        )
+        if state is None:
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_STATE_MISSING",
+                "experiment_id": experiment_id,
+            }
+        if state.get("lifecycle") != "ARCHIVED":
+            return {
+                "status": "UNKNOWN",
+                "code": "EXPERIMENT_NOT_ARCHIVED",
+                "experiment_id": experiment_id,
+                "lifecycle": state.get("lifecycle"),
+            }
+        archive_id = state.get("current_archive_id")
+        if not isinstance(archive_id, str):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_ID_MISSING",
+                "experiment_id": experiment_id,
+            }
+        record = self.transport.ledger_json(
+            f"experiments/{experiment_id}/archives/{archive_id}.json"
+        )
+        if not isinstance(record, dict) or record.get("phase") != "COMMITTED":
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_RECORD_INVALID",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+            }
+
+        mode = record.get("mode")
+        expected = record.get("expected_branch_sha")
+        branch_ref = record.get("branch_ref")
+        final_ref = record.get("final_tag_ref")
+        if (
+            mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}
+            or not isinstance(expected, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", expected)
+            or branch_ref != f"refs/heads/exp/{issue}"
+            or final_ref != f"refs/tags/exp-final/{issue}"
+        ):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_RECORD_INVALID",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+            }
+
+        final = self.transport.git_ref(f"tags/exp-final/{issue}")
+        if final is None:
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_FINAL_TAG_MISSING",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+            }
+        obj = final.get("object") or {}
+        if obj.get("type") != "tag" or not isinstance(obj.get("sha"), str):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_FINAL_TAG_NOT_ANNOTATED",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+            }
+        tag = self.transport.annotated_tag(obj["sha"])
+        target = tag.get("object") or {}
+        if target.get("type") != "commit" or target.get("sha") != expected:
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_FINAL_TAG_TARGET_MISMATCH",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+                "expected": expected,
+                "actual": target.get("sha"),
+            }
+        metadata: dict[str, str] = {}
+        message = tag.get("message")
+        if not isinstance(message, str):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_FINAL_TAG_METADATA_MISSING",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+            }
+        for line in message.splitlines():
+            if ": " in line:
+                key, value = line.split(": ", 1)
+                metadata[key.strip()] = value.strip()
+        expected_metadata = {
+            "game-exp-experiment": experiment_id,
+            "game-exp-archive-id": archive_id,
+            "game-exp-mode": mode,
+            "game-exp-source-sha": expected,
+        }
+        if any(metadata.get(k) != v for k, v in expected_metadata.items()):
+            return {
+                "status": "FAIL",
+                "code": "ARCHIVE_FINAL_TAG_METADATA_MISMATCH",
+                "experiment_id": experiment_id,
+                "archive_id": archive_id,
+                "metadata": metadata,
+            }
+
+        branch = self.transport.git_ref(f"heads/exp/{issue}")
+        branch_sha = None
+        if branch is not None:
+            bobj = branch.get("object") or {}
+            if bobj.get("type") != "commit" or not isinstance(bobj.get("sha"), str):
+                return {
+                    "status": "FAIL",
+                    "code": "ARCHIVE_BRANCH_REF_INVALID",
+                    "experiment_id": experiment_id,
+                    "archive_id": archive_id,
+                }
+            branch_sha = bobj["sha"]
+
+        base = {
+            "experiment_id": experiment_id,
+            "archive_id": archive_id,
+            "mode": mode,
+            "official_snapshot_sha": expected,
+            "final_tag_ref": final_ref,
+            "branch_ref": branch_ref,
+            "branch_sha": branch_sha,
+        }
+        if mode == "ATOMIC_DELETE":
+            if branch_sha is None:
+                return {"status": "PASS", "code": "ARCHIVE_HEALTHY", **base}
+            return {
+                "status": "FAIL",
+                "code": "POST_ARCHIVE_BRANCH_RESURRECTED",
+                **base,
+            }
+
+        if branch_sha is None:
+            return {
+                "status": "FAIL",
+                "code": "POST_ARCHIVE_BRANCH_MISSING",
+                **base,
+            }
+        if branch_sha == expected:
+            return {"status": "PASS", "code": "ARCHIVE_HEALTHY", **base}
+        return {
+            "status": "WARN",
+            "code": "POST_ARCHIVE_BRANCH_DRIFT",
+            **base,
+        }
+
+    def doctor(self, experiment_id: str | None = None) -> dict[str, Any]:
         checks: list[dict[str, Any]] = []
 
         def add(name: str, status: str, detail: Any = None):
@@ -892,14 +1110,29 @@ class GameExpClient:
                 immutable,
             )
 
+        archive_health = None
+        if experiment_id is not None:
+            try:
+                archive_health = self.archive_health(experiment_id)
+                add(
+                    "archive_health",
+                    archive_health["status"],
+                    archive_health,
+                )
+            except Exception as exc:
+                add("archive_health", "UNKNOWN", str(exc))
+
         overall = "PASS"
         if any(c["status"] == "FAIL" for c in checks):
             overall = "FAIL"
         elif any(c["status"] == "UNKNOWN" for c in checks):
             overall = "UNKNOWN"
+        elif any(c["status"] == "WARN" for c in checks):
+            overall = "WARN"
 
         return {
             "status": overall,
             "repo": self.transport.repo,
+            "experiment_id": experiment_id,
             "checks": checks,
         }
