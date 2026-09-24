@@ -1,0 +1,147 @@
+name: game-exp trusted writer selftest
+
+on:
+  workflow_run:
+    workflows: ["game-exp cross-platform probe"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  trusted-writer-selftest:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted control source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/trusted_writer.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Prepare trusted writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Run five protocol cases
+        shell: bash
+        env:
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          writer="control/tools/game-exp/trusted_writer.py"
+          repo="$GITHUB_REPOSITORY"
+          run_id="$GITHUB_RUN_ID"
+          attempt="$GITHUB_RUN_ATTEMPT"
+
+          head0="$(git ls-remote "https://github.com/$repo.git" refs/heads/game-exp/ledger | cut -f1)"
+          test -n "$head0"
+
+          normal_payload='{"case":"normal","schema_version":1,"type":"trusted-writer-selftest"}'
+          normal_b64="$(printf '%s' "$normal_payload" | base64 -w0)"
+          normal_id="req-selftest-normal-$run_id"
+
+          python "$writer"             --repo "$repo" --request-id "$normal_id" --expected-head "$head0"             --payload-b64 "$normal_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" | tee evidence/normal.json
+          python - <<'PY'
+          import json
+          x=json.load(open("evidence/normal.json",encoding="utf-8"))
+          assert x["status"]=="COMMITTED" and x["replayed"] is False, x
+          PY
+
+          python "$writer"             --repo "$repo" --request-id "$normal_id" --expected-head "$head0"             --payload-b64 "$normal_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" | tee evidence/idempotent.json
+          python - <<'PY'
+          import json
+          x=json.load(open("evidence/idempotent.json",encoding="utf-8"))
+          assert x["status"]=="COMMITTED" and x["replayed"] is True, x
+          PY
+
+          conflict_payload='{"case":"different-payload","schema_version":1,"type":"trusted-writer-selftest"}'
+          conflict_b64="$(printf '%s' "$conflict_payload" | base64 -w0)"
+          set +e
+          python "$writer"             --repo "$repo" --request-id "$normal_id" --expected-head "$head0"             --payload-b64 "$conflict_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" > evidence/request-conflict.json
+          conflict_code=$?
+          set -e
+          test "$conflict_code" -eq 43
+          python - <<'PY'
+          import json
+          x=json.load(open("evidence/request-conflict.json",encoding="utf-8"))
+          assert x["status"]=="REQUEST_ID_CONFLICT", x
+          PY
+
+          stale_payload='{"case":"stale-head","schema_version":1,"type":"trusted-writer-selftest"}'
+          stale_b64="$(printf '%s' "$stale_payload" | base64 -w0)"
+          set +e
+          python "$writer"             --repo "$repo" --request-id "req-selftest-stale-$run_id" --expected-head "$head0"             --payload-b64 "$stale_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" > evidence/stale-head.json
+          stale_code=$?
+          set -e
+          test "$stale_code" -eq 42
+          python - <<'PY'
+          import json
+          x=json.load(open("evidence/stale-head.json",encoding="utf-8"))
+          assert x["status"]=="HEAD_CONFLICT", x
+          PY
+
+          head1="$(git ls-remote "https://github.com/$repo.git" refs/heads/game-exp/ledger | cut -f1)"
+          lost_payload='{"case":"lost-response","schema_version":1,"type":"trusted-writer-selftest"}'
+          lost_b64="$(printf '%s' "$lost_payload" | base64 -w0)"
+          lost_id="req-selftest-lost-$run_id"
+
+          # First commit: its response is deliberately discarded to model an uncertain client outcome.
+          python "$writer"             --repo "$repo" --request-id "$lost_id" --expected-head "$head1"             --payload-b64 "$lost_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" >/dev/null
+
+          # Retry with the original expected head must recover from the durable remote record.
+          python "$writer"             --repo "$repo" --request-id "$lost_id" --expected-head "$head1"             --payload-b64 "$lost_b64" --ssh-key "$GAME_EXP_WRITER_KEY_PATH"             --run-id "$run_id" --run-attempt "$attempt"             --workflow-source-sha "$WORKFLOW_SOURCE_SHA" | tee evidence/lost-response-retry.json
+          python - <<'PY'
+          import json
+          x=json.load(open("evidence/lost-response-retry.json",encoding="utf-8"))
+          assert x["status"]=="COMMITTED" and x["replayed"] is True, x
+          PY
+
+      - name: Prove ordinary GITHUB_TOKEN still cannot write Ledger
+        shell: bash
+        env:
+          GH_TOKEN_VALUE: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/token-negative"
+          git clone --single-branch --branch game-exp/ledger             "https://x-access-token:$GH_TOKEN_VALUE@github.com/$GITHUB_REPOSITORY.git" "$work"
+          cd "$work"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '{"negative_control":true}\n' > "token-negative-$GITHUB_RUN_ID.json"
+          git add .
+          git commit -m "negative token writer probe"
+
+          set +e
+          git push origin HEAD:game-exp/ledger >"$RUNNER_TEMP/token-push.out" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/token-push.out"
+          test "$code" -ne 0
+          grep -Eq 'GH013|Cannot update this protected ref|rule violations' "$RUNNER_TEMP/token-push.out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-trusted-writer-selftest-${{ github.run_id }}
+          path: evidence/*.json
+          retention-days: 30
+          if-no-files-found: error
