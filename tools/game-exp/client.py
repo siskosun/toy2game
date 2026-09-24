@@ -718,6 +718,40 @@ class GameExpClient:
                 result[key] = None
         return result
 
+    @staticmethod
+    def _board_prototype_name(manifest: dict[str, Any]) -> str | None:
+        scope = manifest.get("scope")
+        if not isinstance(scope, dict):
+            return None
+        allowed = scope.get("allowed")
+        if not isinstance(allowed, list):
+            return None
+
+        names: set[str] = set()
+        ambiguous_game_scope = False
+        for pattern in allowed:
+            if not isinstance(pattern, str):
+                continue
+            parts = pattern.split("/")
+            if not parts or parts[0] != "games":
+                continue
+            if len(parts) < 2:
+                ambiguous_game_scope = True
+                continue
+            segment = parts[1]
+            if not segment or any(ch in segment for ch in "*?[]{}"):
+                ambiguous_game_scope = True
+                continue
+            names.add(segment)
+
+        if len(names) == 1:
+            return next(iter(names))
+        if len(names) > 1:
+            return " / ".join(sorted(names))
+        if ambiguous_game_scope:
+            return "仓库级/未指定原型"
+        return None
+
     def _board_experiment_health(
         self,
         experiment_id: str,
@@ -853,9 +887,12 @@ class GameExpClient:
                     issue_number = raw_issue
 
             item = {
+                "repository": self.transport.repo,
+                "repository_name": self.transport.repo.split("/", 1)[-1],
                 "experiment_id": experiment_id,
                 "issue_number": issue_number,
                 "title": manifest.get("title"),
+                "prototype_name": self._board_prototype_name(manifest),
                 "hypothesis": manifest.get("hypothesis"),
                 "lifecycle": lifecycle,
                 "candidate_id": state.get("current_candidate_id"),
@@ -886,6 +923,7 @@ class GameExpClient:
         return {
             "status": "PASS",
             "repo": self.transport.repo,
+            "repository_name": self.transport.repo.split("/", 1)[-1],
             "snapshot_head": snapshot_head,
             "count": len(items),
             "counts_by_lifecycle": dict(sorted(counts.items())),
