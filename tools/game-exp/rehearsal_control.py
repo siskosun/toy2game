@@ -158,6 +158,18 @@ def integration_tree(args: argparse.Namespace) -> dict[str, Any]:
             f"working tree HEAD differs from expected main: {head} != {args.main_sha}"
         )
 
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.base_sha, args.source_sha],
+        cwd=repo_dir,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if ancestry.returncode != 0:
+        raise RehearsalControlError(
+            "Candidate source is not a descendant of the authoritative binding parent"
+        )
+
     raw = _git(
         [
             "diff",
