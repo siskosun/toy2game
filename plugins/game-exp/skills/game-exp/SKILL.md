@@ -17,6 +17,25 @@ Use game-exp as the experiment control plane. Use normal Codex editing/Git capab
 6. Do not weaken scope, Rulesets, retention, Rehearsal freshness, or Archive recovery semantics to make a workflow pass.
 7. For archived experiments, treat the immutable final tag as the official source snapshot. Do not recreate the deleted `exp/*` branch to "restore" the experiment.
 
+## Codex Board
+
+When the user asks to open the game-exp panel, Board, dashboard, experiment list, or experiment overview:
+
+1. Call `game_exp_board`.
+2. Treat it as a read-only projection over one protected-Ledger snapshot. Never derive authority from the rendered Board itself.
+3. Present a compact Board in Codex with these columns when available:
+   - Experiment
+   - Title
+   - Lifecycle
+   - Candidate / Review
+   - Rehearsal / Integration / Archive
+   - Next gate
+4. Put experiments needing a human gate at the top of the explanation, but do not rank or auto-decide the human outcome.
+5. If the Board returns `UNKNOWN`, report the snapshot error and do not fill missing rows from local Git state or memory.
+6. For a requested action on one experiment, follow the Board with `game_exp_experiment_get` before mutating it.
+
+This is the current Codex panel experience. Do not claim that it is a persistent graphical MCP Apps panel; it is a Harness-native read-only Board rendered from structured MCP data.
+
 ## Start every workflow from authoritative state
 
 - Call `game_exp_status` when repository/Ledger identity is not already established.
