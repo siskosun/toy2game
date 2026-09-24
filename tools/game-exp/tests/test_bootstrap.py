@@ -62,6 +62,17 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual([x["name"] for x in data["plugins"]], ["other", "game-exp"])
             config = (target / ".codex/config.toml").read_text(encoding="utf-8")
             self.assertIn('game-exp@existing-local', config)
+    def test_second_install_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
+            source, target = pathlib.Path(sd), pathlib.Path(td)
+            self.make_source(source)
+            self.make_target(target)
+            bootstrap = Bootstrapper(source, target, "acme/game")
+            first = bootstrap.install()
+            second = bootstrap.install()
+            self.assertTrue(first)
+            self.assertEqual(second, [])
+
     def test_managed_conflict_fails_before_writes(self):
         with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
             source, target = pathlib.Path(sd), pathlib.Path(td)
