@@ -163,6 +163,7 @@ class RehearsalTests(unittest.TestCase):
             "run_id": "456",
             "run_attempt": "1",
             "policy_digest": rehearsal_policy_digest(),
+            "scope_digest": "sha256:" + "6" * 64,
             "checks": tuple(
                 {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
                 for name in REHEARSAL_REQUIRED_CHECKS
@@ -200,6 +201,7 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(record["source_sha"], self.source_sha)
         self.assertEqual(record["integration_sha"], "2" * 40)
         self.assertEqual(record["integration_tree_sha"], "3" * 40)
+        self.assertEqual(record["scope_digest"], "sha256:" + "6" * 64)
         self.assertEqual(state["lifecycle"], "PROMISING")
         self.assertEqual(state["current_rehearsal_id"], "R-42-456-1")
         self.assertEqual(state["current_rehearsal_candidate_id"], self.candidate_id)
