@@ -24,6 +24,8 @@ class FakeTransport:
         self.logs = ""
         self.dispatch_uncertain = False
         self._ledger_json = {}
+        self._ledger_paths = []
+        self._ledger_json_refs = []
         self._git_refs = {}
         self._tag_objects = {}
         self._rules = [
@@ -80,7 +82,12 @@ class FakeTransport:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/792"
 
-    def ledger_json(self, path):
+    def ledger_paths(self, ref):
+        self.last_ledger_paths_ref = ref
+        return list(self._ledger_paths)
+
+    def ledger_json(self, path, *, ref=None):
+        self._ledger_json_refs.append((path, ref))
         return self._ledger_json.get(path)
 
     def git_ref(self, ref_path):
@@ -328,6 +335,100 @@ class ClientTests(unittest.TestCase):
         result = GameExpClient(FakeTransport()).experiment_get("EXP-99")
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertEqual(result["reason"], "experiment_not_found_in_ledger")
+
+    def test_board_projects_consistent_lightweight_snapshot(self):
+        transport = FakeTransport()
+        transport._ledger_paths = [
+            "experiments/EXP-7/state.json",
+            "experiments/EXP-7/manifest.json",
+            "experiments/EXP-21/state.json",
+            "experiments/EXP-21/manifest.json",
+            "experiments/EXP-21/reviews/req_review.json",
+            "operations/req_other.json",
+        ]
+        transport._ledger_json.update(
+            {
+                "experiments/EXP-7/state.json": {
+                    "experiment_id": "EXP-7",
+                    "lifecycle": "REVIEW",
+                    "current_candidate_id": "C-7-1-1",
+                    "current_review_id": None,
+                    "archive_lock": None,
+                },
+                "experiments/EXP-7/manifest.json": {
+                    "title": "Combat readability",
+                    "hypothesis": "roles improve readability",
+                    "experiment": {"issue_number": "7"},
+                },
+                "experiments/EXP-21/state.json": {
+                    "experiment_id": "EXP-21",
+                    "lifecycle": "ARCHIVED",
+                    "current_candidate_id": "C-21-1-1",
+                    "current_review_id": "req_review",
+                    "current_rehearsal_id": "R-21-2-1",
+                    "current_integration_id": "I-21-PR-3",
+                    "current_archive_id": "A-21-1",
+                    "archive_lock": None,
+                },
+                "experiments/EXP-21/manifest.json": {
+                    "title": "Binding pilot",
+                    "hypothesis": "trusted binding works",
+                    "experiment": {"issue_number": "21"},
+                },
+                "experiments/EXP-21/reviews/req_review.json": {
+                    "review_id": "req_review",
+                    "outcome": "PASS",
+                },
+            }
+        )
+
+        result = GameExpClient(transport).board()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["snapshot_head"], transport.head)
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(
+            result["counts_by_lifecycle"],
+            {"ARCHIVED": 1, "REVIEW": 1},
+        )
+        self.assertEqual(
+            [row["experiment_id"] for row in result["experiments"]],
+            ["EXP-7", "EXP-21"],
+        )
+        self.assertEqual(
+            result["experiments"][0]["next_gate"],
+            "HUMAN_REVIEW",
+        )
+        self.assertEqual(
+            result["experiments"][1]["next_gate"],
+            "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK",
+        )
+        self.assertEqual(result["experiments"][1]["review_outcome"], "PASS")
+        self.assertEqual(transport.last_ledger_paths_ref, transport.head)
+        self.assertTrue(transport._ledger_json_refs)
+        self.assertTrue(
+            all(ref == transport.head for _path, ref in transport._ledger_json_refs)
+        )
+
+    def test_board_marks_archive_lock_as_recovery_gate(self):
+        transport = FakeTransport()
+        transport._ledger_paths = ["experiments/EXP-9/state.json"]
+        transport._ledger_json.update(
+            {
+                "experiments/EXP-9/state.json": {
+                    "experiment_id": "EXP-9",
+                    "lifecycle": "INTEGRATED",
+                    "archive_lock": {"archive_id": "A-9-1", "phase": "CLAIMED"},
+                },
+                "experiments/EXP-9/manifest.json": {
+                    "title": "Archive recovery",
+                    "hypothesis": "recover same archive",
+                    "experiment": {"issue_number": "9"},
+                },
+            }
+        )
+        result = GameExpClient(transport).board()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["experiments"][0]["next_gate"], "ARCHIVE_RECOVERY")
 
     def test_candidate_dispatches_trusted_workflow(self):
         transport = FakeTransport()
