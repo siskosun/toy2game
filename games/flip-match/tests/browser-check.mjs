@@ -65,6 +65,9 @@ for (const engine of process.env.CHECK_ENGINE ? process.env.CHECK_ENGINE.split('
       await page.waitForTimeout(380); await page.screenshot({ path: `${artifacts}${engine}-${name}-playing.png`, fullPage: true });
       await button(page, '暂停游戏').click(); const paused = await state(page); await page.waitForTimeout(1650); assert.deepEqual(await state(page), paused);
       await button(page, '继续游戏').last().click(); await waitTurn(page); assert.equal((await state(page)).current, 1);
+      await expect(page.locator('#status-heading')).toHaveText('从1 号薄荷队交给2 号蜜桃队');
+      await page.screenshot({ path: `${artifacts}${engine}-${name}-handoff.png`, fullPage: true });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await button(page, '游戏设置').click(); await button(page, '4 人').click(); await page.locator('[data-owner="3"][data-bot="true"]').click();
       await page.screenshot({ path: `${artifacts}${engine}-${name}-settings.png`, fullPage: true });
       const targets = await page.locator('.seat-roles button:visible, .count-options button:visible, .header button:visible, #bot-difficulty').evaluateAll(buttons => buttons.map(button => { const r = button.getBoundingClientRect(); return { width: r.width, height: r.height }; }));
@@ -155,6 +158,8 @@ for (const engine of process.env.CHECK_ENGINE ? process.env.CHECK_ENGINE.split('
       const G = await state(page); const first = G.deck.flatMap((face, id) => face === 0 ? [id] : []);
       await tapTile(page, first[0]); await tapTile(page, first[1]); await waitTurn(page);
       assert.deepEqual((await state(page)).scores, [1, 0]); assert.equal((await state(page)).current, 0);
+      await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
+      await expect(page.locator('#status-heading')).toHaveText('好记性！再找一对吧');
       await page.screenshot({ path: `${artifacts}${engine}-collected.png` });
       await button(page, '棋子列表').click();
       for (let face = 1; face < 12; face++) {
@@ -164,6 +169,24 @@ for (const engine of process.env.CHECK_ENGINE ? process.env.CHECK_ENGINE.split('
       await expect(page.locator('#result-dialog')).toBeVisible(); assert.equal((await state(page)).phase, 'finished');
       await expect(page.locator('#result-scores')).toContainText('12'); await page.screenshot({ path: `${artifacts}${engine}-result.png` });
       await button(page, '再来一局').click(); assert.equal((await state(page)).actions.length, 0); assert.equal((await state(page)).settings.pairs, 12);
+    });
+
+    await check('miss-handoff-lifecycle', async page => {
+      await load(page); await configure(page, 2, 12, [false, false]);
+      const G = await state(page), a = 0, b = G.deck.findIndex((face, id) => id !== a && face !== G.deck[a]);
+      await tapTile(page, a); await tapTile(page, b); await waitTurn(page);
+      await expect(page.locator('.turn-copy')).toHaveClass(/handoff/);
+      await expect(page.locator('#status-description')).toContainText('现在请2 号蜜桃队翻两枚');
+      await expect(page.locator('[data-player="1"] .player-state')).toHaveText('接过回合');
+      await button(page, '暂停游戏').click(); await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
+      await button(page, '继续游戏').last().click(); await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
+      const after = await state(page), c = after.owners.findIndex((owner, id) => owner < 0 && id !== a && id !== b);
+      await tapTile(page, c); await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
+      await page.reload(); await expect(page.locator('#loading')).toHaveCount(0); await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
+      assert.equal((await state(page)).current, 1);
+      const resumed = await state(page), d = resumed.deck.findIndex((face, id) => id !== c && id !== a && id !== b && face !== resumed.deck[c]);
+      await tapTile(page, d); await waitTurn(page); await expect(page.locator('.turn-copy')).toHaveClass(/handoff/);
+      await page.waitForTimeout(2600); await expect(page.locator('.turn-copy')).not.toHaveClass(/handoff/);
     });
 
     await check('robots-pause-background-and-cancel-old-game', async page => {

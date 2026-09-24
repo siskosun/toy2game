@@ -22,6 +22,7 @@ let game = new MatchGame(settings, undefined, restored ?? undefined), scene: Mat
 let activeDialog: HTMLDialogElement | null = null, returnFocus: HTMLElement | null = null;
 let userPaused = false, unavailable = false, resultShown = false, resultDelay = 0, lastTime = 0;
 let lastRevision = -1, lastReady = false;
+let handoffFrom: number | null = null, handoffUntil = 0;
 let draftCount = settings.count, draftPairs = settings.pairs, draftBots = [...settings.bots], draftDifficulty = settings.difficulty;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 const audio = new GameAudio(), listeners = new AbortController(), signal = listeners.signal;
@@ -58,7 +59,7 @@ $('#app').innerHTML = `
 function toast(message: string) { clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').hidden = false; toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 3000); }
 function syncPause() {
   game.paused = userPaused || Boolean(activeDialog) || document.hidden || unavailable;
-  if (game.paused) scene?.cancelGesture(); audio.suspend(game.paused);
+  if (game.paused) { handoffFrom = null; scene?.cancelGesture(); } audio.suspend(game.paused);
   $('#paused-state').hidden = !userPaused || Boolean(activeDialog) || unavailable;
   const label = userPaused ? '继续游戏' : '暂停游戏'; $('#pause-button').innerHTML = glyph(userPaused ? 'play' : 'pause');
   $('#pause-button').setAttribute('aria-label', label); $('#pause-button').dataset.tooltip = label;
@@ -88,14 +89,17 @@ function buildPlayers() {
 }
 function render() {
   const G = game.state, total = G.scores.reduce((a, b) => a + b, 0), current = G.current;
+  const handoff = handoffFrom !== null && G.phase === 'first' && G.last === 'miss';
   lastRevision = G.actions.length; lastReady = game.ready;
   $('#matched-count').textContent = String(total).padStart(2, '0'); $('#total-pairs').textContent = String(settings.pairs); $('#attempt-count').textContent = String(G.attempts).padStart(2, '0');
   $('#turn-label').textContent = G.phase === 'finished' ? '所有好朋友都找到啦' : `${teamName(current)}的回合`;
   $('#turn-role').textContent = G.phase === 'finished' ? '已完成' : game.isBot ? `${BOT_LEVELS[settings.difficulty].label}机器人` : '真人';
   const isMatch = G.open.length === 2 && G.deck[G.open[0]] === G.deck[G.open[1]];
-  const heading = G.phase === 'finished' ? '每一次相遇，都成了一对' : game.paused ? '棋子留在这里，等你回来' : G.phase === 'settling' ? isMatch ? '是一对！收进你的小口袋' : '记住它们，下次再相遇' : game.isBot ? '小机器人正在回忆…' : G.phase === 'second' ? '另一位好朋友，藏在哪里？' : G.last === 'match' ? '好记性！再找一对吧' : G.last === 'miss' ? '轮到你啦，翻开两枚棋子' : '翻开两枚，找到好朋友';
+  const heading = G.phase === 'finished' ? '每一次相遇，都成了一对' : game.paused ? '棋子留在这里，等你回来' : G.phase === 'settling' ? isMatch ? '是一对！收进你的小口袋' : '记住它们，下次再相遇' : handoff ? `从${teamName(handoffFrom!)}交给${teamName(current)}` : game.isBot ? '小机器人正在回忆…' : G.phase === 'second' ? '另一位好朋友，藏在哪里？' : G.last === 'match' ? '好记性！再找一对吧' : G.last === 'miss' ? '轮到你啦，翻开两枚棋子' : '翻开两枚，找到好朋友';
   $('#status-heading').textContent = heading;
-  $('#status-description').textContent = G.phase === 'finished' ? `共找到 ${total} 对，尝试了 ${G.attempts} 次。` : G.phase === 'settling' ? isMatch ? '每对 1 分，配对成功可以继续翻。' : '稍后盖回棋子，轮到下一位小伙伴。' : G.phase === 'second' ? `已翻开${FACES[G.deck[G.open[0]]]}，再选一枚棋子。` : '记住每一次相遇，下一对也许就在那里。';
+  $('#status-description').textContent = G.phase === 'finished' ? `共找到 ${total} 对，尝试了 ${G.attempts} 次。` : G.phase === 'settling' ? isMatch ? '每对 1 分，配对成功可以继续翻。' : '稍后盖回棋子，轮到下一位小伙伴。' : handoff ? `没有配对，棋子已盖回。现在请${teamName(current)}翻两枚。` : G.phase === 'second' ? `已翻开${FACES[G.deck[G.open[0]]]}，再选一枚棋子。` : '记住每一次相遇，下一对也许就在那里。';
+  $('.turn-copy').classList.toggle('handoff', handoff && !game.paused);
+  $('.turn-copy').style.setProperty('--handoff-color', TEAMS[current].ink);
   $('#announcement').textContent = `${$('#turn-label').textContent}。${heading}。${$('#status-description').textContent}`;
   for (let i = 0; i < 2; i++) {
     const id = G.open[i], reveal = $(`#reveal-${i}`);
@@ -105,7 +109,7 @@ function render() {
   for (let i = 0; i < settings.count; i++) {
     $(`[data-player="${i}"]`).classList.toggle('active', current === i && G.phase !== 'finished');
     $(`#score-${i}`).textContent = String(G.scores[i]);
-    $(`#player-state-${i}`).textContent = G.phase === 'finished' ? winners(G).includes(i) ? '记忆小高手' : '配对完成' : current === i ? game.paused ? '暂停中' : game.isBot ? '正在回忆' : '轮到你啦' : '等待回合';
+    $(`#player-state-${i}`).textContent = G.phase === 'finished' ? winners(G).includes(i) ? '记忆小高手' : '配对完成' : current === i ? game.paused ? '暂停中' : handoff ? '接过回合' : game.isBot ? '正在回忆' : '轮到你啦' : '等待回合';
     const collected = [...new Set(G.deck.filter((_, id) => G.owners[id] === i))];
     $(`#collection-${i}`).innerHTML = collected.length ? collected.slice(-4).map(face => `<img src="${faceImage(face)}" alt="已找到${FACES[face]}一对"/>`).join('') + (collected.length > 4 ? `<small>+${collected.length - 4}</small>` : '') : '<span>小口袋等你装满</span>';
   }
@@ -121,9 +125,15 @@ function frame() {
   const now = performance.now(), dt = lastTime ? Math.min((now - lastTime) / 1000, 0.05) : 0; lastTime = now;
   const G = game.state;
   if (G.actions.length !== lastRevision) {
+    const wasRendered = lastRevision >= 0;
     const action = G.actions.at(-1); if (!game.paused && action) audio.play(action.type === 'flip' ? 'flip' : G.last === 'match' ? 'match' : 'miss');
+    if (wasRendered && action?.type === 'settle' && G.last === 'miss' && G.phase === 'first') {
+      handoffFrom = (G.current + settings.count - 1) % settings.count; handoffUntil = now + 2400;
+    }
+    else handoffFrom = null;
     saveMatch(G); render();
-  } else if (lastReady !== game.ready) render();
+  } else if (handoffFrom !== null && now >= handoffUntil) { handoffFrom = null; render(); }
+  else if (lastReady !== game.ready) render();
   if (G.phase === 'finished' && !resultShown && !game.paused) { resultDelay += dt; if (resultDelay >= 0.75) { audio.play('win'); showResult(); } }
 }
 function showResult() {
@@ -135,9 +145,9 @@ function showResult() {
 }
 function restart() {
   audio.stop(); audio.unlock(); game.dispose(); game = new MatchGame(settings); resultShown = false; resultDelay = 0; userPaused = false;
-  lastRevision = -1; lastTime = 0; scene?.setGame(game); buildPlayers(); closeDialog(); saveMatch(game.state); exposeDiagnostics();
+  handoffFrom = null; lastRevision = -1; lastTime = 0; scene?.setGame(game); buildPlayers(); closeDialog(); saveMatch(game.state); exposeDiagnostics();
 }
-function flipTile(id: number) { audio.unlock(); if (game.flip(id)) { saveMatch(game.state); render(); audio.play('flip'); } }
+function flipTile(id: number) { audio.unlock(); if (game.flip(id)) { handoffFrom = null; saveMatch(game.state); render(); audio.play('flip'); } }
 function renderDraft() {
   document.querySelectorAll<HTMLElement>('[data-seat]').forEach(row => { row.hidden = Number(row.dataset.seat) >= draftCount; });
   document.querySelectorAll<HTMLElement>('[data-count]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.count) === draftCount)));
