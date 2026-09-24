@@ -23,22 +23,53 @@ Use game-exp as the experiment control plane. Prefer native `game_exp_*` MCP too
 When the user asks to open the game-exp panel, Board, dashboard, experiment list, or experiment overview:
 
 1. If native MCP is available, call `game_exp_board`.
-2. Otherwise use the authorized GitHub connector against the protected `game-exp/ledger` ref:
-   - read the current `refs/heads/game-exp/ledger` SHA;
-   - list `experiments/*/state.json` from that exact Ledger snapshot;
-   - read the matching `manifest.json` and current Candidate/Review/Rehearsal/Integration/Archive records only as needed;
-   - render the same Board columns from that single snapshot.
-3. Never mix records from different Ledger heads in one Board.
-4. Present these columns when available:
-   - Experiment
-   - Title
-   - Lifecycle
-   - Health
-   - Candidate / Review
-   - Rehearsal / Integration / Archive
-   - Next gate
-5. Treat `health=FAIL` as blocked. If the next gate is `DO_NOT_USE_RECREATE_EXPERIMENT`, tell the user to create a fresh experiment; never recommend normal lifecycle work for that record.
-6. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
+2. Otherwise use the authorized GitHub connector against one pinned protected `game-exp/ledger` snapshot.
+3. Render the Board in Chinese by default. Preserve raw lifecycle/health codes in parentheses only when they improve diagnosis.
+4. Show this summary above the table:
+   - `仓库`: full `owner/repo` name;
+   - `Ledger 快照`: pinned Ledger commit SHA;
+   - `实验统计`: total count, lifecycle counts, and abnormal-health count.
+5. Use these table columns:
+   - `实验`
+   - `游戏原型`
+   - `Issue`
+   - `实验标题`
+   - `阶段`
+   - `健康`
+   - `候选 / 评审`
+   - `彩排 / 集成 / 归档`
+   - `下一步`
+6. Resolve `游戏原型` from Board `prototype_name` when available. In GitHub fallback mode derive it from `manifest.scope.allowed`:
+   - a specific `games/<prototype>/**` path -> `<prototype>`;
+   - multiple specific prototypes -> join their names with ` / `;
+   - only broad `games/**` scope -> `仓库级/未指定原型`;
+   - no game scope -> `—`.
+7. Localize lifecycle labels:
+   - `ACTIVE` -> `进行中`
+   - `REVIEW` -> `评审中`
+   - `PROMISING` -> `待选择`
+   - `SELECTED` -> `已选定`
+   - `INTEGRATED` -> `已集成`
+   - `REJECTED` -> `已拒绝`
+   - `ARCHIVED` -> `已归档`.
+8. Localize health labels: `PASS` -> `正常`, `FAIL` -> `异常`, `UNKNOWN` -> `未知`. Keep a non-PASS health code visible.
+9. Localize next gates:
+   - `IMPLEMENT_OR_REVIEW` -> `继续实现 / 进入评审`
+   - `CANDIDATE_BUILD` -> `构建候选版本`
+   - `HUMAN_REVIEW` -> `人工评审`
+   - `HUMAN_PROMOTION` -> `决定是否晋级`
+   - `HUMAN_DECISION` -> `人工决策`
+   - `TRUSTED_REHEARSAL` -> `可信彩排`
+   - `HUMAN_SELECTION_OR_REFRESH_REHEARSAL` -> `人工选择 / 必要时刷新彩排`
+   - `TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL` -> `集成 / 必要时刷新彩排`
+   - `ARCHIVE_OR_RETAIN` -> `选择归档方式`
+   - `ARCHIVE_RECOVERY` -> `恢复归档`
+   - `ARCHIVE` -> `归档`
+   - `TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK` -> `已结束；新工作需新建实验`
+   - `VERIFY_EXPERIMENT_HEALTH` -> `核验实验健康`
+   - `DO_NOT_USE_RECREATE_EXPERIMENT` -> `禁止继续；重建实验`.
+10. Treat `health=FAIL` as blocked. Put abnormal experiments first and never recommend normal lifecycle work for them.
+11. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
