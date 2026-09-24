@@ -65,6 +65,7 @@ Render one compact group per subject:
 Hierarchy is `Repository -> Subject/Prototype -> Experiment`.
 
 Authoritative `manifest.subject` wins. `scope.allowed` inference is legacy fallback only.
+If a legacy manifest has only broad `games/**` scope or no resolvable prototype, display `仓库级/未指定原型` rather than inventing a prototype identity.
 
 ## 分支图
 
