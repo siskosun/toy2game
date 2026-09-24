@@ -297,6 +297,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
             "created_at",
         },
         where="manifest",
+        optional={"subject"},
     )
     if manifest["schema_version"] != 1:
         raise DomainError("manifest.schema_version must equal 1")
@@ -313,6 +314,49 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
 
     _string(manifest["title"], "manifest.title")
     _string(manifest["operation_id"], "manifest.operation_id")
+
+    if "subject" in manifest:
+        subject = _mapping(manifest["subject"], "manifest.subject")
+        _expect_keys(
+            subject,
+            {"type", "id", "name", "root_path"},
+            where="manifest.subject",
+        )
+        subject_type = _string(subject["type"], "manifest.subject.type")
+        if subject_type not in {"game-prototype", "repository"}:
+            raise DomainError(
+                "manifest.subject.type must be game-prototype or repository"
+            )
+        subject_id = _string(subject["id"], "manifest.subject.id")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", subject_id):
+            raise DomainError(
+                "manifest.subject.id must be a stable lowercase slug"
+            )
+        subject_name = _string(subject["name"], "manifest.subject.name")
+        root_path = _string(subject["root_path"], "manifest.subject.root_path")
+        _require_nfc(subject_name, "manifest.subject.name")
+        _require_nfc(root_path, "manifest.subject.root_path")
+        if "\\" in root_path or root_path.startswith("/") or "//" in root_path:
+            raise DomainError(
+                "manifest.subject.root_path must be a normalized relative path"
+            )
+        if any(part in {"", ".."} for part in root_path.split("/")):
+            raise DomainError(
+                "manifest.subject.root_path must not contain empty or parent segments"
+            )
+        if any(ch in root_path for ch in "*?[]{}"):
+            raise DomainError(
+                "manifest.subject.root_path must be a concrete path, not a glob"
+            )
+        if subject_type == "repository":
+            if subject_id != "repository" or root_path != ".":
+                raise DomainError(
+                    "repository subject must use id=repository and root_path=."
+                )
+        elif root_path == ".":
+            raise DomainError(
+                "game-prototype subject must use a concrete prototype root_path"
+            )
 
     parent = _mapping(manifest["parent"], "manifest.parent")
     _expect_keys(parent, {"experiment", "commit"}, where="manifest.parent")
