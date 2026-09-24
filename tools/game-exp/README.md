@@ -77,3 +77,42 @@ python -m unittest discover -s tools/game-exp/tests -v
 ```
 
 The repository also contains a three-platform GitHub Actions workflow named `game-exp core tests`.
+
+## Codex MCP
+
+Phase 2B exposes the already-validated request core through the official Python MCP SDK v2. The MCP adapter does not write Git refs itself and does not add domain lifecycle authority.
+
+Tools:
+
+- `game_exp_status`: read repository/Ledger status.
+- `game_exp_doctor`: inspect trust prerequisites.
+- `game_exp_request_get`: reconcile one request from remote evidence.
+- `game_exp_request_submit`: submit one operation envelope through the Trusted Writer.
+
+`game_exp_request_submit` returning `ACCEPTED` means only that GitHub accepted the workflow dispatch. It does **not** mean the requested domain operation has been executed. Resolve it with `game_exp_request_get` until it becomes `COMMITTED`, `CONFLICT`, `REJECTED`, or remains `UNKNOWN`.
+
+Install the MCP dependency into an isolated local environment:
+
+```powershell
+uv venv .game-exp/mcp-venv
+uv pip install --python .game-exp/mcp-venv/Scripts/python.exe -r tools/game-exp/requirements-mcp.txt
+```
+
+Register the local stdio server with Codex on Windows:
+
+```powershell
+$root = (Get-Location).Path
+codex mcp add game-exp --env GAME_EXP_REPO=siskosun/toy2game -- `
+  "$root\.game-exp\mcp-venv\Scripts\python.exe" `
+  "$root\tools\game-exp\mcp_server.py"
+```
+
+Verify:
+
+```powershell
+codex mcp list
+```
+
+Codex CLI and the IDE extension share MCP configuration. The server uses stdio, so stdout is reserved for the MCP wire; operational logging must go to stderr.
+
+This is intentionally a minimal MCP surface. Domain-specific tools such as `experiment_create`, `decision_submit`, and `archive_experiment` should not be exposed until the Trusted Core validates and applies those domain transitions rather than merely persisting an operation request.
