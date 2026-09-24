@@ -1,0 +1,360 @@
+name: game-exp candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      experiment_id: ${{ steps.prepare.outputs.experiment_id }}
+      issue_number: ${{ steps.prepare.outputs.issue_number }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      manifest_digest: ${{ steps.prepare.outputs.manifest_digest }}
+      dependency_lock_digest: ${{ steps.prepare.outputs.dependency_lock_digest }}
+      candidate_id: ${{ steps.prepare.outputs.candidate_id }}
+      source_anchor_ref: ${{ steps.prepare.outputs.source_anchor_ref }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      policy_digest: ${{ steps.prepare.outputs.policy_digest }}
+      workflow_source_sha: ${{ steps.prepare.outputs.workflow_source_sha }}
+      run_id: ${{ steps.prepare.outputs.run_id }}
+      run_attempt: ${{ steps.prepare.outputs.run_attempt }}
+    steps:
+      - name: Checkout trusted control source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/candidate_control.py
+            tools/game-exp/source_initializer.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Resolve authoritative experiment source
+        id: prepare
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/candidate_control.py prepare \
+            --repo "$GITHUB_REPOSITORY" \
+            --experiment-id "$EXPERIMENT_ID" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --workflow-source-sha "$WORKFLOW_SOURCE_SHA" \
+            | tee "$RUNNER_TEMP/candidate-prepare.json"
+          python - "$RUNNER_TEMP/candidate-prepare.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines()[-1])
+          keys=('experiment_id','issue_number','source_sha','manifest_digest','dependency_lock_digest','candidate_id','source_anchor_ref','release_tag','policy_digest','workflow_source_sha','run_id','run_attempt')
+          with open(sys.argv[2],'a',encoding='utf-8') as out:
+              for key in keys:
+                  out.write(f"{key}={x[key]}\n")
+          PY
+
+  build:
+    needs: prepare
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      node_version: ${{ steps.runtime.outputs.node_version }}
+      runner_os: ${{ steps.runtime.outputs.runner_os }}
+      image_os: ${{ steps.runtime.outputs.image_os }}
+      image_version: ${{ steps.runtime.outputs.image_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Capture runtime facts before project execution
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "node_version=$(node --version)" >> "$GITHUB_OUTPUT"
+          echo "runner_os=${RUNNER_OS}" >> "$GITHUB_OUTPUT"
+          echo "image_os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "image_version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Project tests
+        run: npm test
+      - name: Project build
+        run: npm run build
+      - name: Package exact candidate bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          tar -czf candidate.tgz dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-bytes
+          path: candidate.tgz
+          retention-days: 7
+          if-no-files-found: error
+
+  observe:
+    needs: [prepare, build]
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: candidate-bytes
+      - name: Observe artifact without source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -tzf candidate.tgz > artifact-files.txt
+          grep -q '^dist/index.html$' artifact-files.txt
+          grep -q '^dist/games/' artifact-files.txt
+          printf '%s\n' '{"observer":"trusted-clean-job","source_checkout":false,"artifact":"candidate.tgz"}' > observer.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-observation
+          path: |
+            artifact-files.txt
+            observer.json
+          retention-days: 7
+
+  attest-retain-finalize:
+    needs: [prepare, build, observe]
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted control source only
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/candidate_control.py
+            tools/game-exp/source_initializer.py
+            tools/game-exp/trusted_writer.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v5
+        with:
+          name: candidate-bytes
+      - name: Compute trusted artifact and environment digests
+        id: digest
+        shell: bash
+        env:
+          NODE_VERSION: ${{ needs.build.outputs.node_version }}
+          RUNNER_OS_VALUE: ${{ needs.build.outputs.runner_os }}
+          IMAGE_OS: ${{ needs.build.outputs.image_os }}
+          IMAGE_VERSION: ${{ needs.build.outputs.image_version }}
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum candidate.tgz | cut -d' ' -f1)"
+          printf '%s  candidate.tgz\n' "$sha" > candidate.sha256
+          echo "artifact_digest=sha256:$sha" >> "$GITHUB_OUTPUT"
+          environment_digest="$(python - <<'PY'
+          import os, sys
+          sys.path.insert(0,'control/tools/game-exp')
+          from protocol_core import digest_object
+          value={
+              'runner_os': os.environ['RUNNER_OS_VALUE'],
+              'image_os': os.environ['IMAGE_OS'],
+              'image_version': os.environ['IMAGE_VERSION'],
+              'node_version': os.environ['NODE_VERSION'],
+              'workflow_runner': 'ubuntu-latest',
+          }
+          print(digest_object(value))
+          PY
+          )"
+          echo "environment_digest=$environment_digest" >> "$GITHUB_OUTPUT"
+      - name: Attest candidate provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: candidate.tgz
+      - name: Verify candidate attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify candidate.tgz --repo "${{ github.repository }}"
+      - name: Publish and verify immutable Level-3 retention
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          ARTIFACT_DIGEST: ${{ steps.digest.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" candidate.tgz candidate.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "game-exp candidate $RELEASE_TAG" \
+            --notes "source_sha=$SOURCE_SHA
+          artifact_digest=$ARTIFACT_DIGEST"
+          gh api -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          python - "$RUNNER_TEMP/release.json" "$SOURCE_SHA" "$ARTIFACT_DIGEST" <<'PY'
+          import json, sys
+          x=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert x.get('immutable') is True, x
+          assert x.get('target_commitish') == sys.argv[2], x
+          assets=[a for a in x.get('assets',[]) if a.get('name')=='candidate.tgz']
+          assert len(assets)==1, assets
+          assert assets[0].get('digest') == sys.argv[3], assets[0]
+          assert int(assets[0].get('size',0)) > 0, assets[0]
+          PY
+      - name: Require trusted writer key
+        shell: bash
+        env:
+          WRITER_KEY: ${{ secrets.GAME_EXP_WRITER_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WRITER_KEY"
+          key="$RUNNER_TEMP/game-exp-writer"
+          printf '%s\n' "$WRITER_KEY" > "$key"
+          chmod 600 "$key"
+          echo "GAME_EXP_WRITER_KEY_PATH=$key" >> "$GITHUB_ENV"
+      - name: Create protected immutable Candidate source anchor
+        shell: bash
+        env:
+          EXPERIMENT_ID: ${{ needs.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ needs.prepare.outputs.candidate_id }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SOURCE_ANCHOR_REF: ${{ needs.prepare.outputs.source_anchor_ref }}
+          MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest_digest }}
+          ARTIFACT_DIGEST: ${{ steps.digest.outputs.artifact_digest }}
+          ENVIRONMENT_DIGEST: ${{ steps.digest.outputs.environment_digest }}
+          DEPENDENCY_LOCK_DIGEST: ${{ needs.prepare.outputs.dependency_lock_digest }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.prepare.outputs.workflow_source_sha }}
+          POLICY_DIGEST: ${{ needs.prepare.outputs.policy_digest }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RUN_ID: ${{ needs.prepare.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.prepare.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/candidate-anchor"
+          git init "$work"
+          cd "$work"
+          git config user.name game-exp-candidate-writer
+          git config user.email game-exp-candidate-writer@users.noreply.github.com
+          git remote add origin "git@github.com:$GITHUB_REPOSITORY.git"
+          export GIT_SSH_COMMAND="ssh -i $GAME_EXP_WRITER_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git fetch --no-tags origin "$SOURCE_SHA"
+          tag_name="${SOURCE_ANCHOR_REF#refs/tags/}"
+          cat > "$RUNNER_TEMP/candidate-tag-message.txt" <<EOF
+          game-exp candidate $CANDIDATE_ID
+
+          game-exp-experiment: $EXPERIMENT_ID
+          game-exp-candidate-id: $CANDIDATE_ID
+          game-exp-source-sha: $SOURCE_SHA
+          game-exp-artifact-digest: $ARTIFACT_DIGEST
+          game-exp-manifest-digest: $MANIFEST_DIGEST
+          game-exp-workflow-source-sha: $WORKFLOW_SOURCE_SHA
+          game-exp-run-id: $RUN_ID
+          game-exp-run-attempt: $RUN_ATTEMPT
+          game-exp-policy-digest: $POLICY_DIGEST
+          game-exp-dependency-lock-digest: $DEPENDENCY_LOCK_DIGEST
+          game-exp-environment-digest: $ENVIRONMENT_DIGEST
+          game-exp-release-tag: $RELEASE_TAG
+          EOF
+          git tag -a "$tag_name" "$SOURCE_SHA" -F "$RUNNER_TEMP/candidate-tag-message.txt"
+          git push origin "refs/tags/$tag_name:$SOURCE_ANCHOR_REF"
+      - name: Commit trusted Candidate receipt to protected Ledger
+        shell: bash
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          EXPERIMENT_ID: ${{ needs.prepare.outputs.experiment_id }}
+          CANDIDATE_ID: ${{ needs.prepare.outputs.candidate_id }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SOURCE_ANCHOR_REF: ${{ needs.prepare.outputs.source_anchor_ref }}
+          MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest_digest }}
+          ARTIFACT_DIGEST: ${{ steps.digest.outputs.artifact_digest }}
+          ENVIRONMENT_DIGEST: ${{ steps.digest.outputs.environment_digest }}
+          DEPENDENCY_LOCK_DIGEST: ${{ needs.prepare.outputs.dependency_lock_digest }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.prepare.outputs.workflow_source_sha }}
+          POLICY_DIGEST: ${{ needs.prepare.outputs.policy_digest }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RUN_ID: ${{ needs.prepare.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.prepare.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          python control/tools/game-exp/candidate_control.py payload \
+            --experiment-id "$EXPERIMENT_ID" \
+            --candidate-id "$CANDIDATE_ID" \
+            --source-sha "$SOURCE_SHA" \
+            --source-anchor-ref "$SOURCE_ANCHOR_REF" \
+            --manifest-digest "$MANIFEST_DIGEST" \
+            --artifact-digest "$ARTIFACT_DIGEST" \
+            --workflow-source-sha "$WORKFLOW_SOURCE_SHA" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --policy-digest "$POLICY_DIGEST" \
+            --dependency-lock-digest "$DEPENDENCY_LOCK_DIGEST" \
+            --environment-digest "$ENVIRONMENT_DIGEST" \
+            --release-tag "$RELEASE_TAG" \
+            > "$RUNNER_TEMP/candidate-payload.json"
+          payload_b64="$(python -c "import json; print(json.load(open('$RUNNER_TEMP/candidate-payload.json'))['payload_b64'])")"
+          ledger_head="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/game-exp/ledger | cut -f1)"
+          test -n "$ledger_head"
+          request_id="req-candidate-${RUN_ID}-${RUN_ATTEMPT}"
+          python control/tools/game-exp/trusted_writer.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --request-id "$request_id" \
+            --expected-head "$ledger_head" \
+            --payload-b64 "$payload_b64" \
+            --ssh-key "$GAME_EXP_WRITER_KEY_PATH" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --workflow-source-sha "$WORKFLOW_SOURCE_SHA" \
+            | tee "$RUNNER_TEMP/candidate-ledger-result.json"
+          python - "$RUNNER_TEMP/candidate-ledger-result.json" <<'PY'
+          import json, pathlib, sys
+          x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines()[-1])
+          assert x.get('status') == 'COMMITTED', x
+          assert x.get('domain_status') == 'APPLIED', x
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: candidate-trusted-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate.sha256
+            ${{ runner.temp }}/release.json
+            ${{ runner.temp }}/candidate-tag-message.txt
+            ${{ runner.temp }}/candidate-payload.json
+            ${{ runner.temp }}/candidate-ledger-result.json
+          retention-days: 30
+          if-no-files-found: warn
