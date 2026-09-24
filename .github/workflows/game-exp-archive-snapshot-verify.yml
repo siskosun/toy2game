@@ -54,6 +54,26 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Checkout trusted project policy
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/project_policy.py
+            tools/game-exp/protocol_core.py
+            .game-exp/project-policy.json
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve project adapter
+        id: policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          adapter="$(python -c "import json; print(json.load(open('control/.game-exp/project-policy.json', encoding='utf-8'))['adapter'])")"
+          echo "adapter=$adapter" >> "$GITHUB_OUTPUT"
+
       - name: Verify checkout and manifest
         shell: bash
         env:
@@ -67,18 +87,19 @@ jobs:
           printf '{"checkout_sha":"%s","manifest":"experiments/%s/manifest.yaml"}\n'             "$actual" "$EXPERIMENT_ID" | tee "$RUNNER_TEMP/archive-snapshot-checkout.json"
 
       - uses: actions/setup-node@v6
+        if: steps.policy.outputs.adapter == 'node-npm'
         with:
           node-version-file: .node-version
           cache: npm
 
       - name: Install locked dependencies
-        run: npm ci
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run install --cwd .
 
       - name: Project tests from archived snapshot
-        run: npm test
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run test --cwd .
 
       - name: Project build from archived snapshot
-        run: npm run build
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run build --cwd .
 
       - name: Record cold-handoff evidence
         shell: bash
@@ -88,7 +109,7 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -euo pipefail
-          jq -n             --arg experiment_id "$EXPERIMENT_ID"             --arg tag "$TAG"             --arg target_sha "$TARGET_SHA"             --arg run_id "$GITHUB_RUN_ID"             '{experiment_id:$experiment_id,tag:$tag,target_sha:$target_sha,run_id:$run_id,checkout:"PASS",npm_ci:"PASS",tests:"PASS",build:"PASS"}'             | tee "$RUNNER_TEMP/archive-snapshot-result.json"
+          jq -n             --arg experiment_id "$EXPERIMENT_ID"             --arg tag "$TAG"             --arg target_sha "$TARGET_SHA"             --arg run_id "$GITHUB_RUN_ID"             '{experiment_id:$experiment_id,tag:$tag,target_sha:$target_sha,run_id:$run_id,checkout:"PASS",install:"PASS",tests:"PASS",build:"PASS"}'             | tee "$RUNNER_TEMP/archive-snapshot-result.json"
 
       - uses: actions/upload-artifact@v4
         with:
