@@ -78,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("initialize", help="initialize canonical experiment source refs from Ledger")
     init.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
 
+    rehearse = sub.add_parser("rehearse", help="run trusted latest-main integration rehearsal")
+    rehearse.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+
     return ap
 
 
@@ -111,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
             result = client.reconcile(args.request_id)
         elif args.command == "initialize":
             result = client.initialize(args.experiment_id)
+        elif args.command == "rehearse":
+            result = client.rehearse(args.experiment_id)
         else:
             ap.error("unknown command")
             return 2
