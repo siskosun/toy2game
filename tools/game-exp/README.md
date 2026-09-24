@@ -84,6 +84,31 @@ The trusted workflows load this policy from the immutable `github.workflow_sha`.
 
 This is the extension point for future adapters such as Godot. Adding an adapter should extend `project_policy.py` and its tests rather than duplicating lifecycle workflows.
 
+## Bootstrap into another repository
+
+Run the installer from a checkout that already contains game-exp:
+
+```powershell
+python tools/game-exp/bootstrap.py plan --target C:\path\to\target-repo --repo owner/name
+python tools/game-exp/bootstrap.py install --target C:\path\to\target-repo --repo owner/name
+```
+
+The bootstrap copies the production game-exp tools, lifecycle workflows, Skill/Plugin files, and generates/merges:
+
+- `.game-exp/project-policy.json` for the supported Node/npm adapter;
+- `.agents/plugins/marketplace.json`;
+- `.codex/config.toml` with the target `GAME_EXP_REPO`.
+
+It is fail-closed: a different existing managed game-exp file or conflicting Codex game-exp section stops the install before writes. Existing unrelated marketplace plugins are preserved, and an existing valid project policy is preserved.
+
+The bootstrap deliberately does not create or upload the Trusted Writer private key, repository secret, Rulesets, or Immutable Releases settings. After committing the generated files, configure those repository controls and run:
+
+```powershell
+python tools/game-exp/cli.py --repo owner/name --json doctor
+```
+
+Do not treat bootstrap completion as trust readiness; `doctor` is the verification gate.
+
 ## Tests
 
 ```bash
