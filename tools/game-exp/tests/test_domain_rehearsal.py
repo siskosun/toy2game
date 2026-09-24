@@ -12,8 +12,10 @@ sys.path.insert(0, str(HERE.parents[1]))
 from domain_core import (  # noqa: E402
     DomainError,
     TrustedBindingContext,
+    REHEARSAL_REQUIRED_CHECKS,
     TrustedRehearsalContext,
     plan_domain_mutation,
+    rehearsal_policy_digest,
 )
 from protocol_core import build_operation_payload, digest_object  # noqa: E402
 
@@ -160,15 +162,10 @@ class RehearsalTests(unittest.TestCase):
             "workflow_source_sha": "4" * 40,
             "run_id": "456",
             "run_attempt": "1",
-            "policy_digest": "sha256:" + "5" * 64,
-            "checks": (
-                {"name": "merge", "status": "PASS", "source": "TRUSTED_OBSERVED"},
-                {
-                    "name": "project_tests",
-                    "status": "PASS",
-                    "source": "TRUSTED_OBSERVED",
-                },
-                {"name": "build", "status": "PASS", "source": "TRUSTED_OBSERVED"},
+            "policy_digest": rehearsal_policy_digest(),
+            "checks": tuple(
+                {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+                for name in REHEARSAL_REQUIRED_CHECKS
             ),
         }
         values.update(overrides)
@@ -227,6 +224,21 @@ class RehearsalTests(unittest.TestCase):
         )
         with self.assertRaises(DomainError) as ctx:
             self.plan(self.context(checks=bad))
+        self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
+
+    def test_rehearsal_rejects_policy_digest_drift(self):
+        with self.assertRaises(DomainError) as ctx:
+            self.plan(self.context(policy_digest="sha256:" + "0" * 64))
+        self.assertEqual(ctx.exception.code, "DOMAIN_REHEARSAL_CONFLICT")
+
+    def test_rehearsal_requires_exact_trusted_check_set(self):
+        subset = tuple(
+            {"name": name, "status": "PASS", "source": "TRUSTED_OBSERVED"}
+            for name in REHEARSAL_REQUIRED_CHECKS
+            if name != "scope"
+        )
+        with self.assertRaises(DomainError) as ctx:
+            self.plan(self.context(checks=subset))
         self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
 
     def test_rehearsal_id_and_ref_must_bind_run(self):
