@@ -36,6 +36,8 @@ h1 { margin: 0; font-size: 23px; font-weight: 800; letter-spacing: -0.6px; line-
 .game-layout { flex: 1; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .round-bar { padding: 26px 52px 7px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
 .turn-copy { flex: 1; min-width: 0; }
+.turn-copy.handoff { border-left: 4px solid var(--handoff-color); padding-left: 14px; }
+.turn-copy.handoff h2 { color: var(--handoff-color); }
 .eyebrow { font-size: 10px; color: #85917c; display: flex; align-items: center; gap: 7px; }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #8cab68; box-shadow: 0 0 0 3px #e9eddc; margin-right: 3px; }
 .small-separator { margin: 0 5px; color: #b4bda8; }
