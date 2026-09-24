@@ -43,6 +43,79 @@ def rehearsal_policy_digest() -> str:
     )
 
 
+def _scope_glob_regex(pattern: str) -> re.Pattern[str]:
+    if not isinstance(pattern, str) or not pattern:
+        raise DomainError("scope pattern must be a non-empty string")
+    if "\\" in pattern or pattern.startswith("/") or "//" in pattern:
+        raise DomainError("scope pattern must use normalized relative '/' paths")
+    if unicodedata.normalize("NFC", pattern) != pattern:
+        raise DomainError("scope pattern must be NFC")
+    out: list[str] = ["^"]
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+            continue
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        ch = pattern[i]
+        if ch == "*":
+            out.append("[^/]*")
+        elif ch == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    out.append("$")
+    return re.compile("".join(out))
+
+
+def validate_rehearsal_scope_paths(
+    paths: list[str],
+    *,
+    allowed: list[str],
+    avoid: list[str],
+    manifest_path: str,
+) -> list[str]:
+    if not isinstance(paths, list):
+        raise DomainError("Rehearsal scope paths must be a list")
+    allowed_re = [_scope_glob_regex(pattern) for pattern in allowed]
+    avoid_re = [_scope_glob_regex(pattern) for pattern in avoid]
+    checked: list[str] = []
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            raise DomainError("Rehearsal changed path must be a non-empty string")
+        if (
+            "\\" in path
+            or path.startswith("/")
+            or path.endswith("/")
+            or "//" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or unicodedata.normalize("NFC", path) != path
+        ):
+            raise DomainError(
+                f"Rehearsal changed path is not portable: {path!r}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        if any(regex.fullmatch(path) for regex in avoid_re):
+            raise DomainError(
+                f"Rehearsal changed path matches avoid scope: {path}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        if path != manifest_path and not any(
+            regex.fullmatch(path) for regex in allowed_re
+        ):
+            raise DomainError(
+                f"Rehearsal changed path is outside allowed scope: {path}",
+                code="DOMAIN_SCOPE_VIOLATION",
+            )
+        checked.append(path)
+    return sorted(set(checked))
+
+
 @dataclass(frozen=True)
 class TrustedBindingContext:
     host: str
