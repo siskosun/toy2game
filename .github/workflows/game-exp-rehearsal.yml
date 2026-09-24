@@ -19,7 +19,9 @@ jobs:
       issue_number: ${{ steps.prepare.outputs.issue_number }}
       candidate_id: ${{ steps.prepare.outputs.candidate_id }}
       source_sha: ${{ steps.prepare.outputs.source_sha }}
+      base_sha: ${{ steps.prepare.outputs.base_sha }}
       main_sha: ${{ steps.prepare.outputs.main_sha }}
+      scope_b64: ${{ steps.prepare.outputs.scope_b64 }}
       rehearsal_id: ${{ steps.prepare.outputs.rehearsal_id }}
       rehearsal_ref: ${{ steps.prepare.outputs.rehearsal_ref }}
       policy_digest: ${{ steps.prepare.outputs.policy_digest }}
@@ -35,6 +37,7 @@ jobs:
           path: control
           sparse-checkout: |
             tools/game-exp/rehearsal_control.py
+            tools/game-exp/domain_core.py
             tools/game-exp/protocol_core.py
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v6
@@ -56,8 +59,8 @@ jobs:
           import json, pathlib, sys
           x=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()[-1])
           keys=(
-              "experiment_id","issue_number","candidate_id","source_sha","main_sha",
-              "rehearsal_id","rehearsal_ref","policy_digest","workflow_source_sha",
+              "experiment_id","issue_number","candidate_id","source_sha","base_sha","main_sha",
+              "scope_b64","rehearsal_id","rehearsal_ref","policy_digest","workflow_source_sha",
               "run_id","run_attempt",
           )
           with open(sys.argv[2],"a",encoding="utf-8") as out:
@@ -78,24 +81,38 @@ jobs:
           ref: ${{ needs.prepare.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Fetch exact Candidate source
+      - name: Checkout trusted scope control
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/rehearsal_control.py
+            tools/game-exp/domain_core.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - name: Fetch exact Candidate source and binding base
         shell: bash
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin "$SOURCE_SHA"
-      - name: Merge Candidate onto current main without committing
+          git fetch --no-tags origin "$BASE_SHA"
+      - name: Apply only manifest-scoped Candidate changes
         id: merge
         shell: bash
         env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
+          SCOPE_B64: ${{ needs.prepare.outputs.scope_b64 }}
         run: |
           set -euo pipefail
-          git config user.name game-exp-rehearsal
-          git config user.email game-exp-rehearsal@users.noreply.github.com
-          git merge --no-ff --no-commit "$SOURCE_SHA"
-          tree="$(git write-tree)"
+          python control/tools/game-exp/rehearsal_control.py integration-tree             --repo-dir .             --base-sha "$BASE_SHA"             --source-sha "$SOURCE_SHA"             --main-sha "$MAIN_SHA"             --scope-b64 "$SCOPE_B64"             | tee rehearsal-scope.json
+          tree="$(python -c 'import json; print(json.load(open("rehearsal-scope.json"))["integration_tree_sha"])')"
           test -n "$tree"
           echo "integration_tree_sha=$tree" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v6
@@ -120,13 +137,16 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import json, os, pathlib
+          scope=json.loads(pathlib.Path("rehearsal-scope.json").read_text(encoding="utf-8"))
           value={
               "experiment_id":os.environ["EXPERIMENT_ID"],
               "candidate_id":os.environ["CANDIDATE_ID"],
               "main_sha":os.environ["MAIN_SHA"],
               "source_sha":os.environ["SOURCE_SHA"],
               "integration_tree_sha":os.environ["TREE_SHA"],
+              "scope":scope,
               "checks":{
+                  "scope":"PASS",
                   "merge":"PASS",
                   "project_tests":"PASS",
                   "build":"PASS",
@@ -140,7 +160,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: game-exp-rehearsal-result-${{ github.run_id }}-${{ github.run_attempt }}
-          path: rehearsal-result.json
+          path: |
+            rehearsal-result.json
+            rehearsal-scope.json
           retention-days: 30
           if-no-files-found: error
 
@@ -186,9 +208,10 @@ jobs:
         shell: bash
         env:
           GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-          EXPECTED_TREE: ${{ needs.rehearse.outputs.integration_tree_sha }}
+          SCOPE_B64: ${{ needs.prepare.outputs.scope_b64 }}
         run: |
           set -euo pipefail
           observed_tree="$(python -c 'import json; print(json.load(open("rehearsal-result.json"))["integration_tree_sha"])')"
@@ -198,16 +221,13 @@ jobs:
           git config user.name game-exp-rehearsal-writer
           git config user.email game-exp-rehearsal-writer@users.noreply.github.com
           git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags origin "$BASE_SHA"
           git fetch --no-tags origin "$MAIN_SHA"
           git fetch --no-tags origin "$SOURCE_SHA"
+          git checkout --detach "$MAIN_SHA"
 
-          set +e
-          merge_out="$(git merge-tree --write-tree "$MAIN_SHA" "$SOURCE_SHA" 2>&1)"
-          merge_code=$?
-          set -e
-          printf '%s\n' "$merge_out"
-          test "$merge_code" -eq 0
-          trusted_tree="$(printf '%s\n' "$merge_out" | head -n 1 | tr -d '\r')"
+          python "$GITHUB_WORKSPACE/control/tools/game-exp/rehearsal_control.py" integration-tree             --repo-dir "$work"             --base-sha "$BASE_SHA"             --source-sha "$SOURCE_SHA"             --main-sha "$MAIN_SHA"             --scope-b64 "$SCOPE_B64"             | tee "$RUNNER_TEMP/rehearsal-scope-trusted.json"
+          trusted_tree="$(python -c 'import json; print(json.load(open("'"$RUNNER_TEMP/rehearsal-scope-trusted.json"'"))["integration_tree_sha"])')"
           [[ "$trusted_tree" =~ ^[0-9a-f]{40}$ ]]
           test "$trusted_tree" = "$observed_tree"
 
@@ -275,6 +295,7 @@ jobs:
           game-exp-run-id: $RUN_ID
           game-exp-run-attempt: $RUN_ATTEMPT
           game-exp-policy-digest: $POLICY_DIGEST
+          game-exp-scope-digest: $(python -c 'import json; print(json.load(open("'"$RUNNER_TEMP/rehearsal-scope-trusted.json"'"))["scope_digest"])')
           EOF
           git tag -a "$tag_name" "$INTEGRATION_SHA" -F "$RUNNER_TEMP/rehearsal-tag-message.txt"
           git push origin "refs/tags/$tag_name:$REHEARSAL_REF"
@@ -356,6 +377,8 @@ jobs:
           name: game-exp-rehearsal-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             rehearsal-result.json
+            rehearsal-scope.json
+            ${{ runner.temp }}/rehearsal-scope-trusted.json
             ${{ runner.temp }}/rehearsal-prepare.json
             ${{ runner.temp }}/rehearsal-tag-message.txt
             ${{ runner.temp }}/rehearsal-context.json
