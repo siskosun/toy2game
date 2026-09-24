@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, plan_domain_mutation, validate_manifest
+from domain_core import DomainError, TrustedActorContext, TrustedBindingContext, TrustedCandidateContext, TrustedRetentionContext, plan_domain_mutation, validate_manifest
 from protocol_core import (
     ProtocolError,
     canonical_json_bytes,
@@ -124,6 +124,107 @@ def resolve_trusted_candidate(
         checks=tuple(value["checks"]),
         retention=dict(value["retention"]),
         attestation=dict(value["attestation"]),
+    )
+
+
+def resolve_trusted_retention(
+    repo: str,
+    payload: dict,
+    repo_dir: Path,
+) -> TrustedRetentionContext | None:
+    if payload.get("kind") != "operation_request" or payload.get("operation") != "experiment.decision":
+        return None
+    input_value = payload.get("input")
+    if not isinstance(input_value, dict) or input_value.get("to_state") != "PROMISING":
+        return None
+    experiment_id = input_value.get("experiment_id")
+    if not isinstance(experiment_id, str) or not experiment_id:
+        raise DomainError("PROMISING decision experiment_id is invalid")
+
+    try:
+        state = json.loads(
+            (repo_dir / f"experiments/{experiment_id}/state.json").read_text(encoding="utf-8")
+        )
+        candidate_id = state["current_candidate_id"]
+        candidate = json.loads(
+            (
+                repo_dir
+                / f"experiments/{experiment_id}/candidates/{candidate_id}.json"
+            ).read_text(encoding="utf-8")
+        )
+        retention = candidate["retention"]
+        release_tag = retention["release_tag"]
+    except Exception as exc:
+        raise DomainError(
+            f"cannot resolve current Candidate retention: {exc}",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        ) from exc
+
+    try:
+        release = github_json(
+            repo,
+            f"/releases/tags/{urllib.parse.quote(str(release_tag), safe='')}",
+        )
+    except WriterError as exc:
+        raise DomainError(
+            f"current Level-3 release could not be verified: {exc}",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        ) from exc
+
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise DomainError(
+            "current Level-3 release has no asset list",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    matches = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict)
+        and asset.get("name") == "candidate.tgz"
+        and asset.get("state") == "uploaded"
+    ]
+    if len(matches) != 1:
+        raise DomainError(
+            "current Level-3 release must contain exactly one uploaded candidate.tgz",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    asset = matches[0]
+    release_id = release.get("id")
+    asset_id = asset.get("id")
+    if not isinstance(release_id, int) or not isinstance(asset_id, int):
+        raise DomainError(
+            "current Level-3 release identity is incomplete",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    if (
+        release.get("tag_name") != release_tag
+        or release.get("immutable") is not True
+        or release.get("draft") is not False
+        or release.get("prerelease") is not False
+    ):
+        raise DomainError(
+            "current Level-3 release is missing immutable published guarantees",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+    artifact_digest = asset.get("digest")
+    if not isinstance(artifact_digest, str):
+        raise DomainError(
+            "current Level-3 asset digest is unavailable",
+            code="DOMAIN_PREREQUISITE_MISSING",
+        )
+
+    return TrustedRetentionContext(
+        experiment_id=experiment_id,
+        candidate_id=str(candidate_id),
+        release_id=str(release_id),
+        release_tag=str(release_tag),
+        release_url=str(release.get("html_url") or ""),
+        immutable=True,
+        target_commitish=str(release.get("target_commitish") or ""),
+        artifact_name="candidate.tgz",
+        artifact_digest=artifact_digest,
+        asset_id=str(asset_id),
     )
 
 
@@ -315,6 +416,11 @@ def main() -> int:
             authority=args.authority,
             context_path=args.trusted_context_json,
         )
+        trusted_retention = resolve_trusted_retention(
+            args.repo,
+            payload,
+            repo_dir,
+        )
         domain_plan = plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
@@ -324,6 +430,7 @@ def main() -> int:
             trusted_binding=trusted_binding,
             trusted_actor=trusted_actor,
             trusted_candidate=trusted_candidate,
+            trusted_retention=trusted_retention,
         )
         post_domain_digest = digest_object(payload)
         if post_domain_digest != payload_digest:
