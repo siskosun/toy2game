@@ -361,6 +361,7 @@ def payload(args: argparse.Namespace) -> dict[str, Any]:
         "run_id",
         "run_attempt",
         "policy_digest",
+        "scope_digest",
     )
     values = {name: str(getattr(args, name)) for name in names}
     context = {
@@ -413,6 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
         "run-id",
         "run-attempt",
         "policy-digest",
+        "scope-digest",
     ):
         q.add_argument("--" + name, required=True)
     q.add_argument("--context-output", required=True)
