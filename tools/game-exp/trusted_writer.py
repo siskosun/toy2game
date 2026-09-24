@@ -179,9 +179,6 @@ def main() -> int:
                 ledger_head=current,
                 record_path=target,
                 replayed=False,
-                domain_status=domain_plan.status,
-                domain_experiment_id=domain_plan.experiment_id,
-                domain_paths=domain_plan.paths,
             )
             return 43
 
@@ -256,6 +253,9 @@ def main() -> int:
                 ledger_head=head,
                 record_path=target,
                 replayed=False,
+                domain_status=domain_plan.status,
+                domain_experiment_id=domain_plan.experiment_id,
+                domain_paths=domain_plan.paths,
             )
             return 0
 
