@@ -19,6 +19,7 @@ jobs:
       source_sha: ${{ steps.resolve.outputs.source_sha }}
       manifest_digest: ${{ steps.resolve.outputs.manifest_digest }}
       policy_digest: ${{ steps.resolve.outputs.policy_digest }}
+      adapter: ${{ steps.resolve.outputs.adapter }}
     steps:
       - name: Checkout trusted protocol core
         uses: actions/checkout@v6
@@ -28,6 +29,8 @@ jobs:
           path: control
           sparse-checkout: |
             tools/game-exp/protocol_core.py
+            tools/game-exp/project_policy.py
+            .game-exp/project-policy.json
           sparse-checkout-cone-mode: false
       - name: Resolve authoritative experiment facts
         id: resolve
@@ -49,6 +52,7 @@ jobs:
 
           PYTHONPATH=control/tools/game-exp python -             "$RUNNER_TEMP/game-exp/manifest.json"             "$RUNNER_TEMP/game-exp/binding.json"             "$RUNNER_TEMP/game-exp/state.json"             "$GITHUB_OUTPUT"             "$EXPERIMENT_ID" "$issue_number" "$source_sha" <<'PY'
           import json, pathlib, sys
+          from project_policy import load_policy, policy_digest
           from protocol_core import digest_object
 
           manifest=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -67,26 +71,14 @@ jobs:
           if state.get("lifecycle") not in {"ACTIVE","REVIEW"}:
               raise SystemExit(f"candidate build not allowed in lifecycle {state.get('lifecycle')!r}")
 
-          policy={
-              "schema_version":1,
-              "install":"npm ci",
-              "test":"npm test",
-              "build":"npm run build",
-              "package_root":"dist",
-              "required_checks":[
-                  "project_tests",
-                  "build",
-                  "artifact_structure",
-                  "attestation_verify",
-                  "retention_publish",
-              ],
-          }
+          policy=load_policy("control/.game-exp/project-policy.json")
           with open(out,"a",encoding="utf-8") as fh:
               fh.write(f"experiment_id={experiment_id}\n")
               fh.write(f"issue_number={issue_number}\n")
               fh.write(f"source_sha={source_sha}\n")
               fh.write(f"manifest_digest={manifest_digest}\n")
-              fh.write(f"policy_digest={digest_object(policy)}\n")
+              fh.write(f"policy_digest={policy_digest(policy)}\n")
+              fh.write(f"adapter={policy['adapter']}\n")
           PY
 
   build:
@@ -101,22 +93,30 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source_sha }}
           persist-credentials: false
+      - name: Checkout trusted project policy
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/project_policy.py
+            tools/game-exp/protocol_core.py
+            .game-exp/project-policy.json
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v6
+        if: needs.resolve.outputs.adapter == 'node-npm'
         with:
           node-version-file: .node-version
           cache: npm
       - name: Install dependencies
-        run: npm ci
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run install --cwd .
       - name: Project tests
-        run: npm test
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run test --cwd .
       - name: Build candidate
-        run: npm run build
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run build --cwd .
       - name: Package candidate bytes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f dist/index.html
-          tar -czf candidate.tgz dist
+        run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json package --repo-root . --output candidate.tgz
       - uses: actions/upload-artifact@v4
         with:
           name: game-exp-candidate-bytes-${{ github.run_id }}-${{ github.run_attempt }}
@@ -126,9 +126,21 @@ jobs:
 
   observe:
     needs: [resolve, build]
-    permissions: {}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout trusted project policy
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: |
+            tools/game-exp/project_policy.py
+            tools/game-exp/protocol_core.py
+            .game-exp/project-policy.json
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v5
         with:
           name: game-exp-candidate-bytes-${{ github.run_id }}-${{ github.run_attempt }}
@@ -136,9 +148,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -tzf candidate.tgz > artifact-files.txt
-          grep -q '^dist/index.html$' artifact-files.txt
-          grep -q '^dist/games/' artifact-files.txt
+          python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json verify --archive candidate.tgz > artifact-files.txt
           printf '{"observer":"trusted-clean-job","source_checkout":false,"artifact":"candidate.tgz"}\n' > observer.json
           sha256sum candidate.tgz
       - uses: actions/upload-artifact@v4
