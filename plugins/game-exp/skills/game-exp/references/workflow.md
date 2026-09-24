@@ -21,6 +21,7 @@ Additional paths:
 | User intent | Preferred MCP tool | Notes |
 |---|---|---|
 | Inspect repo/Ledger | `game_exp_status` | Read-only |
+| Open experiment Board / panel | `game_exp_board` | Read-only consistent Ledger snapshot |
 | Inspect experiment | `game_exp_experiment_get` | Read-only authoritative projection |
 | Diagnose trust/archive health | `game_exp_doctor` | Read-only |
 | Bind Manifest | `game_exp_experiment_bind` | Manifest operation id is idempotency key |
