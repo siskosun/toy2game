@@ -1,0 +1,32 @@
+name: game-exp MCP tests
+
+on:
+  pull_request:
+    paths:
+      - 'tools/game-exp/**'
+      - '.github/workflows/game-exp-mcp-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install official MCP SDK v2
+        run: python -m pip install -r tools/game-exp/requirements-mcp.txt
+      - name: Run MCP adapter tests
+        run: python -m unittest tools/game-exp/tests/test_mcp_server.py -v
+      - name: Verify server imports and stdio entrypoint
+        run: python -m py_compile tools/game-exp/mcp_server.py

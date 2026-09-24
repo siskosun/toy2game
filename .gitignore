@@ -28,3 +28,6 @@ artifacts/
 
 # game-exp local trusted-writer credentials (never commit)
 /.game-exp-trusted/
+
+# Local game-exp MCP/runtime environment.
+/.game-exp/
