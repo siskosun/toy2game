@@ -902,7 +902,6 @@ def plan_domain_mutation(
             payload=payload,
             request_id=request_id,
             trusted_actor=trusted_actor,
-            trusted_retention=trusted_retention,
         )
     if operation == "candidate.register":
         return _plan_candidate(
@@ -916,6 +915,7 @@ def plan_domain_mutation(
             payload=payload,
             request_id=request_id,
             trusted_actor=trusted_actor,
+            trusted_retention=trusted_retention,
         )
     if operation != "experiment.bind":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
