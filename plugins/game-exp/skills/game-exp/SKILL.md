@@ -62,7 +62,7 @@ Archive is a destructive/recovery-sensitive workflow.
 - If the user says to archive **and keep the branch**, use `RETAIN_BRANCH`.
 - If the user asks only to "archive" and the intended branch behavior is not clear, ask for this one material choice before dispatching.
 - Call `game_exp_archive`; do not manually create the final tag or delete the branch.
-- `archive_abort` is valid only while the archive is still PREPARED. Once the trusted workflow claims it, Abort is permanently unavailable; recover the same archive instead of creating a second logical archive.
+- `game_exp_archive_abort` is valid only while the archive is still PREPARED. Once the trusted workflow claims it, Abort is permanently unavailable; recover the same archive instead of creating a second logical archive.
 - After completion, call `game_exp_experiment_get` and `game_exp_doctor(experiment_id=...)`. Report `ARCHIVED` only when the protected Ledger says so and the final-ref checks are consistent.
 
 ## Request/result handling
