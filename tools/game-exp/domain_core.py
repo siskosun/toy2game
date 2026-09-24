@@ -214,7 +214,7 @@ def plan_domain_mutation(
     trusted_binding: TrustedBindingContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
-        raise DomainError("payload.kind must be operation_request")
+        return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
     if operation != "experiment.bind":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
