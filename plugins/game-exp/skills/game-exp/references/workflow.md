@@ -37,6 +37,42 @@ Additional paths:
 | Reconcile request | `game_exp_request_get` | Use for ACCEPTED/UNKNOWN/lost response |
 | Low-level request | `game_exp_request_submit` | Recovery/unsupported cases only; prefer domain tools |
 
+
+## Backend routing
+
+Use the first available backend that preserves the trust model:
+
+1. Native game-exp MCP tools.
+2. GitHub Bridge through the repository Issue that owns the experiment.
+3. If neither backend is available, stop and report the missing capability.
+
+The GitHub Bridge is for ChatGPT sessions where the normal GitHub connector is available but custom MCP Apps / Developer Mode are unavailable. It does not replace the protected Ledger or Trusted Writer.
+
+For mutating bridge actions, add one Issue comment whose first line is exactly `/game-exp` and whose remaining body is one strict JSON object. Every mutation requires a stable `request_id`. Never create a second request id to escape an uncertain result.
+
+| MCP intent | Bridge action |
+|---|---|
+| Bind Manifest | `bind` |
+| Initialize refs | `initialize` |
+| Build Candidate | `candidate_build` |
+| Record Review | `review_record` |
+| Lifecycle Decision | `decision_submit` |
+| Rehearsal | `rehearse` |
+| Create/reuse Integration PR | `integrate` |
+| Finalize merged Integration PR | `integrate_finalize` |
+| Archive | `archive` |
+| Abort PREPARED Archive | `archive_abort` |
+| Read one experiment | `status` |
+
+Bridge invariants:
+
+- The command must be posted on the GitHub Issue whose number equals the experiment number.
+- The bridge independently resolves the Issue-comment author and repository write permission.
+- Human-gated actions still require an explicit human decision before posting the bridge command.
+- The bridge posts a request-scoped claim marker before execution and a result marker after execution.
+- If a claim exists without a result, treat the outcome as `UNKNOWN`; inspect the referenced bridge run and authoritative Ledger before retrying.
+- Do not post duplicate bridge comments while the original request is unresolved.
+
 ## Human-owned gates
 
 The agent must not decide these from automated evidence:
