@@ -16,6 +16,7 @@ Use game-exp as the experiment control plane. Use normal Codex editing/Git capab
 5. Do not create a new request id to escape `UNKNOWN`, stale-head, or request-id conflicts. Reconcile the original id first.
 6. Do not weaken scope, Rulesets, retention, Rehearsal freshness, or Archive recovery semantics to make a workflow pass.
 7. For archived experiments, treat the immutable final tag as the official source snapshot. Do not recreate the deleted `exp/*` branch to "restore" the experiment.
+8. Keep game-exp orchestration self-contained. Do not invoke unrelated planning/handoff workflows, create `.ai/HANDOFF.md` or `.ai/STATE.md`, or add extra approval gates unless the repository's own checked-in instructions explicitly require them or the user explicitly asks for them. The game-exp lifecycle gates remain the control plane for experiment work.
 
 ## Codex Board
 
@@ -43,6 +44,7 @@ This is the current Codex panel experience. Do not claim that it is a persistent
 - Call `game_exp_status` when repository/Ledger identity is not already established.
 - For an existing experiment, call `game_exp_experiment_get` before choosing a mutation.
 - Use `game_exp_doctor` when trust controls, archived refs, or repository health are relevant.
+- Before a new experiment is bound, use repo-level `game_exp_doctor` without `experiment_id`; an unbound `EXP-N` has no archive state yet. Use experiment-aware Doctor only after the experiment exists in the protected Ledger.
 - If the requested action conflicts with the current lifecycle, explain the current state and the valid next gate instead of improvising a transition.
 
 See `references/workflow.md` for the lifecycle/tool map.
