@@ -23,9 +23,12 @@ def game_exp_status(repo: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
-def game_exp_doctor(repo: str | None = None) -> dict[str, Any]:
-    """Inspect game-exp trust prerequisites without changing repository state."""
-    return _client(repo).doctor()
+def game_exp_doctor(
+    repo: str | None = None,
+    experiment_id: str | None = None,
+) -> dict[str, Any]:
+    """Inspect trust prerequisites and optionally one archived experiment's refs."""
+    return _client(repo).doctor(experiment_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
