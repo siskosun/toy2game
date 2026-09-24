@@ -75,6 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     rec = sub.add_parser("reconcile", help="resolve an uncertain request from remote evidence")
     rec.add_argument("request_id")
 
+    init = sub.add_parser("initialize", help="initialize canonical experiment source refs from Ledger")
+    init.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+
     return ap
 
 
@@ -106,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "reconcile":
             result = client.reconcile(args.request_id)
+        elif args.command == "initialize":
+            result = client.initialize(args.experiment_id)
         else:
             ap.error("unknown command")
             return 2
