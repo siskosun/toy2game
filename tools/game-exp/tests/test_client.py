@@ -48,6 +48,12 @@ class FakeTransport:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/456"
 
+    def dispatch_candidate(self, experiment_id):
+        self.dispatched.append({"candidate": experiment_id})
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/788"
+
     def dispatch_rehearsal(self, experiment_id):
         self.dispatched.append({"rehearsal": experiment_id})
         if self.dispatch_uncertain:
@@ -289,6 +295,52 @@ class ClientTests(unittest.TestCase):
         result = GameExpClient(transport).status()
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["ledger_head"], transport.head)
+
+    def test_experiment_get_projects_current_domain_objects(self):
+        transport = FakeTransport()
+        transport._ledger_json["experiments/EXP-21/state.json"] = {
+            "experiment_id": "EXP-21",
+            "lifecycle": "ARCHIVED",
+            "current_candidate_id": "C-21-1-1",
+            "current_review_id": "req_review",
+            "current_rehearsal_id": "R-21-2-1",
+            "current_integration_id": "I-21-PR-3",
+            "current_archive_id": "A-21-1",
+        }
+        transport._ledger_json["experiments/EXP-21/binding.json"] = {"kind": "experiment_identity"}
+        transport._ledger_json["experiments/EXP-21/manifest.json"] = {"schema_version": 1}
+        transport._ledger_json["experiments/EXP-21/candidates/C-21-1-1.json"] = {"candidate_id": "C-21-1-1"}
+        transport._ledger_json["experiments/EXP-21/reviews/req_review.json"] = {"review_id": "req_review"}
+        transport._ledger_json["experiments/EXP-21/rehearsals/R-21-2-1.json"] = {"rehearsal_id": "R-21-2-1"}
+        transport._ledger_json["experiments/EXP-21/integrations/I-21-PR-3.json"] = {"integration_id": "I-21-PR-3"}
+        transport._ledger_json["experiments/EXP-21/archives/A-21-1.json"] = {"archive_id": "A-21-1"}
+
+        result = GameExpClient(transport).experiment_get("EXP-21")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["state"]["lifecycle"], "ARCHIVED")
+        self.assertEqual(result["candidate"]["candidate_id"], "C-21-1-1")
+        self.assertEqual(result["review"]["review_id"], "req_review")
+        self.assertEqual(result["rehearsal"]["rehearsal_id"], "R-21-2-1")
+        self.assertEqual(result["integration"]["integration_id"], "I-21-PR-3")
+        self.assertEqual(result["archive"]["archive_id"], "A-21-1")
+
+    def test_experiment_get_returns_unknown_for_missing_experiment(self):
+        result = GameExpClient(FakeTransport()).experiment_get("EXP-99")
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "experiment_not_found_in_ledger")
+
+    def test_candidate_dispatches_trusted_workflow(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).candidate("EXP-21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(transport.dispatched[-1], {"candidate": "EXP-21"})
+
+    def test_candidate_uncertain_dispatch_is_not_claimed_retry_safe(self):
+        transport = FakeTransport()
+        transport.dispatch_uncertain = True
+        result = GameExpClient(transport).candidate("EXP-21")
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertFalse(result["retry_safe"])
 
     def test_initialize_dispatches_only_canonical_experiment_id(self):
         transport = FakeTransport()
