@@ -37,7 +37,7 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
    - Candidate / Review
    - Rehearsal / Integration / Archive
    - Next gate
-5. Treat `health=FAIL` as blocked. Never recommend lifecycle work for an invalid binding chain.
+5. Treat `health=FAIL` as blocked. If the next gate is `DO_NOT_USE_RECREATE_EXPERIMENT`, tell the user to create a fresh experiment; never recommend normal lifecycle work for that record.
 6. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
