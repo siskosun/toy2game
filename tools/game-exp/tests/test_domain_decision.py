@@ -11,6 +11,7 @@ sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import (  # noqa: E402
     DomainError,
+    TrustedActorContext,
     TrustedBindingContext,
     plan_domain_mutation,
 )
@@ -106,6 +107,11 @@ class DecisionTests(unittest.TestCase):
             payload_digest=digest_object(payload),
             repository_full_name="owner/repo",
             trusted_binding=None,
+            trusted_actor=TrustedActorContext(
+                login="reviewer",
+                user_id="101",
+                permission="write",
+            ),
         )
 
     def apply(self, plan):
@@ -126,7 +132,66 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(event["to_state"], "REVIEW")
         self.assertEqual(event["previous_decision_id"], None)
         self.assertEqual(event["actor_claim"], "reviewer")
+        self.assertEqual(
+            event["actor"],
+            {
+                "login": "reviewer",
+                "user_id": "101",
+                "permission": "write",
+                "source": "github-collaborator-permission",
+            },
+        )
         self.assertEqual(digest_object(payload), digest_object(payload))
+
+    def test_decision_requires_trusted_actor(self):
+        payload = build_operation_payload(
+            "experiment.decision",
+            {
+                "experiment_id": "EXP-42",
+                "to_state": "REVIEW",
+                "previous_decision_id": None,
+                "reason": "human review",
+            },
+            actor_claim="reviewer",
+        )
+        with self.assertRaises(DomainError) as ctx:
+            plan_domain_mutation(
+                repo_dir=self.root,
+                payload=payload,
+                request_id="req_no_actor",
+                payload_digest=digest_object(payload),
+                repository_full_name="owner/repo",
+                trusted_binding=None,
+                trusted_actor=None,
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
+
+    def test_read_only_actor_cannot_decide(self):
+        payload = build_operation_payload(
+            "experiment.decision",
+            {
+                "experiment_id": "EXP-42",
+                "to_state": "REVIEW",
+                "previous_decision_id": None,
+                "reason": "human review",
+            },
+            actor_claim="reader",
+        )
+        with self.assertRaises(DomainError) as ctx:
+            plan_domain_mutation(
+                repo_dir=self.root,
+                payload=payload,
+                request_id="req_read_actor",
+                payload_digest=digest_object(payload),
+                repository_full_name="owner/repo",
+                trusted_binding=None,
+                trusted_actor=TrustedActorContext(
+                    login="reader",
+                    user_id="202",
+                    permission="read",
+                ),
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
 
     def test_stale_previous_decision_id_conflicts(self):
         _, first = self.decision("req_decision_1", "REVIEW")

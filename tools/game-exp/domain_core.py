@@ -29,6 +29,13 @@ class TrustedBindingContext:
 
 
 @dataclass(frozen=True)
+class TrustedActorContext:
+    login: str
+    user_id: str
+    permission: str
+
+
+@dataclass(frozen=True)
 class DomainPlan:
     status: str
     experiment_id: str | None
@@ -311,6 +318,7 @@ def _plan_decision(
     repo_dir: Path,
     payload: dict[str, Any],
     request_id: str,
+    trusted_actor: TrustedActorContext | None,
 ) -> DomainPlan:
     input_value = _mapping(payload.get("input"), "operation.input")
     _expect_keys(
@@ -326,6 +334,17 @@ def _plan_decision(
         previous_decision_id = _string(
             previous_decision_id,
             "operation.input.previous_decision_id",
+        )
+
+    if trusted_actor is None:
+        raise DomainError(
+            "trusted actor context is required for lifecycle decisions",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_actor.permission not in {"admin", "maintain", "write"}:
+        raise DomainError(
+            f"actor {trusted_actor.login!r} lacks write permission",
+            code="DOMAIN_AUTHORIZATION_FAILED",
         )
 
     _binding, _manifest, state, _binding_operation = _load_bound_experiment(
@@ -374,6 +393,12 @@ def _plan_decision(
         "from_state": current,
         "to_state": to_state,
         "reason": reason,
+        "actor": {
+            "login": trusted_actor.login,
+            "user_id": trusted_actor.user_id,
+            "permission": trusted_actor.permission,
+            "source": "github-collaborator-permission",
+        },
     }
     actor_claim = payload.get("actor_claim")
     if actor_claim is not None:
@@ -402,6 +427,7 @@ def plan_domain_mutation(
     payload_digest: str,
     repository_full_name: str,
     trusted_binding: TrustedBindingContext | None = None,
+    trusted_actor: TrustedActorContext | None = None,
 ) -> DomainPlan:
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
@@ -411,6 +437,7 @@ def plan_domain_mutation(
             repo_dir=repo_dir,
             payload=payload,
             request_id=request_id,
+            trusted_actor=trusted_actor,
         )
     if operation != "experiment.bind":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
