@@ -6,9 +6,9 @@ Target baseline SHA: `39078515a13331a748e63bc75424ed83c773a72a`
 
 ## Decision
 
-**REQUIRED_CHANGES**
+**PROTOCOL_FREEZE_APPROVED**
 
-The protocol reference implementation passes locally, and the target repository now validates the critical GitHub primitives for CAS, archive safety, cross-platform canonicalization, artifact attestation, immutable retention, and default-branch workflow governance. Phase 1 is not frozen yet only because the Trusted Ledger Writer cannot be executed until a dedicated long-lived credential is manually installed and exercised.
+The protocol reference implementation passes locally, and the target repository validates the critical GitHub primitives for CAS, archive safety, cross-platform canonicalization, artifact attestation, immutable retention, default-branch workflow governance, and Trusted Ledger mutation. The dedicated Deploy Key and repository secret are installed, and the Trusted Writer has passed normal commit, idempotent replay, request-id conflict, stale-head conflict, lost-response recovery, and negative ordinary-token tests.
 
 ## Reference protocol tests
 
@@ -41,8 +41,8 @@ These tests validate the protocol/state-machine implementation. The target-repos
 | Immutable asset deletion attack | PASS (must reject) | GitHub returned 422: Cannot delete asset from an immutable release |
 | Immutable releases setting | PASS | Enabled for repository |
 | Trusted Ledger Writer workflow | IMPLEMENTED | `.github/workflows/game-exp-trusted-writer.yml` |
-| Trusted Writer credential installed | BLOCKED | No write Deploy Key / `GAME_EXP_WRITER_KEY` secret installed by this automation environment |
-| Trusted Writer can bypass Ledger Ruleset | UNKNOWN | Must be tested after the manual credential step |
+| Trusted Writer credential installed | PASS | Write Deploy Key `game-exp trusted writer` + `GAME_EXP_WRITER_KEY` repository secret |
+| Trusted Writer can bypass Ledger Ruleset | PASS | Self-test run 35951146384; production runs 35951186950 and 35951266376 |
 | Trusted workflow source protection | PASS | Ruleset `23916012`: PR required on `main`, delete/force-push blocked |
 
 ## Atomic archive evidence
@@ -102,19 +102,24 @@ On the local Windows machine, `npm run build` currently fails in `scripts/build.
 - Trusted Writer setup guide: `docs/game-exp/TRUSTED-WRITER-SETUP.md`
 - Protected main Ruleset: active (`23916012`), PR required, delete/force-push blocked
 
-## Remaining Phase 1 gate
+## Trusted Writer final evidence
 
-Before changing this decision to `PROTOCOL_FREEZE_APPROVED`:
+- Self-test workflow: https://github.com/siskosun/toy2game/actions/runs/35951146384
+  - normal commit: PASS
+  - same request / same payload idempotent replay: PASS
+  - same request / different payload: PASS (rejected as `REQUEST_ID_CONFLICT`)
+  - stale expected head: PASS (rejected as `HEAD_CONFLICT`)
+  - lost-response retry: PASS (recovered as replayed `COMMITTED`)
+  - ordinary `GITHUB_TOKEN` write: PASS (rejected by GH013 / protected ref)
+- Production Trusted Writer normal commit: https://github.com/siskosun/toy2game/actions/runs/35951186950
+- Production idempotent replay: https://github.com/siskosun/toy2game/actions/runs/35951266376
+- Production request-id conflict: https://github.com/siskosun/toy2game/actions/runs/35951296014 (expected workflow failure with `REQUEST_ID_CONFLICT`)
+- Self-test evidence artifact: `game-exp-trusted-writer-selftest-35951146384`, SHA-256 `82a0eef88e005790ccfa64e2876e2c7cd001791246c0bc7ffcfb9ff1747c99eb`
+- Durable Ledger records exist for both normal and lost-response probes; the stale-head probe produced no Ledger record.
 
-1. Manually register the generated public key as a write Deploy Key.
-2. Store its private key as repository secret `GAME_EXP_WRITER_KEY`.
-3. Run the trusted writer workflow and prove:
-   - ordinary user/GITHUB_TOKEN write remains rejected;
-   - Deploy-Key workflow write succeeds;
-   - same request/same payload is idempotent;
-   - same request/different payload is rejected;
-   - stale `expected_head` is rejected;
-   - lost-response retry reconciles to the committed remote record.
-4. Re-run the target checks after the Trusted Writer credential is active.
+## Phase 1 freeze decision
 
-Any failure in item 3 remains a high-severity correctness failure. Default-branch workflow-source protection is already active and tested.
+All V1.3 Phase 1 protocol gates required for this target repository have now passed. The repository may advance to the next phase under the frozen protocol.
+
+**Decision: `PROTOCOL_FREEZE_APPROVED`**
+
