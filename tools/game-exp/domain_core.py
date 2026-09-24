@@ -42,6 +42,8 @@ class TrustedCandidateContext:
     run_id: str
     run_attempt: str
     policy_digest: str
+    dependency_lock_digest: str
+    environment_digest: str
     release_tag: str
 
 
@@ -422,6 +424,8 @@ def _plan_candidate_attest(
             "run_id",
             "run_attempt",
             "policy_digest",
+            "dependency_lock_digest",
+            "environment_digest",
             "checks",
             "retention",
         },
@@ -461,10 +465,20 @@ def _plan_candidate_attest(
         input_value["policy_digest"],
         "operation.input.policy_digest",
     )
+    dependency_lock_digest = _string(
+        input_value["dependency_lock_digest"],
+        "operation.input.dependency_lock_digest",
+    )
+    environment_digest = _string(
+        input_value["environment_digest"],
+        "operation.input.environment_digest",
+    )
     for name, value in (
         ("manifest_digest", manifest_digest),
         ("artifact_digest", artifact_digest),
         ("policy_digest", policy_digest),
+        ("dependency_lock_digest", dependency_lock_digest),
+        ("environment_digest", environment_digest),
     ):
         if not DIGEST_RE.fullmatch(value):
             raise DomainError(f"candidate {name} is invalid")
@@ -499,7 +513,7 @@ def _plan_candidate_attest(
     if release_tag != f"game-exp-candidate-{run_id}-{run_attempt}":
         raise DomainError("candidate release tag is not canonical")
 
-    binding, _manifest, state, _operation = _load_bound_experiment(
+    binding, manifest, state, _operation = _load_bound_experiment(
         repo_dir,
         experiment_id,
     )
@@ -526,6 +540,8 @@ def _plan_candidate_attest(
         run_id=run_id,
         run_attempt=run_attempt,
         policy_digest=policy_digest,
+        dependency_lock_digest=dependency_lock_digest,
+        environment_digest=environment_digest,
         release_tag=release_tag,
     )
     if trusted_candidate != expected_context:
@@ -552,6 +568,9 @@ def _plan_candidate_attest(
         "run_id": run_id,
         "run_attempt": run_attempt,
         "policy_digest": policy_digest,
+        "dependency_lock_digest": dependency_lock_digest,
+        "environment_digest": environment_digest,
+        "runtime": dict(manifest["runtime"]),
         "checks": checks,
         "retention": dict(retention),
     }
