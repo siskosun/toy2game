@@ -2168,12 +2168,13 @@ def plan_domain_mutation(
                 "experiment relationship cannot target itself",
                 code="DOMAIN_RELATIONSHIP_CONFLICT",
             )
-        target_state = repo_dir / f"experiments/{target_id}/state.json"
-        if not target_state.exists():
+        try:
+            _load_bound_experiment(repo_dir, target_id)
+        except DomainError as exc:
             raise DomainError(
-                f"experiment relationship target does not exist: {target_id}",
+                f"experiment relationship target is not a valid bound experiment: {target_id}",
                 code="DOMAIN_RELATIONSHIP_CONFLICT",
-            )
+            ) from exc
 
     root = f"experiments/{experiment_id}"
     binding_path = f"{root}/binding.json"
