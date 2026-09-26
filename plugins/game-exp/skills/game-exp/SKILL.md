@@ -34,6 +34,8 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
+If the host supports a self-contained inline interactive app surface, prefer the Chat inline UI contract in `references/chat-ui.md`. Keep all interactions read-only and local to presentation; lifecycle mutations still go through trusted game-exp tools and human gates. If inline UI is unavailable, fall back to the text Board contract.
+
 When the user opens one experiment from the Board, prefer `game_exp_experiment_panel` over stitching together `game_exp_board` and `game_exp_experiment_get` in separate reads. The panel is a Chinese-ready read-only projection from one pinned Ledger snapshot and includes overview, hypothesis/criteria, activity, relationships, and current evidence ids.
 
 When the user opens one prototype/subject group, prefer `game_exp_subject_panel`. It returns the stable subject identity, focused lifecycle/health/attention summary, recent activity, child experiment summaries, and relationship edges from the same pinned Ledger snapshot.

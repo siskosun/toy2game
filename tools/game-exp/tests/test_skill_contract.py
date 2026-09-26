@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.7.1")
+        self.assertEqual(manifest["version"], "0.8.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -111,6 +111,7 @@ class GameExpSkillContractTests(unittest.TestCase):
             "stable `subject`",
             "system-generated panel entries in Chinese",
             "`relationships`",
+            "references/chat-ui.md",
         ):
             self.assertIn(phrase, content)
 
@@ -157,6 +158,25 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertIn("game_exp_board", content)
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "github-bridge.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "board.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "chat-ui.md").exists())
+
+    def test_chat_inline_ui_contract_is_read_only_and_has_fallback(self):
+        content = (
+            PLUGIN / "skills" / "game-exp" / "references" / "chat-ui.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "仓库总览 -> 原型/主体 -> 单实验",
+            "总览",
+            "待处理",
+            "原型",
+            "分支图",
+            "归档",
+            "local filtering",
+            "It must not directly mutate lifecycle state or protected refs",
+            "trusted MCP/workflow path",
+            "Text fallback",
+        ):
+            self.assertIn(phrase, content)
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))
