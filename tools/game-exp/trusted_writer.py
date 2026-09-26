@@ -1000,6 +1000,7 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
     if payload.get("kind") != "operation_request":
         return None
     if payload.get("operation") not in {
+        "experiment.bind",
         "experiment.decision",
         "review.record",
         "archive.prepare",
