@@ -27,8 +27,9 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
 3. Render Chinese by default.
 4. Default to `总览`; support `待处理` / `原型` / `分支图` / `归档` as named views.
 5. Follow `references/board.md` for information hierarchy, ordering, labels, and empty-state behavior.
-6. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
-7. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
+6. Keep all system-generated panel entries in Chinese. Preserve raw machine enums only for diagnostics; never make English enum names the primary UI text.
+7. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
+8. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
@@ -69,7 +70,7 @@ For the GitHub Bridge:
 ## Create and implement a new experiment
 
 1. Ensure there is a real GitHub Issue for the experiment. Resolve repository id, Issue id/number, and parent SHA from GitHub or provided authoritative context; never invent them.
-2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. For every new experiment also include stable `subject`: use `{type: "game-prototype", id, name, root_path}` for one game prototype, or `{type: "repository", id: "repository", name, root_path: "."}` for repository-level work. Keep `subject.id` stable across later path/name changes. `scope` remains the security boundary and must not be used as the long-term subject identity. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
+2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. For every new experiment also include stable `subject`: use `{type: "game-prototype", id, name, root_path}` for one game prototype, or `{type: "repository", id: "repository", name, root_path: "."}` for repository-level work. Keep `subject.id` stable across later path/name changes. When the experiment has a real dependency/history relationship to an existing healthy bound experiment in the same repository, optionally include `relationships` using only `depends_on`, `blocks`, or `supersedes`; do not invent relationships. `scope` remains the security boundary and must not be used as the long-term subject identity. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
 3. Execute Bind through the active backend: `game_exp_experiment_bind` with MCP, or Bridge action `bind`. The request id must equal `manifest.operation_id`.
 4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile the same logical request. With MCP use `game_exp_request_get`; with GitHub Bridge inspect its claim/result markers plus the protected Ledger. Continue only after the binding is committed/applied.
 5. Execute Initialize through `game_exp_initialize` or Bridge action `initialize` to create the canonical experiment branch/base tag.
