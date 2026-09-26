@@ -43,9 +43,18 @@ def game_exp_experiment_get(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_board(
     repo: str | None = None,
+    query: str | None = None,
+    subject_id: str | None = None,
+    lifecycle: str | None = None,
+    attention_only: bool = False,
 ) -> dict[str, Any]:
-    """Return a lightweight, consistent snapshot of all game-exp experiments."""
-    return _client(repo).board()
+    """Return one consistent Board snapshot plus an optional read-only focus set."""
+    return _client(repo).board(
+        query=query,
+        subject_id=subject_id,
+        lifecycle=lifecycle,
+        attention_only=attention_only,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
