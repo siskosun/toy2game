@@ -36,19 +36,26 @@ Do not dump Candidate/Rehearsal/Integration IDs in the default overview unless t
 
 ## 待处理
 
-Use `views.attention.experiment_ids` only.
+Use `views.attention.sections` as the primary structure instead of one flat list.
 
-Include:
+Render sections in this order when non-empty:
 
-- health FAIL or UNKNOWN;
-- archive recovery;
-- human Review;
-- promotion decision;
-- general human lifecycle decision;
-- human selection;
-- archive-mode choice.
+1. `异常`
+2. `需要恢复`
+3. `需要你评审`
+4. `需要你决策`
+5. `需要选择归档方式`
 
-For each row show: experiment, prototype/subject, title, current stage, problem or gate, and next action.
+Each experiment entry should show:
+
+- 实验编号
+- 原型/主体
+- 实验标题
+- 当前阶段
+- 为什么需要处理
+- 下一步动作
+
+Use the Chinese values already emitted in `display` and `attention`. Do not expose raw enums such as `HUMAN_REVIEW` as the primary UI text.
 
 ## 原型
 
@@ -67,6 +74,8 @@ Hierarchy is `Repository -> Subject/Prototype -> Experiment`.
 Authoritative `manifest.subject` wins. `scope.allowed` inference is legacy fallback only.
 If a legacy manifest has only broad `games/**` scope or no resolvable prototype, display `仓库级/未指定原型` rather than inventing a prototype identity.
 
+For each prototype group, show `recent_activity` as `最近活动` and `relationship_count` when non-zero. Activity labels must remain Chinese.
+
 ## 分支图
 
 Use `views.branches.lanes`.
@@ -81,6 +90,33 @@ main
 ```
 
 Show parent SHA only when diagnosing freshness or ancestry. Show final tag for archived experiments. Do not imply a branch still exists after `ATOMIC_DELETE` merely because the canonical branch ref is recorded in binding metadata.
+
+## 实验详情
+
+When the user opens one experiment, organize the detail panel in this order:
+
+1. `实验概况`: 标题、原型、阶段、健康、下一步。
+2. `假设与判定`: hypothesis / success criteria / kill criteria.
+3. `活动时间线`: use the experiment `activity` array. Render `label_zh` and `detail_zh`; show `occurred_at` only when the Ledger-derived record contains a trustworthy timestamp.
+4. `关系`: show outgoing and incoming experiment relations with Chinese relation labels.
+5. `代码与证据`: branch / Candidate / Rehearsal / PR / Archive records on demand.
+
+Relationship labels:
+
+- `depends_on` -> `依赖`
+- incoming `depends_on` -> `被依赖`
+- `blocks` -> `阻塞`
+- incoming `blocks` -> `被阻塞`
+- `supersedes` -> `替代`
+- incoming `supersedes` -> `被替代`
+
+Do not fabricate timestamps for timeline events. Events without an authoritative time may still appear in semantic lifecycle order.
+
+## 中文展示约束
+
+All system-generated panel entries must use Chinese as the primary text: view names, section names, lifecycle labels, health labels, next actions, relationship labels, and activity labels.
+
+Raw machine enums may appear only in debugging context or parentheses when they materially help diagnosis. User-authored or authoritative stored titles are not silently translated or rewritten.
 
 ## 归档
 
