@@ -1706,6 +1706,88 @@ class GameExpClient:
             },
         }
 
+    def subject_panel(self, subject_id: str) -> dict[str, Any]:
+        normalized_subject_id = subject_id.strip() if isinstance(subject_id, str) else ""
+        if not normalized_subject_id:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "subject_id": subject_id,
+                "reason": "invalid_subject_id",
+            }
+
+        board = self.board(subject_id=normalized_subject_id)
+        if board.get("status") != "PASS":
+            return board
+
+        group = next(
+            (
+                item
+                for item in board.get("views", {})
+                .get("prototypes", {})
+                .get("groups", [])
+                if item.get("subject", {}).get("id") == normalized_subject_id
+            ),
+            None,
+        )
+        if not isinstance(group, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "snapshot_head": board.get("snapshot_head"),
+                "subject_id": normalized_subject_id,
+                "reason": "subject_not_found_in_ledger",
+            }
+
+        focus_ids = set(board.get("focus", {}).get("experiment_ids", []))
+        experiments = [
+            {
+                "experiment_id": item.get("experiment_id"),
+                "issue_number": item.get("issue_number"),
+                "title": item.get("title"),
+                "lifecycle": item.get("lifecycle"),
+                "lifecycle_zh": item.get("display", {}).get("lifecycle"),
+                "health": item.get("health"),
+                "health_zh": item.get("display", {}).get("health"),
+                "next_gate": item.get("next_gate"),
+                "next_action_zh": item.get("display", {}).get("next_gate"),
+                "attention": item.get("attention"),
+                "latest_activity": item.get("latest_activity"),
+            }
+            for item in board.get("experiments", [])
+            if item.get("experiment_id") in focus_ids
+        ]
+        relationship_edges = [
+            edge
+            for edge in board.get("views", {})
+            .get("prototypes", {})
+            .get("relationship_edges", [])
+            if (
+                edge.get("source_experiment_id") in focus_ids
+                or edge.get("target_experiment_id") in focus_ids
+            )
+        ]
+
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "snapshot_head": board.get("snapshot_head"),
+            "subject_id": normalized_subject_id,
+            "subject": group.get("subject"),
+            "summary": {
+                "count": group.get("count", 0),
+                "active_count": group.get("active_count", 0),
+                "archived_count": group.get("archived_count", 0),
+                "attention_count": group.get("attention_count", 0),
+                "relationship_count": group.get("relationship_count", 0),
+                "counts_by_lifecycle": group.get("counts_by_lifecycle", {}),
+                "counts_by_health": group.get("counts_by_health", {}),
+            },
+            "recent_activity": group.get("recent_activity", []),
+            "experiments": experiments,
+            "relationship_edges": relationship_edges,
+        }
+
     def experiment_panel(self, experiment_id: str) -> dict[str, Any]:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
             return {
