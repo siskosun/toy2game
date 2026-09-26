@@ -27,8 +27,9 @@ class FakeClient:
     def status(self):
         return {"repo": "owner/repo", "ledger_head": "a" * 40}
 
-    def board(self):
+    def board(self, **kwargs):
         return {
+            "focus_args": kwargs,
             "status": "PASS",
             "repo": "owner/repo",
             "snapshot_head": "a" * 40,
@@ -205,6 +206,25 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["experiments"][0]["next_gate"], "HUMAN_REVIEW")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_board_focus_filters_delegate_to_client(self, _):
+        result = mcp_server.game_exp_board(
+            repo="owner/repo",
+            query="combat",
+            subject_id="arena-duel",
+            lifecycle="review",
+            attention_only=True,
+        )
+        self.assertEqual(
+            result["focus_args"],
+            {
+                "query": "combat",
+                "subject_id": "arena-duel",
+                "lifecycle": "review",
+                "attention_only": True,
+            },
+        )
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_review_defaults_to_current_candidate(self, _):

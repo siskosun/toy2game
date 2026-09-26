@@ -22,6 +22,21 @@ Show:
 - `Ledger 快照`: pinned commit SHA.
 - `实验统计`: total experiments, active count, archived count, attention count, abnormal-health count.
 
+## 聚焦筛选
+
+The Board may include a read-only `focus` projection. It never changes the protected Ledger snapshot or any lifecycle state.
+
+Supported filters:
+
+- `query`: case-insensitive substring search across experiment id, Issue number, title, subject/prototype name, and hypothesis.
+- `subject_id`: exact stable subject id.
+- `lifecycle`: lifecycle code, normalized to uppercase.
+- `attention_only`: only experiments that currently require attention.
+
+When any filter is active, render `focus.summary_zh` and use `focus.experiment_ids` to narrow the displayed rows. Keep global counts and the underlying five views based on the complete pinned snapshot so filtering cannot hide repository health or change authority.
+
+If the focus result is empty, show `没有符合当前筛选条件的实验`; do not report `暂无实验` unless the repository itself has zero experiments.
+
 ## 总览
 
 Answer three questions first: what is broken, what needs a human decision, and what is currently active.
