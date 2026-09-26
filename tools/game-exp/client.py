@@ -803,6 +803,84 @@ class GameExpClient:
         }
 
     @staticmethod
+    def _board_lifecycle_zh(lifecycle: str) -> str:
+        return {
+            "ACTIVE": "进行中",
+            "REVIEW": "评审中",
+            "PROMISING": "待选择",
+            "SELECTED": "已选定",
+            "INTEGRATED": "已集成",
+            "REJECTED": "已拒绝",
+            "ARCHIVED": "已归档",
+        }.get(lifecycle, lifecycle)
+
+    @staticmethod
+    def _board_health_zh(health: str) -> str:
+        return {
+            "PASS": "正常",
+            "FAIL": "异常",
+            "UNKNOWN": "未知",
+        }.get(health, health)
+
+    @staticmethod
+    def _board_next_gate_zh(next_gate: str) -> str:
+        return {
+            "IMPLEMENT_OR_REVIEW": "继续实现 / 进入评审",
+            "CANDIDATE_BUILD": "构建候选版本",
+            "HUMAN_REVIEW": "人工评审",
+            "HUMAN_PROMOTION": "决定是否晋级",
+            "HUMAN_DECISION": "人工决策",
+            "TRUSTED_REHEARSAL": "可信彩排",
+            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL": "人工选择 / 必要时刷新彩排",
+            "TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL": "集成 / 必要时刷新彩排",
+            "ARCHIVE_OR_RETAIN": "选择归档方式",
+            "ARCHIVE_RECOVERY": "恢复归档",
+            "ARCHIVE": "归档",
+            "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK": "已结束；新工作需新建实验",
+            "VERIFY_EXPERIMENT_HEALTH": "核验实验健康",
+            "DO_NOT_USE_RECREATE_EXPERIMENT": "禁止继续；重建实验",
+            "UNKNOWN": "未知",
+        }.get(next_gate, next_gate)
+
+    @staticmethod
+    def _board_relationship_type_zh(relation_type: str) -> str:
+        return {
+            "depends_on": "依赖",
+            "blocks": "阻塞",
+            "supersedes": "替代",
+        }.get(relation_type, relation_type)
+
+    @staticmethod
+    def _board_relationship_incoming_zh(relation_type: str) -> str:
+        return {
+            "depends_on": "被依赖",
+            "blocks": "被阻塞",
+            "supersedes": "被替代",
+        }.get(relation_type, relation_type)
+
+    @classmethod
+    def _board_relationships(cls, manifest: dict[str, Any]) -> list[dict[str, str]]:
+        raw = manifest.get("relationships")
+        if not isinstance(raw, list):
+            return []
+        rows: list[dict[str, str]] = []
+        for relation in raw:
+            if not isinstance(relation, dict):
+                continue
+            relation_type = relation.get("type")
+            target = relation.get("experiment_id")
+            if not isinstance(relation_type, str) or not isinstance(target, str):
+                continue
+            rows.append(
+                {
+                    "type": relation_type,
+                    "type_zh": cls._board_relationship_type_zh(relation_type),
+                    "experiment_id": target,
+                }
+            )
+        return rows
+
+    @staticmethod
     def _board_attention(
         health: dict[str, str],
         next_gate: str,
@@ -812,35 +890,73 @@ class GameExpClient:
                 "required": True,
                 "priority": 0,
                 "reason": "HEALTH_FAIL",
+                "reason_zh": "健康异常",
+                "section": "ABNORMAL",
+                "section_zh": "异常",
+                "action_zh": "禁止继续；先处理健康异常",
             }
         if health["status"] == "UNKNOWN":
             return {
                 "required": True,
                 "priority": 1,
                 "reason": "HEALTH_UNKNOWN",
+                "reason_zh": "健康状态未知",
+                "section": "ABNORMAL",
+                "section_zh": "异常",
+                "action_zh": "先核验实验健康",
             }
         if next_gate == "ARCHIVE_RECOVERY":
             return {
                 "required": True,
                 "priority": 2,
                 "reason": "ARCHIVE_RECOVERY",
+                "reason_zh": "归档需要恢复",
+                "section": "RECOVERY",
+                "section_zh": "需要恢复",
+                "action_zh": "恢复同一归档操作",
             }
-        if next_gate in {
-            "HUMAN_REVIEW",
-            "HUMAN_PROMOTION",
-            "HUMAN_DECISION",
-            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL",
-            "ARCHIVE_OR_RETAIN",
-        }:
+        if next_gate == "HUMAN_REVIEW":
             return {
                 "required": True,
                 "priority": 3,
-                "reason": "HUMAN_GATE",
+                "reason": "HUMAN_REVIEW",
+                "reason_zh": "等待人工评审",
+                "section": "REVIEW",
+                "section_zh": "需要你评审",
+                "action_zh": "完成 PASS / FAIL 人工评审",
+            }
+        if next_gate in {
+            "HUMAN_PROMOTION",
+            "HUMAN_DECISION",
+            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL",
+        }:
+            return {
+                "required": True,
+                "priority": 4,
+                "reason": next_gate,
+                "reason_zh": "等待人工决策",
+                "section": "DECISION",
+                "section_zh": "需要你决策",
+                "action_zh": GameExpClient._board_next_gate_zh(next_gate),
+            }
+        if next_gate == "ARCHIVE_OR_RETAIN":
+            return {
+                "required": True,
+                "priority": 5,
+                "reason": "ARCHIVE_OR_RETAIN",
+                "reason_zh": "等待选择归档方式",
+                "section": "ARCHIVE_CHOICE",
+                "section_zh": "需要选择归档方式",
+                "action_zh": "选择保留或删除实验分支",
             }
         return {
             "required": False,
             "priority": None,
             "reason": None,
+            "reason_zh": None,
+            "section": None,
+            "section_zh": None,
+            "action_zh": None,
         }
 
     def _board_experiment_health(
