@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Trusted game experiment workflow with Chinese action Inbox, Ledger-derived timelines, experiment relationships, and read-only Board focus filters.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
