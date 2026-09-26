@@ -959,6 +959,224 @@ class GameExpClient:
             "action_zh": None,
         }
 
+    def _board_activity(
+        self,
+        *,
+        experiment_id: str,
+        manifest: dict[str, Any],
+        state: dict[str, Any],
+        review: dict[str, Any] | None,
+        snapshot_head: str,
+        paths: list[str],
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+
+        def add_event(
+            *,
+            order: int,
+            code: str,
+            label_zh: str,
+            detail_zh: str | None = None,
+            occurred_at: str | None = None,
+            source_kind: str,
+            source_id: str | None = None,
+            github_run_id: str | None = None,
+        ) -> None:
+            events.append(
+                {
+                    "order": order,
+                    "code": code,
+                    "label_zh": label_zh,
+                    "detail_zh": detail_zh,
+                    "occurred_at": occurred_at,
+                    "source_kind": source_kind,
+                    "source_id": source_id,
+                    "github_run_id": github_run_id,
+                }
+            )
+
+        created_at = manifest.get("created_at")
+        add_event(
+            order=0,
+            code="EXPERIMENT_CREATED",
+            label_zh="创建实验",
+            detail_zh=manifest.get("title") if isinstance(manifest.get("title"), str) else None,
+            occurred_at=created_at if isinstance(created_at, str) else None,
+            source_kind="manifest",
+            source_id=experiment_id,
+        )
+
+        decision_prefix = f"experiments/{experiment_id}/decisions/"
+        decision_paths = sorted(
+            path
+            for path in paths
+            if path.startswith(decision_prefix) and path.endswith(".json")
+        )
+        decision_rows: list[dict[str, Any]] = []
+        for path in decision_paths:
+            row = self.transport.ledger_json(path, ref=snapshot_head)
+            if isinstance(row, dict):
+                decision_rows.append(row)
+        decision_rows.sort(
+            key=lambda row: (
+                row.get("sequence") if isinstance(row.get("sequence"), int) else 999999,
+                str(row.get("decision_id") or ""),
+            )
+        )
+        decision_order = {
+            "REVIEW": 20,
+            "ACTIVE": 35,
+            "PROMISING": 60,
+            "SELECTED": 80,
+            "REJECTED": 90,
+        }
+        decision_label = {
+            "REVIEW": "进入评审",
+            "ACTIVE": "返回进行中",
+            "PROMISING": "晋级待选择",
+            "SELECTED": "已选定候选",
+            "REJECTED": "已拒绝",
+        }
+        for index, row in enumerate(decision_rows):
+            to_state = row.get("to_state")
+            if not isinstance(to_state, str):
+                continue
+            from_state = row.get("from_state")
+            detail = None
+            if isinstance(from_state, str):
+                detail = (
+                    f"{self._board_lifecycle_zh(from_state)} → "
+                    f"{self._board_lifecycle_zh(to_state)}"
+                )
+            add_event(
+                order=decision_order.get(to_state, 40) + index,
+                code=f"LIFECYCLE_{to_state}",
+                label_zh=decision_label.get(
+                    to_state,
+                    f"阶段变更为{self._board_lifecycle_zh(to_state)}",
+                ),
+                detail_zh=detail,
+                source_kind="decision",
+                source_id=row.get("decision_id") if isinstance(row.get("decision_id"), str) else None,
+            )
+
+        candidate_id = state.get("current_candidate_id")
+        if isinstance(candidate_id, str) and candidate_id:
+            candidate = self.transport.ledger_json(
+                f"experiments/{experiment_id}/candidates/{candidate_id}.json",
+                ref=snapshot_head,
+            )
+            github_run_id = (
+                str(candidate.get("github_run_id"))
+                if isinstance(candidate, dict) and candidate.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=40,
+                code="CANDIDATE_READY",
+                label_zh="候选版本已生成",
+                detail_zh=candidate_id,
+                source_kind="candidate",
+                source_id=candidate_id,
+                github_run_id=github_run_id,
+            )
+
+        if isinstance(review, dict):
+            outcome = review.get("outcome")
+            review_id = review.get("review_id")
+            add_event(
+                order=50,
+                code="HUMAN_REVIEW_RECORDED",
+                label_zh=(
+                    "人工评审通过"
+                    if outcome == "PASS"
+                    else "人工评审未通过"
+                    if outcome == "FAIL"
+                    else "已记录人工评审"
+                ),
+                detail_zh=review.get("notes") if isinstance(review.get("notes"), str) else None,
+                source_kind="review",
+                source_id=review_id if isinstance(review_id, str) else None,
+            )
+
+        rehearsal_id = state.get("current_rehearsal_id")
+        if isinstance(rehearsal_id, str) and rehearsal_id:
+            rehearsal = self.transport.ledger_json(
+                f"experiments/{experiment_id}/rehearsals/{rehearsal_id}.json",
+                ref=snapshot_head,
+            )
+            github_run_id = (
+                str(rehearsal.get("github_run_id"))
+                if isinstance(rehearsal, dict) and rehearsal.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=70,
+                code="REHEARSAL_READY",
+                label_zh="可信彩排完成",
+                detail_zh=rehearsal_id,
+                source_kind="rehearsal",
+                source_id=rehearsal_id,
+                github_run_id=github_run_id,
+            )
+
+        integration_id = state.get("current_integration_id")
+        if isinstance(integration_id, str) and integration_id:
+            integration = self.transport.ledger_json(
+                f"experiments/{experiment_id}/integrations/{integration_id}.json",
+                ref=snapshot_head,
+            )
+            pr = integration.get("pr") if isinstance(integration, dict) else None
+            occurred_at = (
+                pr.get("merged_at")
+                if isinstance(pr, dict) and isinstance(pr.get("merged_at"), str)
+                else None
+            )
+            pr_number = (
+                str(pr.get("number"))
+                if isinstance(pr, dict) and pr.get("number") is not None
+                else None
+            )
+            github_run_id = (
+                str(integration.get("github_run_id"))
+                if isinstance(integration, dict) and integration.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=100,
+                code="INTEGRATED",
+                label_zh="已集成",
+                detail_zh=f"PR #{pr_number}" if pr_number else integration_id,
+                occurred_at=occurred_at,
+                source_kind="integration",
+                source_id=integration_id,
+                github_run_id=github_run_id,
+            )
+
+        archive_id = state.get("current_archive_id")
+        if isinstance(archive_id, str) and archive_id:
+            archive = self.transport.ledger_json(
+                f"experiments/{experiment_id}/archives/{archive_id}.json",
+                ref=snapshot_head,
+            )
+            mode = archive.get("mode") if isinstance(archive, dict) else None
+            detail = {
+                "ATOMIC_DELETE": "已删除实验分支",
+                "RETAIN_BRANCH": "已保留实验分支",
+            }.get(mode, archive_id)
+            add_event(
+                order=110,
+                code="ARCHIVED",
+                label_zh="已归档",
+                detail_zh=detail,
+                source_kind="archive",
+                source_id=archive_id,
+            )
+
+        events.sort(key=lambda row: (row["order"], str(row.get("source_id") or "")))
+        return events
+
+
     def _board_experiment_health(
         self,
         experiment_id: str,
