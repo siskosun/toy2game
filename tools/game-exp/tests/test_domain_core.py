@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
@@ -135,6 +136,53 @@ class DomainBindingTests(unittest.TestCase):
         plan = self.plan(value)
         stored = plan.writes["experiments/EXP-123/manifest.json"]
         self.assertEqual(stored["subject"], value["subject"])
+
+    def test_relationships_are_persisted_and_validated(self):
+        value = manifest()
+        value["relationships"] = [
+            {"type": "depends_on", "experiment_id": "EXP-122"},
+            {"type": "supersedes", "experiment_id": "EXP-121"},
+        ]
+        with patch("domain_core._load_bound_experiment", return_value=({}, {}, {}, {})):
+            plan = self.plan(value)
+        stored = plan.writes["experiments/EXP-123/manifest.json"]
+        self.assertEqual(stored["relationships"], value["relationships"])
+
+    def test_relationship_rejects_missing_target(self):
+        value = manifest()
+        value["relationships"] = [
+            {"type": "depends_on", "experiment_id": "EXP-122"},
+        ]
+        with self.assertRaisesRegex(
+            DomainError,
+            "valid bound experiment",
+        ):
+            self.plan(value)
+
+    def test_relationship_rejects_self_target(self):
+        value = manifest()
+        value["relationships"] = [
+            {"type": "depends_on", "experiment_id": "EXP-123"},
+        ]
+        with self.assertRaisesRegex(DomainError, "cannot target itself"):
+            self.plan(value)
+
+    def test_relationship_rejects_duplicate_target(self):
+        value = manifest()
+        value["relationships"] = [
+            {"type": "depends_on", "experiment_id": "EXP-122"},
+            {"type": "blocks", "experiment_id": "EXP-122"},
+        ]
+        with self.assertRaisesRegex(DomainError, "multiple relationships"):
+            self.plan(value)
+
+    def test_relationship_rejects_unknown_type(self):
+        value = manifest()
+        value["relationships"] = [
+            {"type": "related_to", "experiment_id": "EXP-122"},
+        ]
+        with self.assertRaisesRegex(DomainError, "depends_on, blocks, or supersedes"):
+            self.plan(value)
 
     def test_subject_rejects_glob_root_path(self):
         value = manifest()

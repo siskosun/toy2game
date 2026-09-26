@@ -96,4 +96,4 @@ The agent must not decide these from automated evidence:
 
 ## Board views
 
-The Board projection contains `overview`, `attention`, `prototypes`, `branches`, and `archive` views. Follow `board.md` for presentation. New experiments should carry stable `manifest.subject`; legacy experiments may use scope-derived fallback identity.
+The Board projection contains `overview`, `attention`, `prototypes`, `branches`, and `archive` views. Follow `board.md` for presentation. `attention.sections` is the action Inbox, experiment `activity` is the Ledger-derived timeline, and prototype groups carry recent activity plus relationship counts. New experiments should carry stable `manifest.subject`; legacy experiments may use scope-derived fallback identity. Optional `manifest.relationships` may declare `depends_on`, `blocks`, or `supersedes` links to existing valid experiments in the same repository.

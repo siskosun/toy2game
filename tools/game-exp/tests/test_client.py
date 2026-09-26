@@ -393,6 +393,9 @@ class ClientTests(unittest.TestCase):
                     "hypothesis": "roles improve readability",
                     "experiment": {"issue_number": "7"},
                     "scope": {"allowed": ["games/arena-duel/**"]},
+                    "relationships": [
+                        {"type": "depends_on", "experiment_id": "EXP-21"},
+                    ],
                     "created_at": "2026-09-24T10:00:00Z",
                 },
                 "experiments/EXP-21/state.json": {
@@ -475,6 +478,28 @@ class ClientTests(unittest.TestCase):
             ["EXP-7"],
         )
         self.assertEqual(
+            result["views"]["attention"]["sections"],
+            [
+                {
+                    "section": "REVIEW",
+                    "title_zh": "需要你评审",
+                    "count": 1,
+                    "experiment_ids": ["EXP-7"],
+                }
+            ],
+        )
+        self.assertEqual(
+            result["experiments"][0]["display"],
+            {
+                "lifecycle": "评审中",
+                "health": "正常",
+                "next_gate": "人工评审",
+                "attention_section": "需要你评审",
+                "attention_reason": "等待人工评审",
+                "attention_action": "完成 PASS / FAIL 人工评审",
+            },
+        )
+        self.assertEqual(
             result["views"]["prototypes"]["groups"][0]["subject"]["name"],
             "Arena Duel",
         )
@@ -483,8 +508,37 @@ class ClientTests(unittest.TestCase):
             1,
         )
         self.assertEqual(
+            result["views"]["prototypes"]["relationship_edges"][0]["type_zh"],
+            "依赖",
+        )
+        self.assertEqual(
+            result["experiments"][0]["relationships_outgoing"][0][
+                "target_experiment_id"
+            ],
+            "EXP-21",
+        )
+        self.assertEqual(
+            result["experiments"][1]["relationships_incoming"][0]["type_zh"],
+            "被依赖",
+        )
+        self.assertTrue(
+            all(
+                isinstance(event["label_zh"], str)
+                and event["label_zh"]
+                for event in result["experiments"][1]["activity"]
+            )
+        )
+        self.assertIn(
+            "已归档",
+            [event["label_zh"] for event in result["experiments"][1]["activity"]],
+        )
+        self.assertEqual(
             result["views"]["branches"]["lanes"][0]["experiment_id"],
             "EXP-7",
+        )
+        self.assertEqual(
+            result["views"]["branches"]["lanes"][0]["lifecycle_zh"],
+            "评审中",
         )
         self.assertEqual(
             result["views"]["archive"]["experiment_ids"],

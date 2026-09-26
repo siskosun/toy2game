@@ -803,6 +803,84 @@ class GameExpClient:
         }
 
     @staticmethod
+    def _board_lifecycle_zh(lifecycle: str) -> str:
+        return {
+            "ACTIVE": "进行中",
+            "REVIEW": "评审中",
+            "PROMISING": "待选择",
+            "SELECTED": "已选定",
+            "INTEGRATED": "已集成",
+            "REJECTED": "已拒绝",
+            "ARCHIVED": "已归档",
+        }.get(lifecycle, lifecycle)
+
+    @staticmethod
+    def _board_health_zh(health: str) -> str:
+        return {
+            "PASS": "正常",
+            "FAIL": "异常",
+            "UNKNOWN": "未知",
+        }.get(health, health)
+
+    @staticmethod
+    def _board_next_gate_zh(next_gate: str) -> str:
+        return {
+            "IMPLEMENT_OR_REVIEW": "继续实现 / 进入评审",
+            "CANDIDATE_BUILD": "构建候选版本",
+            "HUMAN_REVIEW": "人工评审",
+            "HUMAN_PROMOTION": "决定是否晋级",
+            "HUMAN_DECISION": "人工决策",
+            "TRUSTED_REHEARSAL": "可信彩排",
+            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL": "人工选择 / 必要时刷新彩排",
+            "TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL": "集成 / 必要时刷新彩排",
+            "ARCHIVE_OR_RETAIN": "选择归档方式",
+            "ARCHIVE_RECOVERY": "恢复归档",
+            "ARCHIVE": "归档",
+            "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK": "已结束；新工作需新建实验",
+            "VERIFY_EXPERIMENT_HEALTH": "核验实验健康",
+            "DO_NOT_USE_RECREATE_EXPERIMENT": "禁止继续；重建实验",
+            "UNKNOWN": "未知",
+        }.get(next_gate, next_gate)
+
+    @staticmethod
+    def _board_relationship_type_zh(relation_type: str) -> str:
+        return {
+            "depends_on": "依赖",
+            "blocks": "阻塞",
+            "supersedes": "替代",
+        }.get(relation_type, relation_type)
+
+    @staticmethod
+    def _board_relationship_incoming_zh(relation_type: str) -> str:
+        return {
+            "depends_on": "被依赖",
+            "blocks": "被阻塞",
+            "supersedes": "被替代",
+        }.get(relation_type, relation_type)
+
+    @classmethod
+    def _board_relationships(cls, manifest: dict[str, Any]) -> list[dict[str, str]]:
+        raw = manifest.get("relationships")
+        if not isinstance(raw, list):
+            return []
+        rows: list[dict[str, str]] = []
+        for relation in raw:
+            if not isinstance(relation, dict):
+                continue
+            relation_type = relation.get("type")
+            target = relation.get("experiment_id")
+            if not isinstance(relation_type, str) or not isinstance(target, str):
+                continue
+            rows.append(
+                {
+                    "type": relation_type,
+                    "type_zh": cls._board_relationship_type_zh(relation_type),
+                    "experiment_id": target,
+                }
+            )
+        return rows
+
+    @staticmethod
     def _board_attention(
         health: dict[str, str],
         next_gate: str,
@@ -812,36 +890,292 @@ class GameExpClient:
                 "required": True,
                 "priority": 0,
                 "reason": "HEALTH_FAIL",
+                "reason_zh": "健康异常",
+                "section": "ABNORMAL",
+                "section_zh": "异常",
+                "action_zh": "禁止继续；先处理健康异常",
             }
         if health["status"] == "UNKNOWN":
             return {
                 "required": True,
                 "priority": 1,
                 "reason": "HEALTH_UNKNOWN",
+                "reason_zh": "健康状态未知",
+                "section": "ABNORMAL",
+                "section_zh": "异常",
+                "action_zh": "先核验实验健康",
             }
         if next_gate == "ARCHIVE_RECOVERY":
             return {
                 "required": True,
                 "priority": 2,
                 "reason": "ARCHIVE_RECOVERY",
+                "reason_zh": "归档需要恢复",
+                "section": "RECOVERY",
+                "section_zh": "需要恢复",
+                "action_zh": "恢复同一归档操作",
             }
-        if next_gate in {
-            "HUMAN_REVIEW",
-            "HUMAN_PROMOTION",
-            "HUMAN_DECISION",
-            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL",
-            "ARCHIVE_OR_RETAIN",
-        }:
+        if next_gate == "HUMAN_REVIEW":
             return {
                 "required": True,
                 "priority": 3,
-                "reason": "HUMAN_GATE",
+                "reason": "HUMAN_REVIEW",
+                "reason_zh": "等待人工评审",
+                "section": "REVIEW",
+                "section_zh": "需要你评审",
+                "action_zh": "完成 PASS / FAIL 人工评审",
+            }
+        if next_gate in {
+            "HUMAN_PROMOTION",
+            "HUMAN_DECISION",
+            "HUMAN_SELECTION_OR_REFRESH_REHEARSAL",
+        }:
+            return {
+                "required": True,
+                "priority": 4,
+                "reason": next_gate,
+                "reason_zh": "等待人工决策",
+                "section": "DECISION",
+                "section_zh": "需要你决策",
+                "action_zh": GameExpClient._board_next_gate_zh(next_gate),
+            }
+        if next_gate == "ARCHIVE_OR_RETAIN":
+            return {
+                "required": True,
+                "priority": 5,
+                "reason": "ARCHIVE_OR_RETAIN",
+                "reason_zh": "等待选择归档方式",
+                "section": "ARCHIVE_CHOICE",
+                "section_zh": "需要选择归档方式",
+                "action_zh": "选择保留或删除实验分支",
             }
         return {
             "required": False,
             "priority": None,
             "reason": None,
+            "reason_zh": None,
+            "section": None,
+            "section_zh": None,
+            "action_zh": None,
         }
+
+    def _board_activity(
+        self,
+        *,
+        experiment_id: str,
+        manifest: dict[str, Any],
+        state: dict[str, Any],
+        review: dict[str, Any] | None,
+        snapshot_head: str,
+        paths: list[str],
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+
+        def add_event(
+            *,
+            order: int,
+            code: str,
+            label_zh: str,
+            detail_zh: str | None = None,
+            occurred_at: str | None = None,
+            source_kind: str,
+            source_id: str | None = None,
+            github_run_id: str | None = None,
+        ) -> None:
+            events.append(
+                {
+                    "order": order,
+                    "code": code,
+                    "label_zh": label_zh,
+                    "detail_zh": detail_zh,
+                    "occurred_at": occurred_at,
+                    "source_kind": source_kind,
+                    "source_id": source_id,
+                    "github_run_id": github_run_id,
+                }
+            )
+
+        created_at = manifest.get("created_at")
+        add_event(
+            order=0,
+            code="EXPERIMENT_CREATED",
+            label_zh="创建实验",
+            detail_zh=manifest.get("title") if isinstance(manifest.get("title"), str) else None,
+            occurred_at=created_at if isinstance(created_at, str) else None,
+            source_kind="manifest",
+            source_id=experiment_id,
+        )
+
+        decision_prefix = f"experiments/{experiment_id}/decisions/"
+        decision_paths = sorted(
+            path
+            for path in paths
+            if path.startswith(decision_prefix) and path.endswith(".json")
+        )
+        decision_rows: list[dict[str, Any]] = []
+        for path in decision_paths:
+            row = self.transport.ledger_json(path, ref=snapshot_head)
+            if isinstance(row, dict):
+                decision_rows.append(row)
+        decision_rows.sort(
+            key=lambda row: (
+                row.get("sequence") if isinstance(row.get("sequence"), int) else 999999,
+                str(row.get("decision_id") or ""),
+            )
+        )
+        decision_order = {
+            "REVIEW": 20,
+            "ACTIVE": 35,
+            "PROMISING": 60,
+            "SELECTED": 80,
+            "REJECTED": 90,
+        }
+        decision_label = {
+            "REVIEW": "进入评审",
+            "ACTIVE": "返回进行中",
+            "PROMISING": "晋级待选择",
+            "SELECTED": "已选定候选",
+            "REJECTED": "已拒绝",
+        }
+        for index, row in enumerate(decision_rows):
+            to_state = row.get("to_state")
+            if not isinstance(to_state, str):
+                continue
+            from_state = row.get("from_state")
+            detail = None
+            if isinstance(from_state, str):
+                detail = (
+                    f"{self._board_lifecycle_zh(from_state)} → "
+                    f"{self._board_lifecycle_zh(to_state)}"
+                )
+            add_event(
+                order=decision_order.get(to_state, 40) + index,
+                code=f"LIFECYCLE_{to_state}",
+                label_zh=decision_label.get(
+                    to_state,
+                    f"阶段变更为{self._board_lifecycle_zh(to_state)}",
+                ),
+                detail_zh=detail,
+                source_kind="decision",
+                source_id=row.get("decision_id") if isinstance(row.get("decision_id"), str) else None,
+            )
+
+        candidate_id = state.get("current_candidate_id")
+        if isinstance(candidate_id, str) and candidate_id:
+            candidate = self.transport.ledger_json(
+                f"experiments/{experiment_id}/candidates/{candidate_id}.json",
+                ref=snapshot_head,
+            )
+            github_run_id = (
+                str(candidate.get("github_run_id"))
+                if isinstance(candidate, dict) and candidate.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=40,
+                code="CANDIDATE_READY",
+                label_zh="候选版本已生成",
+                detail_zh=candidate_id,
+                source_kind="candidate",
+                source_id=candidate_id,
+                github_run_id=github_run_id,
+            )
+
+        if isinstance(review, dict):
+            outcome = review.get("outcome")
+            review_id = review.get("review_id")
+            add_event(
+                order=50,
+                code="HUMAN_REVIEW_RECORDED",
+                label_zh=(
+                    "人工评审通过"
+                    if outcome == "PASS"
+                    else "人工评审未通过"
+                    if outcome == "FAIL"
+                    else "已记录人工评审"
+                ),
+                detail_zh=review.get("notes") if isinstance(review.get("notes"), str) else None,
+                source_kind="review",
+                source_id=review_id if isinstance(review_id, str) else None,
+            )
+
+        rehearsal_id = state.get("current_rehearsal_id")
+        if isinstance(rehearsal_id, str) and rehearsal_id:
+            rehearsal = self.transport.ledger_json(
+                f"experiments/{experiment_id}/rehearsals/{rehearsal_id}.json",
+                ref=snapshot_head,
+            )
+            github_run_id = (
+                str(rehearsal.get("github_run_id"))
+                if isinstance(rehearsal, dict) and rehearsal.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=70,
+                code="REHEARSAL_READY",
+                label_zh="可信彩排完成",
+                detail_zh=rehearsal_id,
+                source_kind="rehearsal",
+                source_id=rehearsal_id,
+                github_run_id=github_run_id,
+            )
+
+        integration_id = state.get("current_integration_id")
+        if isinstance(integration_id, str) and integration_id:
+            integration = self.transport.ledger_json(
+                f"experiments/{experiment_id}/integrations/{integration_id}.json",
+                ref=snapshot_head,
+            )
+            pr = integration.get("pr") if isinstance(integration, dict) else None
+            occurred_at = (
+                pr.get("merged_at")
+                if isinstance(pr, dict) and isinstance(pr.get("merged_at"), str)
+                else None
+            )
+            pr_number = (
+                str(pr.get("number"))
+                if isinstance(pr, dict) and pr.get("number") is not None
+                else None
+            )
+            github_run_id = (
+                str(integration.get("github_run_id"))
+                if isinstance(integration, dict) and integration.get("github_run_id") is not None
+                else None
+            )
+            add_event(
+                order=100,
+                code="INTEGRATED",
+                label_zh="已集成",
+                detail_zh=f"PR #{pr_number}" if pr_number else integration_id,
+                occurred_at=occurred_at,
+                source_kind="integration",
+                source_id=integration_id,
+                github_run_id=github_run_id,
+            )
+
+        archive_id = state.get("current_archive_id")
+        if isinstance(archive_id, str) and archive_id:
+            archive = self.transport.ledger_json(
+                f"experiments/{experiment_id}/archives/{archive_id}.json",
+                ref=snapshot_head,
+            )
+            mode = archive.get("mode") if isinstance(archive, dict) else None
+            detail = {
+                "ATOMIC_DELETE": "已删除实验分支",
+                "RETAIN_BRANCH": "已保留实验分支",
+            }.get(mode, archive_id)
+            add_event(
+                order=110,
+                code="ARCHIVED",
+                label_zh="已归档",
+                detail_zh=detail,
+                source_kind="archive",
+                source_id=archive_id,
+            )
+
+        events.sort(key=lambda row: (row["order"], str(row.get("source_id") or "")))
+        return events
+
 
     def _board_experiment_health(
         self,
@@ -995,6 +1329,24 @@ class GameExpClient:
                 )
             )
             subject = self._board_subject(manifest)
+            attention = self._board_attention(health, next_gate)
+            relationships_outgoing = self._board_relationships(manifest)
+            activity = self._board_activity(
+                experiment_id=experiment_id,
+                manifest=manifest,
+                state=state,
+                review=review if isinstance(review, dict) else None,
+                snapshot_head=snapshot_head,
+                paths=paths,
+            )
+            display = {
+                "lifecycle": self._board_lifecycle_zh(lifecycle),
+                "health": self._board_health_zh(health["status"]),
+                "next_gate": self._board_next_gate_zh(next_gate),
+                "attention_section": attention.get("section_zh"),
+                "attention_reason": attention.get("reason_zh"),
+                "attention_action": attention.get("action_zh"),
+            }
             initialization = (
                 binding.get("initialization")
                 if isinstance(binding, dict)
@@ -1018,7 +1370,12 @@ class GameExpClient:
                 "subject_source": subject["source"],
                 "prototype_name": subject["name"],
                 "hypothesis": manifest.get("hypothesis"),
+                "relationships_outgoing": relationships_outgoing,
+                "relationships_incoming": [],
+                "activity": activity,
+                "latest_activity": activity[-1] if activity else None,
                 "lifecycle": lifecycle,
+                "display": display,
                 "candidate_id": state.get("current_candidate_id"),
                 "review_id": review_id,
                 "review_outcome": (
@@ -1039,7 +1396,7 @@ class GameExpClient:
                 "health": health["status"],
                 "health_code": health["code"],
                 "next_gate": next_gate,
-                "attention": self._board_attention(health, next_gate),
+                "attention": attention,
             }
             items.append(item)
             counts[lifecycle] = counts.get(lifecycle, 0) + 1
@@ -1048,6 +1405,35 @@ class GameExpClient:
             )
 
         by_id = {item["experiment_id"]: item for item in items}
+        relationship_edges: list[dict[str, Any]] = []
+        for item in items:
+            source_id = item["experiment_id"]
+            normalized_outgoing: list[dict[str, Any]] = []
+            for relation in item["relationships_outgoing"]:
+                target_id = relation["experiment_id"]
+                target = by_id.get(target_id)
+                edge = {
+                    "source_experiment_id": source_id,
+                    "target_experiment_id": target_id,
+                    "type": relation["type"],
+                    "type_zh": relation["type_zh"],
+                    "source_title": item.get("title"),
+                    "target_title": target.get("title") if target else None,
+                    "source_subject_name": item.get("subject_name"),
+                    "target_subject_name": target.get("subject_name") if target else None,
+                }
+                relationship_edges.append(edge)
+                normalized_outgoing.append(edge)
+                if target is not None:
+                    target["relationships_incoming"].append(
+                        {
+                            **edge,
+                            "type_zh": self._board_relationship_incoming_zh(
+                                relation["type"]
+                            ),
+                        }
+                    )
+            item["relationships_outgoing"] = normalized_outgoing
         attention_ids = [
             item["experiment_id"]
             for item in sorted(
@@ -1063,6 +1449,30 @@ class GameExpClient:
             )
             if item["attention"]["required"]
         ]
+        attention_section_order = [
+            ("ABNORMAL", "异常"),
+            ("RECOVERY", "需要恢复"),
+            ("REVIEW", "需要你评审"),
+            ("DECISION", "需要你决策"),
+            ("ARCHIVE_CHOICE", "需要选择归档方式"),
+        ]
+        attention_sections: list[dict[str, Any]] = []
+        for section_code, section_zh in attention_section_order:
+            section_ids = [
+                experiment_id
+                for experiment_id in attention_ids
+                if by_id[experiment_id]["attention"].get("section") == section_code
+            ]
+            if section_ids:
+                attention_sections.append(
+                    {
+                        "section": section_code,
+                        "title_zh": section_zh,
+                        "count": len(section_ids),
+                        "experiment_ids": section_ids,
+                    }
+                )
+
         active_ids = [
             item["experiment_id"]
             for item in items
@@ -1085,6 +1495,8 @@ class GameExpClient:
                     "counts_by_lifecycle": {},
                     "counts_by_health": {},
                     "attention_count": 0,
+                    "relationship_count": 0,
+                    "recent_activity": [],
                 },
             )
             group["experiment_ids"].append(item["experiment_id"])
@@ -1096,6 +1508,15 @@ class GameExpClient:
             group_health[item["health"]] = group_health.get(item["health"], 0) + 1
             if item["attention"]["required"]:
                 group["attention_count"] += 1
+            group["relationship_count"] += len(item["relationships_outgoing"])
+            for event in item["activity"][-3:]:
+                group["recent_activity"].append(
+                    {
+                        **event,
+                        "experiment_id": item["experiment_id"],
+                        "experiment_title": item.get("title"),
+                    }
+                )
 
         prototype_groups = []
         for group in groups.values():
@@ -1123,6 +1544,15 @@ class GameExpClient:
             )
             group["latest_experiment_id"] = latest
             group["latest_created_at"] = by_id[latest].get("created_at")
+            group["recent_activity"].sort(
+                key=lambda row: (
+                    str(by_id[row["experiment_id"]].get("created_at") or ""),
+                    int(row["experiment_id"].removeprefix("EXP-")),
+                    int(row.get("order") or 0),
+                ),
+                reverse=True,
+            )
+            group["recent_activity"] = group["recent_activity"][:8]
             group["counts_by_lifecycle"] = dict(
                 sorted(group["counts_by_lifecycle"].items())
             )
@@ -1143,6 +1573,8 @@ class GameExpClient:
                 "experiment_id": item["experiment_id"],
                 "subject_name": item["subject_name"],
                 "lifecycle": item["lifecycle"],
+                "lifecycle_zh": item["display"]["lifecycle"],
+                "title": item.get("title"),
                 "parent_sha": item["parent_sha"],
                 "branch_ref": item["branch_ref"],
                 "base_tag_ref": item["base_tag_ref"],
@@ -1173,9 +1605,11 @@ class GameExpClient:
                 },
                 "attention": {
                     "experiment_ids": attention_ids,
+                    "sections": attention_sections,
                 },
                 "prototypes": {
                     "groups": prototype_groups,
+                    "relationship_edges": relationship_edges,
                 },
                 "branches": {
                     "lanes": branch_lanes,
