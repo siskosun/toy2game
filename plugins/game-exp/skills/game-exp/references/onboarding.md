@@ -19,7 +19,12 @@ Do not repeatedly force onboarding after the repository already has experiments.
 ## Six-step flow
 
 1. `连接检查`
-   - run repo-level `game_exp_doctor` without `experiment_id`;
+   - run `game_exp_access_check` first and classify access as `NO_ACCESS`, `READ_ONLY`, `WRITE`, or `ADMIN`;
+   - `NO_ACCESS`: explain that the repository cannot be read and stop;
+   - `READ_ONLY`: allow Board viewing but disable creating or advancing experiments; ask for repository write permission or another repository;
+   - `WRITE`: allow normal game-exp use and label admin-only checks as partial when unavailable;
+   - `ADMIN`: allow normal use with full repository-level inspection coverage;
+   - then run repo-level `game_exp_doctor` without `experiment_id`;
    - explain any partial coverage;
    - do not continue past a hard trust failure.
 
@@ -81,3 +86,12 @@ Translate these intents to the existing trusted workflow. Do not require users t
 Onboarding is complete only when the first experiment is authoritatively bound and initialized. Later lifecycle stages remain part of normal game-exp operation.
 
 Do not label an ACCEPTED dispatch as onboarding completion.
+
+## Access-state copy
+
+Use these Chinese messages consistently:
+
+- `NO_ACCESS`: `无法访问该 GitHub 仓库。请检查登录、仓库授权，或切换到你有权限的仓库。`
+- `READ_ONLY`: `当前只有读取权限：可以查看 game-exp 面板，但不能创建或推进实验。请获得仓库写入权限后继续。`
+- `WRITE`: `当前具有读写权限，可以使用 game-exp；部分管理员级检查可能不可见。`
+- `ADMIN`: `当前具有完整仓库管理权限。`
