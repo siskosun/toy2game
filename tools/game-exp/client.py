@@ -1636,6 +1636,22 @@ class GameExpClient:
                 attention_only,
             )
         )
+        focus_items = [by_id[experiment_id] for experiment_id in focus_ids]
+        focus_counts_by_lifecycle: dict[str, int] = {}
+        focus_counts_by_health: dict[str, int] = {}
+        focus_attention_count = 0
+        for item in focus_items:
+            item_lifecycle = item["lifecycle"]
+            item_health = item["health"]
+            focus_counts_by_lifecycle[item_lifecycle] = (
+                focus_counts_by_lifecycle.get(item_lifecycle, 0) + 1
+            )
+            focus_counts_by_health[item_health] = (
+                focus_counts_by_health.get(item_health, 0) + 1
+            )
+            if item.get("attention", {}).get("required"):
+                focus_attention_count += 1
+
         focus = {
             "active": focus_active,
             "query": query.strip() if isinstance(query, str) and query.strip() else None,
@@ -1643,11 +1659,14 @@ class GameExpClient:
             "lifecycle": normalized_lifecycle,
             "attention_only": attention_only,
             "count": len(focus_ids),
+            "attention_count": focus_attention_count,
+            "counts_by_lifecycle": dict(sorted(focus_counts_by_lifecycle.items())),
+            "counts_by_health": dict(sorted(focus_counts_by_health.items())),
             "experiment_ids": focus_ids,
             "summary_zh": (
-                f"已聚焦 {len(focus_ids)} 个实验"
+                f"已聚焦 {len(focus_ids)} 个实验，其中 {focus_attention_count} 个需要处理"
                 if focus_active
-                else f"全部 {len(items)} 个实验"
+                else f"全部 {len(items)} 个实验，其中 {focus_attention_count} 个需要处理"
             ),
         }
 
