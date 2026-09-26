@@ -66,6 +66,8 @@ Each experiment entry should show:
 - 实验编号
 - 原型/主体
 - 实验标题
+- 发起人（来自可信 binding actor；legacy 记录可能缺失）
+- 代码贡献者（来自 GitHub commit contributor 信息，仅协作展示，不作为权限依据）
 - 当前阶段
 - 为什么需要处理
 - 下一步动作
@@ -80,6 +82,7 @@ Render one compact group per subject:
 
 - subject name and root path;
 - total / active / archived / attention counts;
+- for concurrent experiments, show each experiment's trusted initiator and GitHub contributors so the user can see who is trying what;
 - lifecycle distribution;
 - latest experiment;
 - child experiment ids only when useful.
@@ -112,7 +115,7 @@ Show parent SHA only when diagnosing freshness or ancestry. Show final tag for a
 
 When the user opens one experiment, use `game_exp_experiment_panel` when available and organize the returned detail panel in this order:
 
-1. `实验概况`: 标题、原型、阶段、健康、下一步。
+1. `实验概况`: 标题、原型、发起人、代码贡献者、阶段、健康、下一步。
 2. `假设与判定`: use `judgement.hypothesis`, `judgement.success_criteria`, and `judgement.kill_criteria`.
 3. `活动时间线`: use the experiment `activity` array. Render `label_zh` and `detail_zh`; show `occurred_at` only when the Ledger-derived record contains a trustworthy timestamp.
 4. `关系`: show outgoing and incoming experiment relations with Chinese relation labels.
@@ -181,3 +184,14 @@ Keep raw non-PASS health codes visible for diagnosis.
 ## Empty repository
 
 If the protected Ledger contains zero experiments, show the repository header and first-use onboarding entry from `onboarding.md`. Display `暂无实验` as context and make `创建第一个实验` the primary next action. Do not fabricate a placeholder experiment row.
+
+## 作者与贡献者
+
+Use two distinct concepts:
+
+- `发起人`: the trusted GitHub actor verified by Trusted Writer at experiment Bind time and stored in binding `initiator`. This identity may be used for attribution, but lifecycle authority still comes from current trusted permission checks.
+- `代码贡献者`: GitHub-linked contributors observed from commits on the canonical experiment branch (or final tag for archived experiments). This is collaboration metadata only and must never grant authority.
+
+For legacy experiments without `binding.initiator`, display `发起人：历史记录未保存` rather than inferring an authoritative initiator from commit authors.
+
+When contributor history is incomplete (for example more than the inspected commit window or GitHub lookup failed), label it as `贡献者记录可能不完整`.
