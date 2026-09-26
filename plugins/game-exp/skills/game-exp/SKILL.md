@@ -26,10 +26,11 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
 2. Otherwise build the same projection from one pinned protected `game-exp/ledger` snapshot through GitHub.
 3. Render Chinese by default.
 4. Default to `总览`; support `待处理` / `原型` / `分支图` / `归档` as named views.
-5. Follow `references/board.md` for information hierarchy, ordering, labels, and empty-state behavior.
-6. Keep all system-generated panel entries in Chinese. Preserve raw machine enums only for diagnostics; never make English enum names the primary UI text.
-7. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
-8. Do not derive authority from Issue labels, branch names, workflow UI, or the rendered Board.
+5. Follow `references/board.md` for information hierarchy, ordering, labels, focus filters, and empty-state behavior.
+6. When the user asks to narrow the Board, pass read-only focus filters to `game_exp_board`: `query`, `subject_id`, `lifecycle`, and/or `attention_only`. Treat `focus.experiment_ids` as a presentation subset only; the full pinned snapshot remains authoritative.
+7. Keep all system-generated panel entries in Chinese. Preserve raw machine enums only for diagnostics; never make English enum names the primary UI text.
+8. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
+9. Do not derive authority from Issue labels, branch names, workflow UI, focus results, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
