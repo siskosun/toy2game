@@ -40,6 +40,12 @@ When the user opens one experiment from the Board, prefer `game_exp_experiment_p
 
 When the user opens one prototype/subject group, prefer `game_exp_subject_panel`. It returns the stable subject identity, focused lifecycle/health/attention summary, recent activity, child experiment summaries, and relationship edges from the same pinned Ledger snapshot.
 
+## First-use onboarding
+
+When the protected Ledger is empty, or the user explicitly says this is their first use, follow `references/onboarding.md`. Keep onboarding in plain Chinese and translate natural-language intent into the existing trusted workflow. Do not require the user to know Manifest fields, request ids, lifecycle enums, MCP tool names, or protected refs.
+
+Onboarding completes only after the first experiment is authoritatively bound and initialized. An `ACCEPTED` dispatch alone is not completion.
+
 ## Start every workflow from authoritative state
 
 - With MCP, use `game_exp_status` / `game_exp_experiment_get` / `game_exp_doctor` as appropriate. Before a new experiment is bound, use repo-level Doctor without `experiment_id`; use experiment-aware Doctor only after the experiment exists in the protected Ledger.
