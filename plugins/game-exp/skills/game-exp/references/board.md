@@ -194,4 +194,4 @@ Use two distinct concepts:
 
 For legacy experiments without `binding.initiator`, display `发起人：历史记录未保存` rather than inferring an authoritative initiator from commit authors.
 
-When contributor history is incomplete (for example more than the inspected commit window or GitHub lookup failed), label it as `贡献者记录可能不完整`.
+When contributor history is incomplete (for example more than the inspected commit window or GitHub lookup failed), `contributors_complete=false` and the UI must label it as `贡献者记录可能不完整`.
