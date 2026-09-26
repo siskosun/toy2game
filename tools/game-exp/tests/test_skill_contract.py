@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.9.0")
+        self.assertEqual(manifest["version"], "0.10.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -51,6 +51,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertRegex(content, r"(?s)^---\nname: game-exp\ndescription: .+?\n---")
         required_tools = {
             "game_exp_status",
+            "game_exp_access_check",
             "game_exp_board",
             "game_exp_experiment_panel",
             "game_exp_subject_panel",
@@ -146,6 +147,9 @@ class GameExpSkillContractTests(unittest.TestCase):
             "judgement.success_criteria",
             "game_exp_subject_panel",
             "relationship_edges",
+            "发起人",
+            "代码贡献者",
+            "contributors_complete",
         ):
             self.assertIn(phrase, board)
 
@@ -175,6 +179,9 @@ class GameExpSkillContractTests(unittest.TestCase):
             "local filtering",
             "It must not directly mutate lifecycle state or protected refs",
             "trusted MCP/workflow path",
+            "READ_ONLY",
+            "发起人",
+            "代码贡献者",
             "Text fallback",
         ):
             self.assertIn(phrase, content)
@@ -190,6 +197,10 @@ class GameExpSkillContractTests(unittest.TestCase):
             "建立实验",
             "开发与试玩",
             "人工决定",
+            "game_exp_access_check",
+            "READ_ONLY",
+            "WRITE",
+            "ADMIN",
             "game_exp_doctor",
             "game_exp_experiment_bind",
             "game_exp_initialize",
