@@ -87,6 +87,8 @@ For actions such as Review, PROMISING, SELECTED, Integration, or Archive, the UI
 
 ## Empty and failure states
 
+For a zero-experiment repository, prefer the first-use onboarding card from `onboarding.md` over a bare empty state. The card may show `暂无实验` as context, but its primary action is `创建第一个实验`.
+
 - zero repository experiments: `暂无实验`
 - zero filtered experiments: `没有符合当前筛选条件的实验`
 - health FAIL: show as blocked; do not present normal lifecycle actions as available
