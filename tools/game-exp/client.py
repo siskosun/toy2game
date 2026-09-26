@@ -1329,6 +1329,24 @@ class GameExpClient:
                 )
             )
             subject = self._board_subject(manifest)
+            attention = self._board_attention(health, next_gate)
+            relationships_outgoing = self._board_relationships(manifest)
+            activity = self._board_activity(
+                experiment_id=experiment_id,
+                manifest=manifest,
+                state=state,
+                review=review if isinstance(review, dict) else None,
+                snapshot_head=snapshot_head,
+                paths=paths,
+            )
+            display = {
+                "lifecycle": self._board_lifecycle_zh(lifecycle),
+                "health": self._board_health_zh(health["status"]),
+                "next_gate": self._board_next_gate_zh(next_gate),
+                "attention_section": attention.get("section_zh"),
+                "attention_reason": attention.get("reason_zh"),
+                "attention_action": attention.get("action_zh"),
+            }
             initialization = (
                 binding.get("initialization")
                 if isinstance(binding, dict)
@@ -1352,7 +1370,12 @@ class GameExpClient:
                 "subject_source": subject["source"],
                 "prototype_name": subject["name"],
                 "hypothesis": manifest.get("hypothesis"),
+                "relationships_outgoing": relationships_outgoing,
+                "relationships_incoming": [],
+                "activity": activity,
+                "latest_activity": activity[-1] if activity else None,
                 "lifecycle": lifecycle,
+                "display": display,
                 "candidate_id": state.get("current_candidate_id"),
                 "review_id": review_id,
                 "review_outcome": (
@@ -1373,7 +1396,7 @@ class GameExpClient:
                 "health": health["status"],
                 "health_code": health["code"],
                 "next_gate": next_gate,
-                "attention": self._board_attention(health, next_gate),
+                "attention": attention,
             }
             items.append(item)
             counts[lifecycle] = counts.get(lifecycle, 0) + 1
