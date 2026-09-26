@@ -1405,6 +1405,35 @@ class GameExpClient:
             )
 
         by_id = {item["experiment_id"]: item for item in items}
+        relationship_edges: list[dict[str, Any]] = []
+        for item in items:
+            source_id = item["experiment_id"]
+            normalized_outgoing: list[dict[str, Any]] = []
+            for relation in item["relationships_outgoing"]:
+                target_id = relation["experiment_id"]
+                target = by_id.get(target_id)
+                edge = {
+                    "source_experiment_id": source_id,
+                    "target_experiment_id": target_id,
+                    "type": relation["type"],
+                    "type_zh": relation["type_zh"],
+                    "source_title": item.get("title"),
+                    "target_title": target.get("title") if target else None,
+                    "source_subject_name": item.get("subject_name"),
+                    "target_subject_name": target.get("subject_name") if target else None,
+                }
+                relationship_edges.append(edge)
+                normalized_outgoing.append(edge)
+                if target is not None:
+                    target["relationships_incoming"].append(
+                        {
+                            **edge,
+                            "type_zh": self._board_relationship_incoming_zh(
+                                relation["type"]
+                            ),
+                        }
+                    )
+            item["relationships_outgoing"] = normalized_outgoing
         attention_ids = [
             item["experiment_id"]
             for item in sorted(
@@ -1420,6 +1449,30 @@ class GameExpClient:
             )
             if item["attention"]["required"]
         ]
+        attention_section_order = [
+            ("ABNORMAL", "异常"),
+            ("RECOVERY", "需要恢复"),
+            ("REVIEW", "需要你评审"),
+            ("DECISION", "需要你决策"),
+            ("ARCHIVE_CHOICE", "需要选择归档方式"),
+        ]
+        attention_sections: list[dict[str, Any]] = []
+        for section_code, section_zh in attention_section_order:
+            section_ids = [
+                experiment_id
+                for experiment_id in attention_ids
+                if by_id[experiment_id]["attention"].get("section") == section_code
+            ]
+            if section_ids:
+                attention_sections.append(
+                    {
+                        "section": section_code,
+                        "title_zh": section_zh,
+                        "count": len(section_ids),
+                        "experiment_ids": section_ids,
+                    }
+                )
+
         active_ids = [
             item["experiment_id"]
             for item in items
@@ -1442,6 +1495,8 @@ class GameExpClient:
                     "counts_by_lifecycle": {},
                     "counts_by_health": {},
                     "attention_count": 0,
+                    "relationship_count": 0,
+                    "recent_activity": [],
                 },
             )
             group["experiment_ids"].append(item["experiment_id"])
@@ -1453,6 +1508,15 @@ class GameExpClient:
             group_health[item["health"]] = group_health.get(item["health"], 0) + 1
             if item["attention"]["required"]:
                 group["attention_count"] += 1
+            group["relationship_count"] += len(item["relationships_outgoing"])
+            for event in item["activity"][-3:]:
+                group["recent_activity"].append(
+                    {
+                        **event,
+                        "experiment_id": item["experiment_id"],
+                        "experiment_title": item.get("title"),
+                    }
+                )
 
         prototype_groups = []
         for group in groups.values():
@@ -1480,6 +1544,15 @@ class GameExpClient:
             )
             group["latest_experiment_id"] = latest
             group["latest_created_at"] = by_id[latest].get("created_at")
+            group["recent_activity"].sort(
+                key=lambda row: (
+                    str(by_id[row["experiment_id"]].get("created_at") or ""),
+                    int(row["experiment_id"].removeprefix("EXP-")),
+                    int(row.get("order") or 0),
+                ),
+                reverse=True,
+            )
+            group["recent_activity"] = group["recent_activity"][:8]
             group["counts_by_lifecycle"] = dict(
                 sorted(group["counts_by_lifecycle"].items())
             )
@@ -1500,6 +1573,8 @@ class GameExpClient:
                 "experiment_id": item["experiment_id"],
                 "subject_name": item["subject_name"],
                 "lifecycle": item["lifecycle"],
+                "lifecycle_zh": item["display"]["lifecycle"],
+                "title": item.get("title"),
                 "parent_sha": item["parent_sha"],
                 "branch_ref": item["branch_ref"],
                 "base_tag_ref": item["base_tag_ref"],
@@ -1530,9 +1605,11 @@ class GameExpClient:
                 },
                 "attention": {
                     "experiment_ids": attention_ids,
+                    "sections": attention_sections,
                 },
                 "prototypes": {
                     "groups": prototype_groups,
+                    "relationship_edges": relationship_edges,
                 },
                 "branches": {
                     "lanes": branch_lanes,
