@@ -1236,7 +1236,14 @@ class GameExpClient:
 
         return {"status": "PASS", "code": "BINDING_CHAIN_VERIFIED"}
 
-    def board(self) -> dict[str, Any]:
+    def board(
+        self,
+        *,
+        query: str | None = None,
+        subject_id: str | None = None,
+        lifecycle: str | None = None,
+        attention_only: bool = False,
+    ) -> dict[str, Any]:
         try:
             snapshot_head = self.transport.ledger_head()
             paths = self.transport.ledger_paths(snapshot_head)
@@ -1587,6 +1594,62 @@ class GameExpClient:
             for item in items
         ]
 
+        normalized_query = query.strip().casefold() if isinstance(query, str) else ""
+        normalized_subject_id = (
+            subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None
+        )
+        normalized_lifecycle = (
+            lifecycle.strip().upper()
+            if isinstance(lifecycle, str) and lifecycle.strip()
+            else None
+        )
+        focus_ids: list[str] = []
+        for item in items:
+            if normalized_subject_id and item.get("subject_id") != normalized_subject_id:
+                continue
+            if normalized_lifecycle and item.get("lifecycle") != normalized_lifecycle:
+                continue
+            if attention_only and not item.get("attention", {}).get("required"):
+                continue
+            if normalized_query:
+                searchable = " ".join(
+                    str(value)
+                    for value in (
+                        item.get("experiment_id"),
+                        item.get("issue_number"),
+                        item.get("title"),
+                        item.get("subject_name"),
+                        item.get("hypothesis"),
+                    )
+                    if value is not None
+                ).casefold()
+                if normalized_query not in searchable:
+                    continue
+            focus_ids.append(item["experiment_id"])
+
+        focus_active = any(
+            (
+                normalized_query,
+                normalized_subject_id,
+                normalized_lifecycle,
+                attention_only,
+            )
+        )
+        focus = {
+            "active": focus_active,
+            "query": query.strip() if isinstance(query, str) and query.strip() else None,
+            "subject_id": normalized_subject_id,
+            "lifecycle": normalized_lifecycle,
+            "attention_only": attention_only,
+            "count": len(focus_ids),
+            "experiment_ids": focus_ids,
+            "summary_zh": (
+                f"已聚焦 {len(focus_ids)} 个实验"
+                if focus_active
+                else f"全部 {len(items)} 个实验"
+            ),
+        }
+
         return {
             "status": "PASS",
             "repo": self.transport.repo,
@@ -1596,6 +1659,7 @@ class GameExpClient:
             "attention_count": len(attention_ids),
             "counts_by_lifecycle": dict(sorted(counts.items())),
             "counts_by_health": dict(sorted(health_counts.items())),
+            "focus": focus,
             "experiments": items,
             "views": {
                 "overview": {
