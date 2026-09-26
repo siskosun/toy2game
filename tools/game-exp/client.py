@@ -528,10 +528,143 @@ class GitHubTransport:
         data = _json_output(proc)
         return data if isinstance(data, dict) else None
 
+    def repository_access(self) -> dict[str, Any]:
+        proc = _run(["gh", "api", f"repos/{self.repo}"], check=False)
+        if proc.returncode != 0:
+            text = (proc.stdout + "\n" + proc.stderr).lower()
+            reason = "repository_not_accessible"
+            if "401" in text or "authentication" in text:
+                reason = "authentication_required"
+            elif "403" in text:
+                reason = "access_forbidden"
+            elif "404" in text or "not found" in text:
+                reason = "repository_not_found_or_hidden"
+            return {
+                "status": "NO_ACCESS",
+                "can_read": False,
+                "can_write": False,
+                "can_admin": False,
+                "admin_coverage": "NONE",
+                "reason": reason,
+            }
+        data = _json_output(proc)
+        permissions = data.get("permissions") if isinstance(data, dict) else None
+        if not isinstance(permissions, dict):
+            return {
+                "status": "UNKNOWN",
+                "can_read": True,
+                "can_write": False,
+                "can_admin": False,
+                "admin_coverage": "UNKNOWN",
+                "reason": "permissions_not_exposed",
+            }
+        can_read = bool(permissions.get("pull"))
+        can_write = bool(
+            permissions.get("push")
+            or permissions.get("maintain")
+            or permissions.get("admin")
+        )
+        can_admin = bool(permissions.get("admin"))
+        if can_admin:
+            status = "ADMIN"
+            admin_coverage = "FULL"
+        elif can_write:
+            status = "WRITE"
+            admin_coverage = "PARTIAL"
+        elif can_read:
+            status = "READ_ONLY"
+            admin_coverage = "PARTIAL"
+        else:
+            status = "NO_ACCESS"
+            admin_coverage = "NONE"
+        return {
+            "status": status,
+            "can_read": can_read,
+            "can_write": can_write,
+            "can_admin": can_admin,
+            "admin_coverage": admin_coverage,
+            "reason": None,
+        }
+
+    def branch_contributors(self, ref: str) -> dict[str, Any]:
+        proc = _run(
+            ["gh", "api", f"repos/{self.repo}/commits?sha={ref}&per_page=100"],
+            check=False,
+        )
+        if proc.returncode != 0:
+            return {
+                "contributors": [],
+                "source": "github_commits",
+                "complete": False,
+            }
+        data = _json_output(proc)
+        if not isinstance(data, list):
+            return {
+                "contributors": [],
+                "source": "github_commits",
+                "complete": False,
+            }
+        logins: list[str] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            author = row.get("author")
+            login = author.get("login") if isinstance(author, dict) else None
+            if isinstance(login, str) and login and login not in logins:
+                logins.append(login)
+        return {
+            "contributors": logins,
+            "source": "github_commits",
+            "complete": len(data) < 100,
+        }
+
 
 class GameExpClient:
     def __init__(self, transport: GitHubTransport):
         self.transport = transport
+
+    def access_check(self) -> dict[str, Any]:
+        access = self.transport.repository_access()
+        status = access.get("status")
+        message_zh = {
+            "NO_ACCESS": "无法访问该 GitHub 仓库。请检查登录、仓库授权或切换到有权限的仓库。",
+            "READ_ONLY": "当前只有读取权限：可以查看 game-exp 面板，但不能创建或推进实验。请获得仓库写入权限后继续。",
+            "WRITE": "当前具有读写权限，可以使用 game-exp；部分管理员级检查可能不可见。",
+            "ADMIN": "当前具有完整仓库管理权限。",
+            "UNKNOWN": "可以读取仓库，但当前连接未暴露完整权限信息。",
+        }.get(str(status), "仓库权限状态未知。")
+        return {
+            "status": "PASS" if status in {"READ_ONLY", "WRITE", "ADMIN"} else status,
+            "repo": self.transport.repo,
+            "access": access,
+            "message_zh": message_zh,
+            "can_create_experiment": bool(access.get("can_write")),
+        }
+
+    def _contributors_for_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        resolver = getattr(self.transport, "branch_contributors", None)
+        if not callable(resolver):
+            return {
+                "contributors": [],
+                "source": "unavailable",
+                "complete": False,
+            }
+        ref = item.get("final_tag_ref") if item.get("lifecycle") == "ARCHIVED" else item.get("branch_ref")
+        if not isinstance(ref, str) or not ref:
+            return {
+                "contributors": [],
+                "source": "unavailable",
+                "complete": False,
+            }
+        short_ref = ref.removeprefix("refs/heads/").removeprefix("refs/tags/")
+        try:
+            return resolver(short_ref)
+        except Exception:
+            return {
+                "contributors": [],
+                "source": "github_commits",
+                "complete": False,
+            }
 
     def _journal_path(self, request_id: str) -> Path:
         validate_request_id(request_id)
@@ -1378,6 +1511,11 @@ class GameExpClient:
                 "subject_source": subject["source"],
                 "prototype_name": subject["name"],
                 "hypothesis": manifest.get("hypothesis"),
+                "initiator": (
+                    binding.get("initiator")
+                    if isinstance(binding.get("initiator"), dict)
+                    else None
+                ),
                 "success_criteria": manifest.get("success_criteria"),
                 "kill_criteria": manifest.get("kill_criteria"),
                 "relationships_outgoing": relationships_outgoing,
@@ -1408,6 +1546,10 @@ class GameExpClient:
                 "next_gate": next_gate,
                 "attention": attention,
             }
+            contributor_info = self._contributors_for_item(item)
+            item["contributors"] = contributor_info.get("contributors", [])
+            item["contributors_source"] = contributor_info.get("source")
+            item["contributors_complete"] = bool(contributor_info.get("complete"))
             items.append(item)
             counts[lifecycle] = counts.get(lifecycle, 0) + 1
             health_counts[health["status"]] = (
@@ -1752,6 +1894,9 @@ class GameExpClient:
                 "next_gate": item.get("next_gate"),
                 "next_action_zh": item.get("display", {}).get("next_gate"),
                 "attention": item.get("attention"),
+                "initiator": item.get("initiator"),
+                "contributors": item.get("contributors") or [],
+                "contributors_complete": item.get("contributors_complete"),
                 "latest_activity": item.get("latest_activity"),
             }
             for item in board.get("experiments", [])
@@ -1835,6 +1980,10 @@ class GameExpClient:
                 "next_gate": row.get("next_gate"),
                 "next_action_zh": row.get("display", {}).get("next_gate"),
                 "attention": row.get("attention"),
+                "initiator": row.get("initiator"),
+                "contributors": row.get("contributors") or [],
+                "contributors_source": row.get("contributors_source"),
+                "contributors_complete": row.get("contributors_complete"),
             },
             "judgement": {
                 "hypothesis": row.get("hypothesis"),
