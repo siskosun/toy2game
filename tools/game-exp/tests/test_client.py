@@ -551,6 +551,31 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(
             all(ref == transport.head for _path, ref in transport._ledger_json_refs)
         )
+        self.assertEqual(
+            result["focus"],
+            {
+                "active": False,
+                "query": None,
+                "subject_id": None,
+                "lifecycle": None,
+                "attention_only": False,
+                "count": 2,
+                "experiment_ids": ["EXP-7", "EXP-21"],
+                "summary_zh": "全部 2 个实验",
+            },
+        )
+
+        focused = GameExpClient(transport).board(
+            query="combat",
+            subject_id="arena-duel",
+            lifecycle="review",
+            attention_only=True,
+        )
+        self.assertEqual(focused["count"], 2)
+        self.assertEqual(focused["focus"]["count"], 1)
+        self.assertEqual(focused["focus"]["experiment_ids"], ["EXP-7"])
+        self.assertEqual(focused["focus"]["lifecycle"], "REVIEW")
+        self.assertEqual(focused["focus"]["summary_zh"], "已聚焦 1 个实验")
 
     def test_board_marks_archive_lock_as_recovery_gate(self):
         transport = FakeTransport()
