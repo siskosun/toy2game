@@ -1032,6 +1032,14 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
             "trusted collaborator identity mismatch",
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
+    if (
+        payload.get("operation") == "experiment.bind"
+        and permission not in {"admin", "maintain", "write"}
+    ):
+        raise DomainError(
+            f"actor {login!r} lacks write permission for experiment binding",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
     return TrustedActorContext(
         login=login,
         user_id=str(user_id),
