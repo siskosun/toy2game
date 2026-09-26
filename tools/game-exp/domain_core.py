@@ -297,7 +297,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
             "created_at",
         },
         where="manifest",
-        optional={"subject"},
+        optional={"subject", "relationships"},
     )
     if manifest["schema_version"] != 1:
         raise DomainError("manifest.schema_version must equal 1")
@@ -357,6 +357,43 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
             raise DomainError(
                 "game-prototype subject must use a concrete prototype root_path"
             )
+
+    if "relationships" in manifest:
+        relationships = manifest["relationships"]
+        if not isinstance(relationships, list):
+            raise DomainError("manifest.relationships must be an array")
+        seen_targets: set[str] = set()
+        for index, raw_relation in enumerate(relationships):
+            relation = _mapping(
+                raw_relation,
+                f"manifest.relationships[{index}]",
+            )
+            _expect_keys(
+                relation,
+                {"type", "experiment_id"},
+                where=f"manifest.relationships[{index}]",
+            )
+            relation_type = _string(
+                relation["type"],
+                f"manifest.relationships[{index}].type",
+            )
+            if relation_type not in {"depends_on", "blocks", "supersedes"}:
+                raise DomainError(
+                    "manifest relationship type must be depends_on, blocks, or supersedes"
+                )
+            target = _string(
+                relation["experiment_id"],
+                f"manifest.relationships[{index}].experiment_id",
+            )
+            if not EXP_RE.fullmatch(target):
+                raise DomainError(
+                    "manifest relationship experiment_id must be EXP-<number>"
+                )
+            if target in seen_targets:
+                raise DomainError(
+                    "manifest relationships must not contain multiple relationships to the same experiment"
+                )
+            seen_targets.add(target)
 
     parent = _mapping(manifest["parent"], "manifest.parent")
     _expect_keys(parent, {"experiment", "commit"}, where="manifest.parent")
@@ -2123,6 +2160,21 @@ def plan_domain_mutation(
 
     issue_number = exp["issue_number"]
     experiment_id = f"EXP-{issue_number}"
+
+    for relation in manifest.get("relationships", []):
+        target_id = relation["experiment_id"]
+        if target_id == experiment_id:
+            raise DomainError(
+                "experiment relationship cannot target itself",
+                code="DOMAIN_RELATIONSHIP_CONFLICT",
+            )
+        target_state = repo_dir / f"experiments/{target_id}/state.json"
+        if not target_state.exists():
+            raise DomainError(
+                f"experiment relationship target does not exist: {target_id}",
+                code="DOMAIN_RELATIONSHIP_CONFLICT",
+            )
+
     root = f"experiments/{experiment_id}"
     binding_path = f"{root}/binding.json"
     manifest_path = f"{root}/manifest.json"
