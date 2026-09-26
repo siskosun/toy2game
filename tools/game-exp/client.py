@@ -1875,6 +1875,85 @@ class GameExpClient:
             },
         }
 
+    def prototype_handoff(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "reason": "invalid_experiment_id",
+            }
+        board = self.board(query=experiment_id)
+        if board.get("status") != "PASS":
+            return board
+        row = next(
+            (
+                item
+                for item in board.get("experiments", [])
+                if item.get("experiment_id") == experiment_id
+            ),
+            None,
+        )
+        if not isinstance(row, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "snapshot_head": board.get("snapshot_head"),
+                "experiment_id": experiment_id,
+                "reason": "experiment_not_found_in_ledger",
+            }
+        snapshot_head = board.get("snapshot_head")
+        manifest = self.transport.ledger_json(
+            f"experiments/{experiment_id}/manifest.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(manifest, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "snapshot_head": snapshot_head,
+                "experiment_id": experiment_id,
+                "reason": "manifest_not_found_in_ledger",
+            }
+        runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+        scope = manifest.get("scope") if isinstance(manifest.get("scope"), dict) else {}
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "snapshot_head": snapshot_head,
+            "experiment_id": experiment_id,
+            "handoff_target": "godot-prototype-studio",
+            "handoff_kind": "IMPLEMENT_EXPERIMENT",
+            "source": {
+                "branch_ref": row.get("branch_ref"),
+                "parent_sha": row.get("parent_sha"),
+                "subject": row.get("subject"),
+            },
+            "brief": {
+                "title": row.get("title"),
+                "hypothesis": row.get("hypothesis"),
+                "success_criteria": row.get("success_criteria") or [],
+                "kill_criteria": row.get("kill_criteria") or [],
+                "scope_allowed": scope.get("allowed") if isinstance(scope.get("allowed"), list) else [],
+                "scope_avoid": scope.get("avoid") if isinstance(scope.get("avoid"), list) else [],
+                "runtime": runtime,
+                "review_protocol": (
+                    manifest.get("review", {}).get("protocol")
+                    if isinstance(manifest.get("review"), dict)
+                    else None
+                ),
+            },
+            "return_contract": {
+                "required": [
+                    "source_sha",
+                    "checks",
+                    "playable_status",
+                    "delivery_evidence_if_requested",
+                ],
+                "note_zh": "Godot Prototype Studio 负责实现、运行验证与所需试玩发布；game-exp 只接收结果证据并继续 Candidate/Review 生命周期。",
+            },
+        }
+
     def notification_feed(
         self,
         *,
