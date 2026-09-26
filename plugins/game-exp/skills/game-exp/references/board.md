@@ -180,4 +180,4 @@ Keep raw non-PASS health codes visible for diagnosis.
 
 ## Empty repository
 
-If the protected Ledger contains zero experiments, show the repository header and `暂无实验`, with next action `新建实验`. Do not fabricate a placeholder experiment row.
+If the protected Ledger contains zero experiments, show the repository header and first-use onboarding entry from `onboarding.md`. Display `暂无实验` as context and make `创建第一个实验` the primary next action. Do not fabricate a placeholder experiment row.
