@@ -195,3 +195,11 @@ Use two distinct concepts:
 For legacy experiments without `binding.initiator`, display `发起人：历史记录未保存` rather than inferring an authoritative initiator from commit authors.
 
 When contributor history is incomplete (for example more than the inspected commit window or GitHub lookup failed), `contributors_complete=false` and the UI must label it as `贡献者记录可能不完整`.
+
+## 协作通知
+
+The panel may show a compact `协作动态` entry backed by `game_exp_notifications`.
+
+Show only meaningful experiment events. Display subject/prototype, experiment id, trusted actor when known, event label, and title. Do not show delivery state as lifecycle state.
+
+For a new experiment under a subject where another collaborator has prior participation, surface the event prominently to that collaborator.

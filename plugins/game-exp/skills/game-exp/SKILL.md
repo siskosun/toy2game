@@ -75,6 +75,24 @@ For the GitHub Bridge:
 - The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission. Do not place a different actor identity inside the command.
 - Human-owned gates remain human-owned. The presence of the bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
 
+## Collaboration notifications
+
+When the user asks what changed, who started a new experiment, or wants collaborator notifications, use `game_exp_notifications` and follow `references/notifications.md`.
+
+Notifications are Ledger-derived, replayable projections. game-exp does not send external messages itself. A ChatGPT task, Feishu/Slack/email bridge, or other adapter may deliver them and must deduplicate by stable `event_id`.
+
+Do not treat code-contributor identity as lifecycle authority.
+
+## Exploration threads
+
+Follow `references/exploration-thread.md`. Do not automatically fan one creative question into multiple parallel prototype branches. Prototype experiments may change the underlying concept substantially, so default to one active experiment per exploration thread and preserve later experiments as sequential history through subject identity and explicit relationships.
+
+## Prototype implementation handoff
+
+When a game experiment needs implementation, runtime verification, export, or requested playable delivery, use `game_exp_prototype_handoff` and follow `references/prototype-handoff.md`.
+
+For Godot work, hand the returned brief to Godot Prototype Studio. game-exp remains responsible for experiment identity, scope, lifecycle and human gates; Godot Prototype Studio remains responsible for implementation and playable delivery.
+
 ## Host capability boundary
 
 - Keep game-exp focused on lifecycle control; do not turn its MCP into a generic source editor.

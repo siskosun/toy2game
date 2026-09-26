@@ -79,6 +79,30 @@ def game_exp_subject_panel(
     return _client(repo).subject_panel(subject_id)
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_prototype_handoff(
+    experiment_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Return the exact implementation brief for handing one experiment to Godot Prototype Studio."""
+    return _client(repo).prototype_handoff(experiment_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_notifications(
+    repo: str | None = None,
+    viewer_login: str | None = None,
+    subject_id: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Return replayable collaboration notifications derived from one pinned Ledger snapshot."""
+    return _client(repo).notification_feed(
+        viewer_login=viewer_login,
+        subject_id=subject_id,
+        limit=limit,
+    )
+
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 def game_exp_experiment_bind(

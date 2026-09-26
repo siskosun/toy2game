@@ -85,6 +85,25 @@ class FakeClient:
             "evidence": {"candidate_id": "C-21-123-1"},
         }
 
+    def prototype_handoff(self, experiment_id):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "experiment_id": experiment_id,
+            "handoff_target": "godot-prototype-studio",
+            "brief": {"title": "test"},
+        }
+
+    def notification_feed(self, **kwargs):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "viewer_login": kwargs.get("viewer_login"),
+            "subject_id": kwargs.get("subject_id"),
+            "count": 1,
+            "notifications": [{"event_id": "EXP-21:EXPERIMENT_CREATED:EXP-21"}],
+        }
+
     def doctor(self, experiment_id=None):
         return {
             "status": "PASS",
@@ -176,6 +195,8 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_board",
                 "game_exp_experiment_panel",
                 "game_exp_subject_panel",
+                "game_exp_prototype_handoff",
+                "game_exp_notifications",
                 "game_exp_experiment_bind",
                 "game_exp_initialize",
                 "game_exp_candidate_build",
@@ -209,6 +230,8 @@ class MCPServerTests(unittest.TestCase):
             "game_exp_board",
             "game_exp_experiment_panel",
             "game_exp_subject_panel",
+            "game_exp_prototype_handoff",
+            "game_exp_notifications",
             "game_exp_request_get",
         ):
             ann = tools[name].annotations
@@ -270,6 +293,25 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["subject_id"], "arena-duel")
         self.assertEqual(result["subject"]["name"], "Arena Duel")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_prototype_handoff_delegates_to_client(self, _):
+        result = mcp_server.game_exp_prototype_handoff("EXP-21", "owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["handoff_target"], "godot-prototype-studio")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_notifications_delegate_to_client(self, _):
+        result = mcp_server.game_exp_notifications(
+            repo="owner/repo",
+            viewer_login="bob",
+            subject_id="arena-duel",
+            limit=20,
+        )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["viewer_login"], "bob")
+        self.assertEqual(result["subject_id"], "arena-duel")
+        self.assertEqual(result["count"], 1)
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_board_focus_filters_delegate_to_client(self, _):

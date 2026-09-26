@@ -621,6 +621,29 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(
             all(ref == transport.head for _path, ref in transport._ledger_json_refs)
         )
+        notifications = GameExpClient(transport).notification_feed(viewer_login="bob")
+        self.assertEqual(notifications["status"], "PASS")
+        created = next(
+            row
+            for row in notifications["notifications"]
+            if row["experiment_id"] == "EXP-7"
+            and row["event_code"] == "EXPERIMENT_CREATED"
+        )
+        self.assertEqual(created["actor_login"], "alice")
+        self.assertIn("bob", created["targets"])
+        self.assertNotIn("alice", created["targets"])
+        self.assertEqual(created["delivery"]["dedupe_key"], created["event_id"])
+        self.assertFalse(
+            notifications["delivery_contract"]["game_exp_sends_messages"]
+        )
+
+        handoff = GameExpClient(transport).prototype_handoff("EXP-7")
+        self.assertEqual(handoff["status"], "PASS")
+        self.assertEqual(handoff["handoff_target"], "godot-prototype-studio")
+        self.assertEqual(handoff["source"]["branch_ref"], "refs/heads/exp/7")
+        self.assertEqual(handoff["brief"]["hypothesis"], "roles improve readability")
+        self.assertIn("source_sha", handoff["return_contract"]["required"])
+
         self.assertEqual(
             result["focus"],
             {
@@ -979,6 +1002,17 @@ class ClientTests(unittest.TestCase):
         result = GameExpClient(FakeTransport()).doctor()
         self.assertEqual(result["status"], "PASS")
         self.assertTrue(all(row["status"] == "PASS" for row in result["checks"]))
+
+
+    def test_notification_feed_rejects_invalid_limit(self):
+        result = GameExpClient(FakeTransport()).notification_feed(limit=0)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["reason"], "invalid_limit")
+
+    def test_prototype_handoff_rejects_invalid_experiment_id(self):
+        result = GameExpClient(FakeTransport()).prototype_handoff("bad")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["reason"], "invalid_experiment_id")
 
 
 if __name__ == "__main__":

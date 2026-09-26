@@ -22,6 +22,8 @@ Additional paths:
 |---|---|---|
 | Inspect repo/Ledger | `game_exp_status` | Read-only |
 | Open experiment Board / panel | `game_exp_board` | Read-only consistent Ledger snapshot |
+| Collaboration notification feed | `game_exp_notifications` | Read-only, replayable, external delivery adapters dedupe by event_id |
+| Build implementation brief | `game_exp_prototype_handoff` | Read-only handoff to Godot Prototype Studio; no lifecycle mutation |
 | Inspect experiment | `game_exp_experiment_get` | Read-only authoritative projection |
 | Diagnose trust/archive health | `game_exp_doctor` | Read-only |
 | Bind Manifest | `game_exp_experiment_bind` | Manifest operation id is idempotency key |
@@ -97,3 +99,11 @@ The agent must not decide these from automated evidence:
 ## Board views
 
 The Board projection contains `overview`, `attention`, `prototypes`, `branches`, and `archive` views. Follow `board.md` for presentation. `attention.sections` is the action Inbox, experiment `activity` is the Ledger-derived timeline, and prototype groups carry recent activity plus relationship counts. New experiments should carry stable `manifest.subject`; legacy experiments may use scope-derived fallback identity. Optional `manifest.relationships` may declare `depends_on`, `blocks`, or `supersedes` links to existing valid experiments in the same repository.
+
+## Collaboration and implementation boundaries
+
+- Notification events are derived from the protected Ledger and must not become a second lifecycle state machine.
+- game-exp exposes targets and stable event ids; external systems perform message delivery.
+- Creative exploration defaults to sequential experiments rather than automatic parallel variant generation.
+- Godot Prototype Studio owns prototype implementation, runtime verification, export, and requested playtest delivery.
+- game-exp resumes at Candidate/Review after implementation evidence is returned.
