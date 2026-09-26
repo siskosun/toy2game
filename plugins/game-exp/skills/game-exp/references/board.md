@@ -91,6 +91,8 @@ If a legacy manifest has only broad `games/**` scope or no resolvable prototype,
 
 For each prototype group, show `recent_activity` as `最近活动` and `relationship_count` when non-zero. Activity labels must remain Chinese.
 
+When the user opens a prototype group, use `game_exp_subject_panel` when available. Render `summary` first, then `experiments`, `recent_activity`, and `relationship_edges`. This is a read-only drill-down between repository overview and single-experiment detail.
+
 ## 分支图
 
 Use `views.branches.lanes`.
