@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.10.0")
+        self.assertEqual(manifest["version"], "0.11.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -52,6 +52,8 @@ class GameExpSkillContractTests(unittest.TestCase):
         required_tools = {
             "game_exp_status",
             "game_exp_access_check",
+            "game_exp_notifications",
+            "game_exp_prototype_handoff",
             "game_exp_board",
             "game_exp_experiment_panel",
             "game_exp_subject_panel",
@@ -164,6 +166,9 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "board.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "chat-ui.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "onboarding.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "prototype-handoff.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "exploration-thread.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "notifications.md").exists())
 
     def test_chat_inline_ui_contract_is_read_only_and_has_fallback(self):
         content = (
@@ -210,6 +215,37 @@ class GameExpSkillContractTests(unittest.TestCase):
             "跳过新手引导",
         ):
             self.assertIn(phrase, content)
+
+    def test_collaboration_and_prototype_handoff_contracts(self):
+        notifications = (
+            PLUGIN / "skills" / "game-exp" / "references" / "notifications.md"
+        ).read_text(encoding="utf-8")
+        exploration = (
+            PLUGIN / "skills" / "game-exp" / "references" / "exploration-thread.md"
+        ).read_text(encoding="utf-8")
+        handoff = (
+            PLUGIN / "skills" / "game-exp" / "references" / "prototype-handoff.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "event_id",
+            "external adapter",
+            "new experiment",
+            "发起人",
+        ):
+            self.assertIn(phrase, notifications)
+        for phrase in (
+            "NOT a command to generate multiple variants in parallel",
+            "one active experiment",
+            "manifest.relationships",
+        ):
+            self.assertIn(phrase, exploration)
+        for phrase in (
+            "game_exp_prototype_handoff",
+            "Godot Prototype Studio",
+            "source SHA",
+            "Candidate/Review",
+        ):
+            self.assertIn(phrase, handoff)
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))
