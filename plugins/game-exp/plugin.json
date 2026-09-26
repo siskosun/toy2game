@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.7.0",
-  "description": "Trusted game experiment workflow with Chinese Board focus, single-experiment drill-down panels, Ledger-derived timelines, and experiment relationships.",
+  "version": "0.7.1",
+  "description": "Trusted game experiment workflow with Chinese repository, subject, and experiment drill-down panels, Ledger-derived timelines, and relationships.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
