@@ -391,6 +391,8 @@ class ClientTests(unittest.TestCase):
                         "root_path": "games/arena-duel",
                     },
                     "hypothesis": "roles improve readability",
+                    "success_criteria": ["turn ownership is clearer"],
+                    "kill_criteria": ["cue slows successful streaks"],
                     "experiment": {"issue_number": "7"},
                     "scope": {"allowed": ["games/arena-duel/**"]},
                     "relationships": [
@@ -585,6 +587,34 @@ class ClientTests(unittest.TestCase):
             focused["focus"]["summary_zh"],
             "已聚焦 1 个实验，其中 1 个需要处理",
         )
+
+        panel = GameExpClient(transport).experiment_panel("EXP-7")
+        self.assertEqual(panel["status"], "PASS")
+        self.assertEqual(panel["snapshot_head"], transport.head)
+        self.assertEqual(panel["overview"]["title"], "Combat readability")
+        self.assertEqual(panel["overview"]["lifecycle_zh"], "评审中")
+        self.assertEqual(panel["overview"]["next_action_zh"], "人工评审")
+        self.assertEqual(
+            panel["judgement"],
+            {
+                "hypothesis": "roles improve readability",
+                "success_criteria": ["turn ownership is clearer"],
+                "kill_criteria": ["cue slows successful streaks"],
+            },
+        )
+        self.assertEqual(
+            panel["relationships"]["outgoing"][0]["target_experiment_id"],
+            "EXP-21",
+        )
+        self.assertEqual(panel["evidence"]["candidate_id"], "C-7-1-1")
+
+        missing = GameExpClient(transport).experiment_panel("EXP-999")
+        self.assertEqual(missing["status"], "UNKNOWN")
+        self.assertEqual(missing["reason"], "experiment_not_found_in_ledger")
+
+        invalid = GameExpClient(transport).experiment_panel("exp/7")
+        self.assertEqual(invalid["status"], "REJECTED")
+        self.assertEqual(invalid["reason"], "invalid_experiment_id")
 
     def test_board_marks_archive_lock_as_recovery_gate(self):
         transport = FakeTransport()
