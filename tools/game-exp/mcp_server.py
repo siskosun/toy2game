@@ -80,6 +80,15 @@ def game_exp_subject_panel(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_prototype_handoff(
+    experiment_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Return the exact implementation brief for handing one experiment to Godot Prototype Studio."""
+    return _client(repo).prototype_handoff(experiment_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_notifications(
     repo: str | None = None,
     viewer_login: str | None = None,
