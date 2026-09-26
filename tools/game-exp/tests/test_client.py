@@ -616,6 +616,39 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(invalid["status"], "REJECTED")
         self.assertEqual(invalid["reason"], "invalid_experiment_id")
 
+        subject_panel = GameExpClient(transport).subject_panel("arena-duel")
+        self.assertEqual(subject_panel["status"], "PASS")
+        self.assertEqual(subject_panel["snapshot_head"], transport.head)
+        self.assertEqual(subject_panel["subject"]["name"], "Arena Duel")
+        self.assertEqual(
+            subject_panel["summary"],
+            {
+                "count": 1,
+                "active_count": 1,
+                "archived_count": 0,
+                "attention_count": 1,
+                "relationship_count": 1,
+                "counts_by_lifecycle": {"REVIEW": 1},
+                "counts_by_health": {"PASS": 1},
+            },
+        )
+        self.assertEqual(
+            subject_panel["experiments"][0]["experiment_id"],
+            "EXP-7",
+        )
+        self.assertEqual(
+            subject_panel["relationship_edges"][0]["target_experiment_id"],
+            "EXP-21",
+        )
+
+        missing_subject = GameExpClient(transport).subject_panel("missing")
+        self.assertEqual(missing_subject["status"], "UNKNOWN")
+        self.assertEqual(missing_subject["reason"], "subject_not_found_in_ledger")
+
+        invalid_subject = GameExpClient(transport).subject_panel("   ")
+        self.assertEqual(invalid_subject["status"], "REJECTED")
+        self.assertEqual(invalid_subject["reason"], "invalid_subject_id")
+
     def test_board_marks_archive_lock_as_recovery_gate(self):
         transport = FakeTransport()
         transport._ledger_paths = ["experiments/EXP-9/state.json"]

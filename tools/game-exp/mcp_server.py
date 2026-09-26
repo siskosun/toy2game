@@ -64,6 +64,14 @@ def game_exp_experiment_panel(
     """Return one Chinese-ready single-experiment panel from one pinned Ledger snapshot."""
     return _client(repo).experiment_panel(experiment_id)
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_subject_panel(
+    subject_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Return one Chinese-ready subject/prototype panel from one pinned Ledger snapshot."""
+    return _client(repo).subject_panel(subject_id)
+
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
