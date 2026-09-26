@@ -1244,6 +1244,7 @@ class GameExpClient:
         lifecycle: str | None = None,
         attention_only: bool = False,
     ) -> dict[str, Any]:
+        requested_lifecycle = lifecycle
         try:
             snapshot_head = self.transport.ledger_head()
             paths = self.transport.ledger_paths(snapshot_head)
@@ -1599,8 +1600,8 @@ class GameExpClient:
             subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None
         )
         normalized_lifecycle = (
-            lifecycle.strip().upper()
-            if isinstance(lifecycle, str) and lifecycle.strip()
+            requested_lifecycle.strip().upper()
+            if isinstance(requested_lifecycle, str) and requested_lifecycle.strip()
             else None
         )
         focus_ids: list[str] = []
