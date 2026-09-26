@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.4.0")
+        self.assertEqual(manifest["version"], "0.5.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -107,6 +107,8 @@ class GameExpSkillContractTests(unittest.TestCase):
             "分支图",
             "归档",
             "stable `subject`",
+            "system-generated panel entries in Chinese",
+            "`relationships`",
         ):
             self.assertIn(phrase, content)
 
@@ -124,6 +126,14 @@ class GameExpSkillContractTests(unittest.TestCase):
             "views.prototypes.groups",
             "views.branches.lanes",
             "views.archive.experiment_ids",
+            "views.attention.sections",
+            "活动时间线",
+            "需要你评审",
+            "需要你决策",
+            "依赖",
+            "阻塞",
+            "替代",
+            "中文展示约束",
         ):
             self.assertIn(phrase, board)
 
