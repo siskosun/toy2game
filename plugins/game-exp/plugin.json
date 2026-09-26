@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.4.0",
-  "description": "Trusted game experiment workflow with stable prototype subjects and five Chinese portfolio views, using native MCP or the GitHub Issue-comment bridge.",
+  "version": "0.5.0",
+  "description": "Trusted game experiment workflow with Chinese action Inbox, Ledger-derived activity timelines, stable prototype subjects, and experiment relationships.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "五视图管理可信游戏实验与原型",
-        "longDescription": "Manage protected-Ledger game experiments across repositories and prototypes with stable subject identity, Chinese Overview/Attention/Prototype/Branch/Archive views, human gates, trusted Rehearsal, Integration, and recoverable Archive.",
+        "shortDescription": "中文行动面板管理游戏实验、关系与时间线",
+        "longDescription": "Manage protected-Ledger game experiments with a Chinese action Inbox, prototype grouping, Ledger-derived activity timelines, experiment dependency/history relationships, human gates, trusted Rehearsal, Integration, and recoverable Archive.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [
@@ -25,8 +25,8 @@
           "Write"
         ],
         "defaultPrompt": [
-          "Open the game-exp Board and tell me which experiments need attention without crossing a human gate.",
-          "Continue the current game-exp experiment until the next human decision is required."
+          "打开 game-exp 面板，优先显示需要我处理的实验。",
+          "打开当前实验详情，显示中文活动时间线和实验关系。"
         ]
       }
     }
