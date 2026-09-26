@@ -33,7 +33,7 @@ Supported filters:
 - `lifecycle`: lifecycle code, normalized to uppercase.
 - `attention_only`: only experiments that currently require attention.
 
-When any filter is active, render `focus.summary_zh` and use `focus.experiment_ids` to narrow the displayed rows. Keep global counts and the underlying five views based on the complete pinned snapshot so filtering cannot hide repository health or change authority.
+When any filter is active, render `focus.summary_zh` and use `focus.experiment_ids` to narrow the displayed rows. The focus projection also carries `attention_count`, `counts_by_lifecycle`, and `counts_by_health` for the narrowed result. Keep global counts and the underlying five views based on the complete pinned snapshot so filtering cannot hide repository health or change authority.
 
 If the focus result is empty, show `没有符合当前筛选条件的实验`; do not report `暂无实验` unless the repository itself has zero experiments.
 
