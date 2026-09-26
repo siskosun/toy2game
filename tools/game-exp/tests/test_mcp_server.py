@@ -44,6 +44,19 @@ class FakeClient:
             ],
         }
 
+    def subject_panel(self, subject_id):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "snapshot_head": "a" * 40,
+            "subject_id": subject_id,
+            "subject": {"id": subject_id, "name": "Arena Duel"},
+            "summary": {"count": 1, "attention_count": 1},
+            "recent_activity": [],
+            "experiments": [{"experiment_id": "EXP-21"}],
+            "relationship_edges": [],
+        }
+
     def experiment_panel(self, experiment_id):
         return {
             "status": "PASS",
@@ -146,6 +159,7 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_experiment_get",
                 "game_exp_board",
                 "game_exp_experiment_panel",
+                "game_exp_subject_panel",
                 "game_exp_experiment_bind",
                 "game_exp_initialize",
                 "game_exp_candidate_build",
@@ -177,6 +191,7 @@ class MCPServerTests(unittest.TestCase):
             "game_exp_experiment_get",
             "game_exp_board",
             "game_exp_experiment_panel",
+            "game_exp_subject_panel",
             "game_exp_request_get",
         ):
             ann = tools[name].annotations
@@ -228,6 +243,13 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["experiment_id"], "EXP-21")
         self.assertEqual(result["overview"]["lifecycle_zh"], "评审中")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_subject_panel_delegates_to_client(self, _):
+        result = mcp_server.game_exp_subject_panel("arena-duel", "owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["subject_id"], "arena-duel")
+        self.assertEqual(result["subject"]["name"], "Arena Duel")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_board_focus_filters_delegate_to_client(self, _):
