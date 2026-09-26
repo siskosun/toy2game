@@ -11,6 +11,7 @@ sys.path.insert(0, str(HERE.parents[1]))
 
 from domain_core import (  # noqa: E402
     DomainError,
+    TrustedActorContext,
     TrustedBindingContext,
     plan_domain_mutation,
 )
@@ -61,6 +62,11 @@ class DomainBindingTests(unittest.TestCase):
             issue_number="123",
             parent_sha="a" * 40,
         )
+        self.actor = TrustedActorContext(
+            login="alice",
+            user_id="1001",
+            permission="write",
+        )
 
     def plan(self, value=None, request_id="req_bind_1"):
         value = value or manifest(request_id)
@@ -72,6 +78,7 @@ class DomainBindingTests(unittest.TestCase):
             payload_digest=digest_object(payload),
             repository_full_name="siskosun/toy2game",
             trusted_binding=self.ctx,
+            trusted_actor=self.actor,
         )
 
     def test_binding_persists_reconstructable_manifest_and_canonical_refs(self):
@@ -91,6 +98,10 @@ class DomainBindingTests(unittest.TestCase):
         self.assertEqual(init["branch_ref"], "refs/heads/exp/123")
         self.assertEqual(init["base_tag_ref"], "refs/tags/exp-base/123")
         self.assertEqual(init["final_tag_ref"], "refs/tags/exp-final/123")
+        self.assertEqual(
+            binding["initiator"],
+            {"login": "alice", "user_id": "1001", "permission_at_bind": "write"},
+        )
         self.assertEqual(init["manifest_path"], "experiments/EXP-123/manifest.yaml")
         self.assertEqual(
             init["manifest_digest"],
@@ -113,6 +124,7 @@ class DomainBindingTests(unittest.TestCase):
             payload_digest=before,
             repository_full_name="siskosun/toy2game",
             trusted_binding=self.ctx,
+            trusted_actor=self.actor,
         )
 
         self.assertEqual(value, original_manifest)
@@ -225,6 +237,28 @@ class DomainBindingTests(unittest.TestCase):
         with self.assertRaises(DomainError) as ctx:
             self.plan()
         self.assertEqual(ctx.exception.code, "EXPERIMENT_IDENTITY_CONFLICT")
+
+    def test_binding_rejects_read_only_actor(self):
+        payload = build_operation_payload(
+            "experiment.bind",
+            {"manifest": manifest()},
+        )
+        readonly = TrustedActorContext(
+            login="reader",
+            user_id="1002",
+            permission="read",
+        )
+        with self.assertRaises(DomainError) as ctx:
+            plan_domain_mutation(
+                repo_dir=self.root,
+                payload=payload,
+                request_id="req_bind_1",
+                payload_digest=digest_object(payload),
+                repository_full_name="siskosun/toy2game",
+                trusted_binding=self.ctx,
+                trusted_actor=readonly,
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
 
     def test_non_domain_operation_remains_request_only(self):
         payload = build_operation_payload("transport.probe", {"value": "x"})

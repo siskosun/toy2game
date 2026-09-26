@@ -26,6 +26,15 @@ The inline panel must support:
 
 The user must be able to return to the previous level without a new remote mutation.
 
+## Repository access state
+
+When onboarding or when repository capability is uncertain, render the result of `game_exp_access_check` before write-capable actions.
+
+- `NO_ACCESS`: block Board loading if the repository itself cannot be read.
+- `READ_ONLY`: allow Board viewing, disable create/advance actions, and show the Chinese read-only explanation.
+- `WRITE`: enable normal workflows; mark admin-only inspection coverage as partial when applicable.
+- `ADMIN`: enable normal workflows with full repository inspection coverage.
+
 ## Repository view
 
 Provide five tabs:
@@ -58,6 +67,14 @@ Show:
 - relationship edges touching the subject
 
 Selecting a child experiment opens the single-experiment view.
+
+## Multi-user attribution
+
+Experiment cards should show `发起人` when `initiator.login` is present and `代码贡献者` when contributor logins are available.
+
+The UI must visually distinguish them. Contributor data is collaboration metadata only and must never imply Review, promotion, selection, merge, or archive authority.
+
+For legacy experiments with no trusted initiator, show `发起人：历史记录未保存`. If `contributors_complete` is false, show `贡献者记录可能不完整`.
 
 ## Experiment view
 

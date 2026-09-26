@@ -1000,6 +1000,7 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
     if payload.get("kind") != "operation_request":
         return None
     if payload.get("operation") not in {
+        "experiment.bind",
         "experiment.decision",
         "review.record",
         "archive.prepare",
@@ -1029,6 +1030,14 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
     if login != actor_login or not isinstance(user_id, int):
         raise DomainError(
             "trusted collaborator identity mismatch",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if (
+        payload.get("operation") == "experiment.bind"
+        and permission not in {"admin", "maintain", "write"}
+    ):
+        raise DomainError(
+            f"actor {login!r} lacks write permission for experiment binding",
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
     return TrustedActorContext(

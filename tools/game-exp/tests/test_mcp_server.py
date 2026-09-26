@@ -27,6 +27,21 @@ class FakeClient:
     def status(self):
         return {"repo": "owner/repo", "ledger_head": "a" * 40}
 
+    def access_check(self):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "access": {
+                "status": "WRITE",
+                "can_read": True,
+                "can_write": True,
+                "can_admin": False,
+                "admin_coverage": "PARTIAL",
+            },
+            "message_zh": "当前具有读写权限，可以使用 game-exp；部分管理员级检查可能不可见。",
+            "can_create_experiment": True,
+        }
+
     def board(self, **kwargs):
         return {
             "focus_args": kwargs,
@@ -155,6 +170,7 @@ class MCPServerTests(unittest.TestCase):
             names,
             {
                 "game_exp_status",
+                "game_exp_access_check",
                 "game_exp_doctor",
                 "game_exp_experiment_get",
                 "game_exp_board",
@@ -187,6 +203,7 @@ class MCPServerTests(unittest.TestCase):
         tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
         for name in (
             "game_exp_status",
+            "game_exp_access_check",
             "game_exp_doctor",
             "game_exp_experiment_get",
             "game_exp_board",
@@ -219,9 +236,12 @@ class MCPServerTests(unittest.TestCase):
     @patch("mcp_server._client", return_value=FakeClient())
     def test_read_tools_delegate_to_shared_client(self, _):
         status = mcp_server.game_exp_status("owner/repo")
+        access = mcp_server.game_exp_access_check("owner/repo")
         doctor = mcp_server.game_exp_doctor("owner/repo")
         request = mcp_server.game_exp_request_get("req_123", "owner/repo")
         self.assertEqual(status["ledger_head"], "a" * 40)
+        self.assertTrue(access["can_create_experiment"])
+        self.assertEqual(access["access"]["status"], "WRITE")
         self.assertEqual(doctor["status"], "PASS")
         self.assertEqual(request["status"], "COMMITTED")
 

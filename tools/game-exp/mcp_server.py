@@ -21,6 +21,12 @@ def game_exp_status(repo: str | None = None) -> dict[str, Any]:
     """Return the target repository and authoritative game-exp Ledger head."""
     return _client(repo).status()
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_access_check(repo: str | None = None) -> dict[str, Any]:
+    """Return the current GitHub repository access level for onboarding and gating."""
+    return _client(repo).access_check()
+
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_doctor(

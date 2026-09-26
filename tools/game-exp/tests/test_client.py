@@ -38,6 +38,35 @@ class FakeTransport:
     def ledger_head(self):
         return self.head
 
+    def repository_access(self):
+        return {
+            "status": "WRITE",
+            "can_read": True,
+            "can_write": True,
+            "can_admin": False,
+            "admin_coverage": "PARTIAL",
+            "reason": None,
+        }
+
+    def branch_contributors(self, ref):
+        if ref in {"exp/7", "exp-final/7"}:
+            return {
+                "contributors": ["alice", "bob"],
+                "source": "github_commits",
+                "complete": True,
+            }
+        if ref in {"exp/21", "exp-final/21"}:
+            return {
+                "contributors": ["carol"],
+                "source": "github_commits",
+                "complete": True,
+            }
+        return {
+            "contributors": [],
+            "source": "github_commits",
+            "complete": True,
+        }
+
     def dispatch_writer(self, **kwargs):
         self.dispatched.append(kwargs)
         if self.dispatch_uncertain:
@@ -142,10 +171,21 @@ class ClientTests(unittest.TestCase):
             "preconditions": {},
         }
         digest = digest_object(payload)
+        issue = experiment_id.removeprefix("EXP-")
+        initiator = "alice" if experiment_id == "EXP-7" else "carol"
         transport._ledger_json[f"experiments/{experiment_id}/binding.json"] = {
             "request_id": request_id,
             "inputs_digest": digest,
-            "initialization": {"manifest_digest": digest_object(manifest)},
+            "initiator": {
+                "login": initiator,
+                "user_id": "1001" if initiator == "alice" else "1003",
+                "permission_at_bind": "write",
+            },
+            "initialization": {
+                "manifest_digest": digest_object(manifest),
+                "branch_ref": f"refs/heads/exp/{issue}",
+                "final_tag_ref": f"refs/tags/exp-final/{issue}",
+            },
         }
         transport._ledger_json[f"operations/{request_id}.json"] = {
             "request_id": request_id,
@@ -330,6 +370,28 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["ledger_head"], transport.head)
 
+    def test_access_check_reports_write_and_read_only(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).access_check()
+        self.assertEqual(result["status"], "PASS")
+        self.assertTrue(result["can_create_experiment"])
+        self.assertEqual(result["access"]["status"], "WRITE")
+        self.assertIn("读写权限", result["message_zh"])
+
+        transport.repository_access = lambda: {
+            "status": "READ_ONLY",
+            "can_read": True,
+            "can_write": False,
+            "can_admin": False,
+            "admin_coverage": "PARTIAL",
+            "reason": None,
+        }
+        readonly = GameExpClient(transport).access_check()
+        self.assertEqual(readonly["status"], "PASS")
+        self.assertFalse(readonly["can_create_experiment"])
+        self.assertIn("只有读取权限", readonly["message_zh"])
+
+
     def test_experiment_get_projects_current_domain_objects(self):
         transport = FakeTransport()
         transport._ledger_json["experiments/EXP-21/state.json"] = {
@@ -464,6 +526,12 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["experiments"][0]["prototype_name"], "Arena Duel")
         self.assertEqual(result["experiments"][0]["subject_id"], "arena-duel")
         self.assertEqual(result["experiments"][0]["subject_source"], "manifest")
+        self.assertEqual(result["experiments"][0]["initiator"]["login"], "alice")
+        self.assertEqual(result["experiments"][0]["contributors"], ["alice", "bob"])
+        self.assertEqual(result["experiments"][0]["contributors_source"], "github_commits")
+        self.assertTrue(result["experiments"][0]["contributors_complete"])
+        self.assertEqual(result["experiments"][1]["initiator"]["login"], "carol")
+        self.assertEqual(result["experiments"][1]["contributors"], ["carol"])
         self.assertEqual(result["experiments"][1]["prototype_name"], "仓库级/未指定原型")
         self.assertEqual(result["experiments"][1]["subject_source"], "scope-fallback")
         self.assertEqual(result["attention_count"], 1)
@@ -594,6 +662,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(panel["overview"]["title"], "Combat readability")
         self.assertEqual(panel["overview"]["lifecycle_zh"], "评审中")
         self.assertEqual(panel["overview"]["next_action_zh"], "人工评审")
+        self.assertEqual(panel["overview"]["initiator"]["login"], "alice")
+        self.assertEqual(panel["overview"]["contributors"], ["alice", "bob"])
         self.assertEqual(
             panel["judgement"],
             {

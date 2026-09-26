@@ -433,6 +433,7 @@ def _binding_record(
     request_id: str,
     payload_digest: str,
     manifest: dict[str, Any],
+    initiator: TrustedActorContext | None,
 ) -> dict[str, Any]:
     exp = manifest["experiment"]
     issue_number = exp["issue_number"]
@@ -454,6 +455,17 @@ def _binding_record(
         "request_id": request_id,
         "inputs_digest": payload_digest,
         "parent_sha": manifest["parent"]["commit"],
+        **(
+            {
+                "initiator": {
+                    "login": initiator.login,
+                    "user_id": initiator.user_id,
+                    "permission_at_bind": initiator.permission,
+                }
+            }
+            if initiator is not None
+            else {}
+        ),
         "canonical": {
             "host": exp["host"],
             "repository_id": exp["repository_id"],
@@ -2131,6 +2143,14 @@ def plan_domain_mutation(
 
     if trusted_binding is None:
         raise DomainError("trusted binding context is required")
+    if (
+        trusted_actor is not None
+        and trusted_actor.permission not in {"admin", "maintain", "write"}
+    ):
+        raise DomainError(
+            f"actor {trusted_actor.login!r} lacks write permission",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
 
     exp = manifest["experiment"]
     expected = {
@@ -2192,6 +2212,7 @@ def plan_domain_mutation(
         request_id=request_id,
         payload_digest=payload_digest,
         manifest=manifest,
+        initiator=trusted_actor,
     )
     writes = {
         binding_path: binding,

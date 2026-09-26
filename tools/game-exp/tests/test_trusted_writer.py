@@ -824,6 +824,35 @@ class TrustedResolverTests(unittest.TestCase):
         self.assertEqual(ctx.ref_status, "REF_CONFLICT")
         self.assertEqual(ctx.observed_branch_sha, "c" * 40)
 
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "alice"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_binding_actor_resolves_from_github_permission(self, api):
+        api.return_value = {
+            "permission": "write",
+            "user": {"login": "alice", "id": 1001},
+        }
+        ctx = resolve_trusted_actor(
+            "siskosun/toy2game",
+            {"kind": "operation_request", "operation": "experiment.bind"},
+        )
+        self.assertEqual(ctx.login, "alice")
+        self.assertEqual(ctx.user_id, "1001")
+        self.assertEqual(ctx.permission, "write")
+
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "reader"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_binding_actor_requires_write_permission(self, api):
+        api.return_value = {
+            "permission": "read",
+            "user": {"login": "reader", "id": 1002},
+        }
+        with self.assertRaises(DomainError) as ctx:
+            resolve_trusted_actor(
+                "siskosun/toy2game",
+                {"kind": "operation_request", "operation": "experiment.bind"},
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
+
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
     def test_decision_actor_resolves_from_github_permission(self, api):
