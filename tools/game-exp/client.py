@@ -1114,6 +1114,7 @@ class GameExpClient:
             source_kind: str,
             source_id: str | None = None,
             github_run_id: str | None = None,
+            actor_login: str | None = None,
         ) -> None:
             events.append(
                 {
@@ -1125,6 +1126,7 @@ class GameExpClient:
                     "source_kind": source_kind,
                     "source_id": source_id,
                     "github_run_id": github_run_id,
+                    "actor_login": actor_login,
                 }
             )
 
@@ -1137,6 +1139,11 @@ class GameExpClient:
             occurred_at=created_at if isinstance(created_at, str) else None,
             source_kind="manifest",
             source_id=experiment_id,
+            actor_login=(
+                state.get("_initiator_login")
+                if isinstance(state.get("_initiator_login"), str)
+                else None
+            ),
         )
 
         decision_prefix = f"experiments/{experiment_id}/decisions/"
@@ -1191,6 +1198,12 @@ class GameExpClient:
                 detail_zh=detail,
                 source_kind="decision",
                 source_id=row.get("decision_id") if isinstance(row.get("decision_id"), str) else None,
+                actor_login=(
+                    row.get("actor", {}).get("login")
+                    if isinstance(row.get("actor"), dict)
+                    and isinstance(row.get("actor", {}).get("login"), str)
+                    else None
+                ),
             )
 
         candidate_id = state.get("current_candidate_id")
@@ -1230,6 +1243,12 @@ class GameExpClient:
                 detail_zh=review.get("notes") if isinstance(review.get("notes"), str) else None,
                 source_kind="review",
                 source_id=review_id if isinstance(review_id, str) else None,
+                actor_login=(
+                    review.get("actor", {}).get("login")
+                    if isinstance(review.get("actor"), dict)
+                    and isinstance(review.get("actor", {}).get("login"), str)
+                    else None
+                ),
             )
 
         rehearsal_id = state.get("current_rehearsal_id")
@@ -1472,10 +1491,18 @@ class GameExpClient:
             subject = self._board_subject(manifest)
             attention = self._board_attention(health, next_gate)
             relationships_outgoing = self._board_relationships(manifest)
+            activity_state = dict(state)
+            initiator = (
+                binding.get("initiator")
+                if isinstance(binding, dict) and isinstance(binding.get("initiator"), dict)
+                else None
+            )
+            if isinstance(initiator, dict) and isinstance(initiator.get("login"), str):
+                activity_state["_initiator_login"] = initiator["login"]
             activity = self._board_activity(
                 experiment_id=experiment_id,
                 manifest=manifest,
-                state=state,
+                state=activity_state,
                 review=review if isinstance(review, dict) else None,
                 snapshot_head=snapshot_head,
                 paths=paths,
@@ -1845,6 +1872,122 @@ class GameExpClient:
                 "archive": {
                     "experiment_ids": archive_ids,
                 },
+            },
+        }
+
+    def notification_feed(
+        self,
+        *,
+        viewer_login: str | None = None,
+        subject_id: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 200:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "reason": "invalid_limit",
+            }
+        board = self.board(subject_id=subject_id)
+        if board.get("status") != "PASS":
+            return board
+
+        items = board.get("experiments", [])
+        by_subject: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            sid = item.get("subject_id")
+            if isinstance(sid, str) and sid:
+                by_subject.setdefault(sid, []).append(item)
+
+        notifications: list[dict[str, Any]] = []
+        important_codes = {
+            "EXPERIMENT_CREATED",
+            "LIFECYCLE_REVIEW",
+            "CANDIDATE_READY",
+            "HUMAN_REVIEW_RECORDED",
+            "LIFECYCLE_PROMISING",
+            "LIFECYCLE_SELECTED",
+            "LIFECYCLE_REJECTED",
+            "INTEGRATED",
+            "ARCHIVED",
+        }
+        for item in items:
+            sid = item.get("subject_id")
+            if not isinstance(sid, str):
+                continue
+            participants: set[str] = set()
+            for peer in by_subject.get(sid, []):
+                initiator = peer.get("initiator")
+                if isinstance(initiator, dict):
+                    login = initiator.get("login")
+                    if isinstance(login, str) and login:
+                        participants.add(login)
+                for login in peer.get("contributors") or []:
+                    if isinstance(login, str) and login:
+                        participants.add(login)
+
+            for event in item.get("activity") or []:
+                code = event.get("code")
+                if code not in important_codes:
+                    continue
+                actor = event.get("actor_login")
+                targets = sorted(
+                    login
+                    for login in participants
+                    if not (isinstance(actor, str) and login == actor)
+                )
+                if isinstance(viewer_login, str) and viewer_login.strip():
+                    viewer = viewer_login.strip()
+                    if viewer not in targets:
+                        continue
+                source_id = event.get("source_id")
+                event_id = (
+                    f'{item.get("experiment_id")}:{code}:'
+                    f'{source_id if isinstance(source_id, str) and source_id else event.get("order")}'
+                )
+                notifications.append(
+                    {
+                        "event_id": event_id,
+                        "experiment_id": item.get("experiment_id"),
+                        "subject_id": sid,
+                        "subject_name": item.get("subject_name"),
+                        "title": item.get("title"),
+                        "event_code": code,
+                        "event_label_zh": event.get("label_zh"),
+                        "detail_zh": event.get("detail_zh"),
+                        "occurred_at": event.get("occurred_at"),
+                        "actor_login": actor,
+                        "initiator": item.get("initiator"),
+                        "targets": targets,
+                        "delivery": {
+                            "mode": "external_adapter",
+                            "dedupe_key": event_id,
+                        },
+                    }
+                )
+
+        notifications.sort(
+            key=lambda row: (
+                str(row.get("occurred_at") or ""),
+                int(str(row.get("experiment_id") or "EXP-0").removeprefix("EXP-") or 0),
+                str(row.get("event_id") or ""),
+            ),
+            reverse=True,
+        )
+        notifications = notifications[:limit]
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "snapshot_head": board.get("snapshot_head"),
+            "viewer_login": viewer_login.strip() if isinstance(viewer_login, str) and viewer_login.strip() else None,
+            "subject_id": subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None,
+            "count": len(notifications),
+            "notifications": notifications,
+            "delivery_contract": {
+                "source": "ledger-derived",
+                "dedupe_by": "event_id",
+                "game_exp_sends_messages": False,
+                "note_zh": "game-exp 生成可重放通知事件；ChatGPT、飞书、Slack、邮件等由外部适配器负责发送。",
             },
         }
 
