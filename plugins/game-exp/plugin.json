@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.6.1",
-  "description": "Trusted game experiment workflow with Chinese action Inbox, Ledger-derived timelines, experiment relationships, and read-only Board focus filters.",
+  "version": "0.7.0",
+  "description": "Trusted game experiment workflow with Chinese Board focus, single-experiment drill-down panels, Ledger-derived timelines, and experiment relationships.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,7 +16,7 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "中文行动面板管理实验，并支持筛选聚焦",
+        "shortDescription": "中文实验面板支持筛选、下钻、关系与时间线",
         "longDescription": "Manage protected-Ledger game experiments with a Chinese action Inbox, prototype grouping, Ledger-derived timelines, experiment relationships, read-only focus filters, human gates, trusted Rehearsal, Integration, and recoverable Archive.",
         "developerName": "toy2game",
         "category": "Productivity",
