@@ -1,3 +1,3 @@
 interface:
   display_name: "game-exp"
-  short_description: "中文行动面板管理游戏实验、关系与时间线"
+  short_description: "Chat 内嵌中文实验面板，支持筛选、三级下钻、关系与时间线"
