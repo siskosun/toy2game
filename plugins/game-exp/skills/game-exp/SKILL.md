@@ -36,6 +36,8 @@ Treat the Board as a structured read-only projection. The host may render it as 
 
 When the user opens one experiment from the Board, prefer `game_exp_experiment_panel` over stitching together `game_exp_board` and `game_exp_experiment_get` in separate reads. The panel is a Chinese-ready read-only projection from one pinned Ledger snapshot and includes overview, hypothesis/criteria, activity, relationships, and current evidence ids.
 
+When the user opens one prototype/subject group, prefer `game_exp_subject_panel`. It returns the stable subject identity, focused lifecycle/health/attention summary, recent activity, child experiment summaries, and relationship edges from the same pinned Ledger snapshot.
+
 ## Start every workflow from authoritative state
 
 - With MCP, use `game_exp_status` / `game_exp_experiment_get` / `game_exp_doctor` as appropriate. Before a new experiment is bound, use repo-level Doctor without `experiment_id`; use experiment-aware Doctor only after the experiment exists in the protected Ledger.
