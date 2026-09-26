@@ -44,6 +44,19 @@ class FakeClient:
             ],
         }
 
+    def experiment_panel(self, experiment_id):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "snapshot_head": "a" * 40,
+            "experiment_id": experiment_id,
+            "overview": {"lifecycle": "REVIEW", "lifecycle_zh": "评审中"},
+            "judgement": {"hypothesis": "test", "success_criteria": [], "kill_criteria": []},
+            "activity": [],
+            "relationships": {"outgoing": [], "incoming": []},
+            "evidence": {"candidate_id": "C-21-123-1"},
+        }
+
     def doctor(self, experiment_id=None):
         return {
             "status": "PASS",
@@ -132,6 +145,7 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_doctor",
                 "game_exp_experiment_get",
                 "game_exp_board",
+                "game_exp_experiment_panel",
                 "game_exp_experiment_bind",
                 "game_exp_initialize",
                 "game_exp_candidate_build",
@@ -162,6 +176,7 @@ class MCPServerTests(unittest.TestCase):
             "game_exp_doctor",
             "game_exp_experiment_get",
             "game_exp_board",
+            "game_exp_experiment_panel",
             "game_exp_request_get",
         ):
             ann = tools[name].annotations
@@ -206,6 +221,13 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["experiments"][0]["next_gate"], "HUMAN_REVIEW")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_experiment_panel_delegates_to_client(self, _):
+        result = mcp_server.game_exp_experiment_panel("EXP-21", "owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["experiment_id"], "EXP-21")
+        self.assertEqual(result["overview"]["lifecycle_zh"], "评审中")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_board_focus_filters_delegate_to_client(self, _):

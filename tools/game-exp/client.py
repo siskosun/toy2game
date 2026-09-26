@@ -1378,6 +1378,8 @@ class GameExpClient:
                 "subject_source": subject["source"],
                 "prototype_name": subject["name"],
                 "hypothesis": manifest.get("hypothesis"),
+                "success_criteria": manifest.get("success_criteria"),
+                "kill_criteria": manifest.get("kill_criteria"),
                 "relationships_outgoing": relationships_outgoing,
                 "relationships_incoming": [],
                 "activity": activity,
@@ -1701,6 +1703,78 @@ class GameExpClient:
                 "archive": {
                     "experiment_ids": archive_ids,
                 },
+            },
+        }
+
+    def experiment_panel(self, experiment_id: str) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "reason": "invalid_experiment_id",
+            }
+
+        board = self.board(query=experiment_id)
+        if board.get("status") != "PASS":
+            return board
+
+        row = next(
+            (
+                item
+                for item in board.get("experiments", [])
+                if item.get("experiment_id") == experiment_id
+            ),
+            None,
+        )
+        if not isinstance(row, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "snapshot_head": board.get("snapshot_head"),
+                "experiment_id": experiment_id,
+                "reason": "experiment_not_found_in_ledger",
+            }
+
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "snapshot_head": board.get("snapshot_head"),
+            "experiment_id": experiment_id,
+            "overview": {
+                "issue_number": row.get("issue_number"),
+                "title": row.get("title"),
+                "subject": row.get("subject"),
+                "lifecycle": row.get("lifecycle"),
+                "lifecycle_zh": row.get("display", {}).get("lifecycle"),
+                "health": row.get("health"),
+                "health_zh": row.get("display", {}).get("health"),
+                "health_code": row.get("health_code"),
+                "next_gate": row.get("next_gate"),
+                "next_action_zh": row.get("display", {}).get("next_gate"),
+                "attention": row.get("attention"),
+            },
+            "judgement": {
+                "hypothesis": row.get("hypothesis"),
+                "success_criteria": row.get("success_criteria"),
+                "kill_criteria": row.get("kill_criteria"),
+            },
+            "activity": row.get("activity") or [],
+            "relationships": {
+                "outgoing": row.get("relationships_outgoing") or [],
+                "incoming": row.get("relationships_incoming") or [],
+            },
+            "evidence": {
+                "parent_sha": row.get("parent_sha"),
+                "branch_ref": row.get("branch_ref"),
+                "base_tag_ref": row.get("base_tag_ref"),
+                "final_tag_ref": row.get("final_tag_ref"),
+                "candidate_id": row.get("candidate_id"),
+                "review_id": row.get("review_id"),
+                "review_outcome": row.get("review_outcome"),
+                "rehearsal_id": row.get("rehearsal_id"),
+                "integration_id": row.get("integration_id"),
+                "archive_id": row.get("archive_id"),
             },
         }
 

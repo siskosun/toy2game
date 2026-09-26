@@ -108,10 +108,10 @@ Show parent SHA only when diagnosing freshness or ancestry. Show final tag for a
 
 ## 实验详情
 
-When the user opens one experiment, organize the detail panel in this order:
+When the user opens one experiment, use `game_exp_experiment_panel` when available and organize the returned detail panel in this order:
 
 1. `实验概况`: 标题、原型、阶段、健康、下一步。
-2. `假设与判定`: hypothesis / success criteria / kill criteria.
+2. `假设与判定`: use `judgement.hypothesis`, `judgement.success_criteria`, and `judgement.kill_criteria`.
 3. `活动时间线`: use the experiment `activity` array. Render `label_zh` and `detail_zh`; show `occurred_at` only when the Ledger-derived record contains a trustworthy timestamp.
 4. `关系`: show outgoing and incoming experiment relations with Chinese relation labels.
 5. `代码与证据`: branch / Candidate / Rehearsal / PR / Archive records on demand.

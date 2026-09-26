@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.6.1")
+        self.assertEqual(manifest["version"], "0.7.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -52,6 +52,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         required_tools = {
             "game_exp_status",
             "game_exp_board",
+            "game_exp_experiment_panel",
             "game_exp_doctor",
             "game_exp_experiment_get",
             "game_exp_experiment_bind",
@@ -139,6 +140,8 @@ class GameExpSkillContractTests(unittest.TestCase):
             "attention_only",
             "counts_by_lifecycle",
             "counts_by_health",
+            "game_exp_experiment_panel",
+            "judgement.success_criteria",
         ):
             self.assertIn(phrase, board)
 
