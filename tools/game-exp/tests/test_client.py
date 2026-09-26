@@ -560,8 +560,11 @@ class ClientTests(unittest.TestCase):
                 "lifecycle": None,
                 "attention_only": False,
                 "count": 2,
+                "attention_count": 1,
+                "counts_by_lifecycle": {"ARCHIVED": 1, "REVIEW": 1},
+                "counts_by_health": {"PASS": 2},
                 "experiment_ids": ["EXP-7", "EXP-21"],
-                "summary_zh": "全部 2 个实验",
+                "summary_zh": "全部 2 个实验，其中 1 个需要处理",
             },
         )
 
@@ -575,7 +578,13 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(focused["focus"]["count"], 1)
         self.assertEqual(focused["focus"]["experiment_ids"], ["EXP-7"])
         self.assertEqual(focused["focus"]["lifecycle"], "REVIEW")
-        self.assertEqual(focused["focus"]["summary_zh"], "已聚焦 1 个实验")
+        self.assertEqual(focused["focus"]["attention_count"], 1)
+        self.assertEqual(focused["focus"]["counts_by_lifecycle"], {"REVIEW": 1})
+        self.assertEqual(focused["focus"]["counts_by_health"], {"PASS": 1})
+        self.assertEqual(
+            focused["focus"]["summary_zh"],
+            "已聚焦 1 个实验，其中 1 个需要处理",
+        )
 
     def test_board_marks_archive_lock_as_recovery_gate(self):
         transport = FakeTransport()
