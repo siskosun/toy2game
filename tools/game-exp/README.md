@@ -176,7 +176,15 @@ v0.4 adds stable Manifest `subject` identity and a portfolio-style Board:
 
 New experiments should bind a stable `subject` (`game-prototype` or `repository`). Legacy experiments without `subject` remain valid and fall back to `scope.allowed` inference for Board grouping.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.4.0`.
+v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
+
+- `待处理` is grouped into Chinese action sections such as `异常`, `需要你评审`, `需要你决策`, and `需要选择归档方式`;
+- every experiment exposes a Ledger-derived `activity` timeline with Chinese labels and no fabricated timestamps;
+- prototype groups expose recent activity and relationship counts;
+- optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
+- all system-generated panel entries use Chinese as the primary UI text.
+
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.5.0`.
 
 Normal users do not need to remember MCP tool names. Examples:
 
@@ -191,13 +199,12 @@ For `打开 game-exp 面板`, the Skill calls `game_exp_board` and renders one c
 - repository name and pinned Ledger snapshot;
 - experiment id / GitHub Issue;
 - inferred game prototype name from `scope.allowed`;
-- Chinese lifecycle, health, and next-gate labels;
-- experiment / title;
-- lifecycle;
-- health;
-- Candidate / Review;
-- Rehearsal / Integration / Archive;
-- next gate.
+- Chinese lifecycle, health, next-action, relationship, and activity labels;
+- action Inbox sections;
+- experiment / title / prototype;
+- Ledger-derived activity timeline;
+- incoming / outgoing experiment relationships;
+- branch / Candidate / Review / Rehearsal / Integration / Archive detail on demand.
 
 Board health is a safety gate, not decoration. A failed Binding/request/Manifest digest chain is rendered as `health=FAIL` and `DO_NOT_USE_RECREATE_EXPERIMENT`; the Skill must not recommend normal lifecycle work for that experiment.
 
