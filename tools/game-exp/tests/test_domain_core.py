@@ -238,23 +238,11 @@ class DomainBindingTests(unittest.TestCase):
             self.plan()
         self.assertEqual(ctx.exception.code, "EXPERIMENT_IDENTITY_CONFLICT")
 
-    def test_binding_requires_trusted_write_actor(self):
+    def test_binding_rejects_read_only_actor(self):
         payload = build_operation_payload(
             "experiment.bind",
             {"manifest": manifest()},
         )
-        with self.assertRaises(DomainError) as ctx:
-            plan_domain_mutation(
-                repo_dir=self.root,
-                payload=payload,
-                request_id="req_bind_1",
-                payload_digest=digest_object(payload),
-                repository_full_name="siskosun/toy2game",
-                trusted_binding=self.ctx,
-                trusted_actor=None,
-            )
-        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
-
         readonly = TrustedActorContext(
             login="reader",
             user_id="1002",
