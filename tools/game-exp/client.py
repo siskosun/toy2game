@@ -774,6 +774,109 @@ class GameExpClient:
             raise ClientError(f"invalid local request journal {path}: {exc}") from exc
         return data if isinstance(data, dict) else None
 
+    def _request_run_projection(
+        self,
+        request_id: str,
+        run: dict[str, Any],
+        *,
+        expected_digest: str | None = None,
+        expected_head: str | None = None,
+    ) -> dict[str, Any]:
+        run_digest = run.get("payloadDigest")
+        run_head = run.get("expectedHead")
+        base = {
+            "request_id": request_id,
+            "repo": self.transport.repo,
+            "payload_digest": run_digest,
+            "expected_head": run_head,
+            "workflow": run,
+        }
+        if expected_digest is not None and run_digest != expected_digest:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_ID_CONFLICT",
+                "expected_payload_digest": expected_digest,
+                "remote_payload_digest": run_digest,
+                **base,
+            }
+        if expected_head is not None and run_head != expected_head:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_PRECONDITION_CONFLICT",
+                "expected_ledger_head": expected_head,
+                "remote_expected_head": run_head,
+                **base,
+            }
+
+        state = run.get("status")
+        conclusion = run.get("conclusion")
+        if state in {"queued", "in_progress", "waiting", "requested", "pending"}:
+            return {
+                "status": "ACCEPTED",
+                "operation_status": "WRITER_RUNNING",
+                **base,
+            }
+        if state != "completed":
+            return {
+                "status": "UNKNOWN",
+                "reason": "writer_run_state_unknown",
+                **base,
+            }
+        if conclusion == "success":
+            return {
+                "status": "UNKNOWN",
+                "reason": "workflow_succeeded_but_no_ledger_record",
+                "operation_status": "WRITER_COMPLETED",
+                **base,
+            }
+
+        workflow_url = run.get("url")
+        logs = (
+            self.transport.failed_run_logs(workflow_url)
+            if isinstance(workflow_url, str)
+            else ""
+        )
+        domain_error = None
+        if "REQUEST_ID_CONFLICT" in logs:
+            conflict_type = "REQUEST_ID_CONFLICT"
+        elif "HEAD_CONFLICT" in logs:
+            conflict_type = "HEAD_CONFLICT"
+        else:
+            match = re.search(
+                r'"status":"(DOMAIN_[A-Z_]+|EXPERIMENT_IDENTITY_CONFLICT)"',
+                logs,
+            )
+            conflict_type = (
+                match.group(1)
+                if match and match.group(1).endswith("CONFLICT")
+                else None
+            )
+            domain_error = match.group(1) if match else None
+        if conflict_type:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": conflict_type,
+                **base,
+            }
+        result = {
+            "status": "REJECTED",
+            "operation_status": "WRITER_FAILED",
+            **base,
+        }
+        if domain_error:
+            result["domain_error"] = domain_error
+        return result
+
+    def _discover_request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        resolver = getattr(self.transport, "find_request_runs", None)
+        if not callable(resolver):
+            return []
+        try:
+            rows = resolver(request_id)
+        except Exception:
+            return []
+        return rows if isinstance(rows, list) else []
+
     def submit(
         self,
         *,
@@ -805,36 +908,69 @@ class GameExpClient:
                     "new_payload_digest": payload_digest,
                 }
 
-            remote = self.transport.ledger_record(rid)
-            if remote is not None:
-                remote_digest = remote.get("payload_digest")
-                if remote_digest != payload_digest:
-                    result = {
-                        "status": "CONFLICT",
-                        "conflict_type": "REQUEST_ID_CONFLICT",
-                        "request_id": rid,
-                        "repo": self.transport.repo,
-                        "expected_payload_digest": payload_digest,
-                        "remote_payload_digest": remote_digest,
-                        "record": remote,
-                    }
-                else:
-                    result = {
-                        "status": "COMMITTED",
-                        "request_id": rid,
-                        "repo": self.transport.repo,
-                        "payload_digest": remote_digest,
-                        "verified_against_local_request": True,
-                        "record": remote,
-                        "replayed": True,
-                    }
+        remote = self.transport.ledger_record(rid)
+        if remote is not None:
+            remote_digest = remote.get("payload_digest")
+            if remote_digest != payload_digest:
+                result = {
+                    "status": "CONFLICT",
+                    "conflict_type": "REQUEST_ID_CONFLICT",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                    "expected_payload_digest": payload_digest,
+                    "remote_payload_digest": remote_digest,
+                    "record": remote,
+                }
+            else:
+                result = {
+                    "status": "COMMITTED",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                    "payload_digest": remote_digest,
+                    "verified_against_local_request": True,
+                    "record": remote,
+                    "replayed": True,
+                }
+            if existing is not None:
                 self._write_journal({**existing, **result})
-                return result
+            return result
 
-            expected_head = existing["expected_head"]
-        else:
-            expected_head = self.transport.ledger_head()
+        runs = self._discover_request_runs(rid)
+        if runs:
+            first = runs[0]
+            result = self._request_run_projection(
+                rid,
+                first,
+                expected_digest=payload_digest,
+                expected_head=(
+                    existing.get("expected_head")
+                    if isinstance(existing, dict)
+                    else None
+                ),
+            )
+            conflicting_attempts = [
+                {
+                    "databaseId": row.get("databaseId"),
+                    "payloadDigest": row.get("payloadDigest"),
+                    "expectedHead": row.get("expectedHead"),
+                }
+                for row in runs[1:]
+                if (
+                    row.get("payloadDigest") != first.get("payloadDigest")
+                    or row.get("expectedHead") != first.get("expectedHead")
+                )
+            ]
+            if conflicting_attempts:
+                result["conflicting_attempts"] = conflicting_attempts
+            if existing is not None:
+                self._write_journal({**existing, **result})
+            return result
 
+        expected_head = (
+            existing["expected_head"]
+            if isinstance(existing, dict) and isinstance(existing.get("expected_head"), str)
+            else self.transport.ledger_head()
+        )
         pending = {
             "status": "PENDING_DISPATCH",
             "request_id": rid,
@@ -851,6 +987,7 @@ class GameExpClient:
                 request_id=rid,
                 expected_head=expected_head,
                 payload_b64=encode_payload_b64(payload),
+                payload_digest=payload_digest,
             )
         except TransportUncertainError as exc:
             result = {
@@ -858,6 +995,7 @@ class GameExpClient:
                 "status": "UNKNOWN",
                 "reason": "dispatch_outcome_uncertain",
                 "error": str(exc),
+                "recovery": "query the same request_id before any retry",
             }
             self._write_journal(result)
             return result
@@ -3221,6 +3359,7 @@ class GameExpClient:
         rid = validate_request_id(request_id)
         journal = self._read_journal(rid)
         expected_digest = journal.get("payload_digest") if journal else None
+        expected_head = journal.get("expected_head") if journal else None
         record = self.transport.ledger_record(rid)
 
         if record is not None:
@@ -3248,10 +3387,42 @@ class GameExpClient:
                 self._write_journal({**journal, **result})
             return result
 
+        runs = self._discover_request_runs(rid)
+        if runs:
+            first = runs[0]
+            result = self._request_run_projection(
+                rid,
+                first,
+                expected_digest=expected_digest,
+                expected_head=expected_head,
+            )
+            conflicting_attempts = [
+                {
+                    "databaseId": row.get("databaseId"),
+                    "payloadDigest": row.get("payloadDigest"),
+                    "expectedHead": row.get("expectedHead"),
+                }
+                for row in runs[1:]
+                if (
+                    row.get("payloadDigest") != first.get("payloadDigest")
+                    or row.get("expectedHead") != first.get("expectedHead")
+                )
+            ]
+            if conflicting_attempts:
+                result["conflicting_attempts"] = conflicting_attempts
+            if journal:
+                self._write_journal({**journal, **result})
+            return result
+
         workflow_url = journal.get("workflow_url") if journal else None
         if workflow_url:
             state = self.transport.run_state(workflow_url)
-            if state and state.get("status") in {"queued", "in_progress", "waiting", "requested"}:
+            if state and state.get("status") in {
+                "queued",
+                "in_progress",
+                "waiting",
+                "requested",
+            }:
                 return {
                     "status": "ACCEPTED",
                     "request_id": rid,
@@ -3278,7 +3449,11 @@ class GameExpClient:
                         r'"status":"(DOMAIN_[A-Z_]+|EXPERIMENT_IDENTITY_CONFLICT)"',
                         logs,
                     )
-                    conflict_type = match.group(1) if match and match.group(1).endswith("CONFLICT") else None
+                    conflict_type = (
+                        match.group(1)
+                        if match and match.group(1).endswith("CONFLICT")
+                        else None
+                    )
                     domain_error = match.group(1) if match else None
                 if conflict_type:
                     return {
@@ -3304,7 +3479,7 @@ class GameExpClient:
             "request_id": rid,
             "repo": self.transport.repo,
             "retry_safe_with_same_request_id": journal is not None,
-            "expected_head": journal.get("expected_head") if journal else None,
+            "expected_head": expected_head,
             "payload_digest": expected_digest,
         }
 
