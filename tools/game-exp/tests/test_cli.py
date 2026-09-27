@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -122,6 +124,124 @@ class CLIRoutingTests(unittest.TestCase):
     def test_mutating_async_commands_require_request_id(self):
         with self.assertRaises(SystemExit):
             cli.build_parser().parse_args(["integrate", "EXP-21"])
+
+    def test_conformance_session_uses_normal_cli_surface_without_github(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = Path(td) / "session.json"
+            with patch("cli._print_result"):
+                code = cli.main(
+                    [
+                        "--json",
+                        "conformance-start",
+                        "lost-response-recovery",
+                        "--session-file",
+                        str(session),
+                        "--session-id",
+                        "cli-cross-surface",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertTrue(session.exists())
+
+            with (
+                patch("cli.GitHubTransport") as github_transport,
+                patch("cli._print_result"),
+            ):
+                code = cli.main(
+                    [
+                        "--conformance-session",
+                        str(session),
+                        "--json",
+                        "get-operation",
+                        "req-archive-42",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            github_transport.assert_not_called()
+
+            data = json.loads(session.read_text(encoding="utf-8"))
+            self.assertEqual(data["trace"][-1]["surface"], "cli")
+            self.assertEqual(data["trace"][-1]["tool"], "game_exp_operation_get")
+
+    def test_conformance_result_and_report_are_local_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            files = []
+            scenarios = [
+                ("lost-response-recovery", ["get-operation", "req-archive-42"]),
+                ("authorization-no-fallback", ["get-operation", "req-promote-42"]),
+                ("review-bound-to-candidate", ["experiment", "EXP-42"]),
+                ("dependency-review-required", ["experiment", "EXP-86"]),
+                ("human-gate-preserved", ["experiment", "EXP-42"]),
+            ]
+            for scenario_id, command in scenarios:
+                path = Path(td) / f"{scenario_id}.json"
+                files.append(path)
+                with patch("cli._print_result"):
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "conformance-start",
+                                scenario_id,
+                                "--session-file",
+                                str(path),
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        cli.main(
+                            [
+                                "--conformance-session",
+                                str(path),
+                                *command,
+                            ]
+                        ),
+                        0,
+                    )
+
+            stale = Path(td) / "stale.json"
+            files.append(stale)
+            with patch("cli._print_result"):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "conformance-start",
+                            "stale-rehearsal-refresh",
+                            "--session-file",
+                            str(stale),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "--conformance-session",
+                            str(stale),
+                            "rehearse",
+                            "EXP-42",
+                            "--request-id",
+                            "req-rh-cli",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "--conformance-session",
+                            str(stale),
+                            "get-operation",
+                            "req-rh-cli",
+                        ]
+                    ),
+                    0,
+                )
+
+                argv = ["conformance-report"]
+                for path in files:
+                    argv.extend(["--session-file", str(path)])
+                self.assertEqual(cli.main(argv), 0)
 
     def test_archive_abort_routes_human_request(self):
         code, client = self.run_cli(
