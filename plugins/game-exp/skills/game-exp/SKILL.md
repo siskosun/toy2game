@@ -112,6 +112,7 @@ For Godot work, hand the returned brief to Godot Prototype Studio. game-exp rema
 ## Host capability boundary
 
 - Keep game-exp focused on lifecycle control; do not turn its MCP into a generic source editor.
+- Local stdio MCP/CLI use the local GitHub principal. Streamable HTTP write operations fail closed unless the endpoint is explicitly configured as a trusted single-principal endpoint; a shared HTTP server credential is not caller identity.
 - In ChatGPT Work, use an authorized GitHub/code capability for experiment source edits and PR merge actions.
 - In Codex, use normal repository editing/Git capabilities for source changes.
 - If the host cannot edit the source repository, stop at the source-editing step and report that capability gap; do not bypass the protected workflow or broaden game-exp write authority to compensate.
