@@ -7,6 +7,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from client import GameExpClient, GitHubTransport
+from project_setup import preflight as project_preflight, provision as project_provision
 from conformance_core import (
     ConformanceClient,
     compare_reports as conformance_compare_reports,
@@ -123,6 +124,53 @@ def game_exp_conformance_result() -> dict[str, Any]:
         return session["evaluation"]
     result = conformance_evaluate(session)
     conformance_save_session(path, session)
+    return result
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_project_preflight(repo: str | None = None) -> dict[str, Any]:
+    """Check whether a repository can support a complete trusted game-exp setup."""
+    if _conformance_session_path() is not None:
+        return {
+            "status": "REJECTED",
+            "complete": False,
+            "code": "PROJECT_SETUP_NOT_AVAILABLE_IN_CONFORMANCE",
+        }
+    target = GitHubTransport(repo or os.environ.get("GAME_EXP_REPO")).repo
+    return project_preflight(target)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_project_init(
+    repo: str | None = None,
+    run_selftest: bool = True,
+) -> dict[str, Any]:
+    """Provision all repository trust controls. Only local stdio MCP may run this."""
+    if _conformance_session_path() is not None:
+        return {
+            "status": "REJECTED",
+            "complete": False,
+            "code": "PROJECT_SETUP_NOT_AVAILABLE_IN_CONFORMANCE",
+        }
+    if _mcp_transport() != "stdio":
+        target = GitHubTransport(repo or os.environ.get("GAME_EXP_REPO")).repo
+        return {
+            "status": "REJECTED",
+            "complete": False,
+            "repo": target,
+            "code": "PROJECT_SETUP_LOCAL_STDIO_REQUIRED",
+            "error": (
+                "project-init generates a repository Deploy Key and writes an Actions "
+                "secret; run it through local CLI/stdio MCP with the repository admin "
+                "GitHub principal, never through shared HTTP MCP"
+            ),
+        }
+    target = GitHubTransport(repo or os.environ.get("GAME_EXP_REPO")).repo
+    result = project_provision(target, run_selftest=run_selftest)
+    if not run_selftest and result.get("status") == "PASS":
+        result["status"] = "INCOMPLETE"
+        result["complete"] = False
+        result["reason"] = "Trusted Writer self-test was skipped"
     return result
 
 

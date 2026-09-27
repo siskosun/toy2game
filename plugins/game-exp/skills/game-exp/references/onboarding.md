@@ -4,6 +4,8 @@
 
 Help a new user reach a valid first experiment without requiring them to understand Ledger internals, request ids, lifecycle enums, or protected refs.
 
+First-experiment onboarding assumes the repository is already `PROJECT_READY` under `references/project-setup.md`. If repository trust prerequisites are incomplete, return to project setup instead of continuing onboarding.
+
 Onboarding is guidance only. It must not bypass repository trust checks, human gates, or trusted workflow tools.
 
 ## When to trigger
@@ -19,7 +21,8 @@ Do not repeatedly force onboarding after the repository already has experiments.
 ## Six-step flow
 
 1. `连接检查`
-   - run `game_exp_access_check` first and classify access as `NO_ACCESS`, `READ_ONLY`, `WRITE`, or `ADMIN`;
+   - confirm repo-level `game_exp_doctor` is PASS; if not, route to `references/project-setup.md`;
+   - run `game_exp_access_check` and classify access as `NO_ACCESS`, `READ_ONLY`, `WRITE`, or `ADMIN`;
    - `NO_ACCESS`: explain that the repository cannot be read and stop;
    - `READ_ONLY`: allow Board viewing but disable creating or advancing experiments; ask for repository write permission or another repository;
    - `WRITE`: allow normal game-exp use and label admin-only checks as partial when unavailable;

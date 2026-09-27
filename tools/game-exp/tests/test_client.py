@@ -9,7 +9,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
-from client import GameExpClient, TransportUncertainError  # noqa: E402
+from client import ClientError, GameExpClient, TransportUncertainError  # noqa: E402
 from protocol_core import digest_object  # noqa: E402
 
 
@@ -1172,6 +1172,23 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertTrue(all(row["status"] == "PASS" for row in result["checks"]))
 
+
+    def test_doctor_classifies_private_free_ruleset_limit_as_fail(self):
+        transport = FakeTransport()
+        def blocked_rulesets():
+            raise ClientError(
+                "HTTP 403: Upgrade to GitHub Pro or make this repository public "
+                "to enable this feature."
+            )
+        transport.rulesets = blocked_rulesets
+        result = GameExpClient(transport).doctor()
+        self.assertEqual(result["status"], "FAIL")
+        rulesets = next(row for row in result["checks"] if row["name"] == "rulesets")
+        self.assertEqual(rulesets["status"], "FAIL")
+        self.assertEqual(
+            rulesets["detail"]["code"],
+            "RULESETS_PLAN_UNSUPPORTED",
+        )
 
     def _execution_claim_record(
         self,

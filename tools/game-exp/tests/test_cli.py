@@ -37,6 +37,55 @@ class CLIRoutingTests(unittest.TestCase):
             code = cli.main(argv)
         return code, client
 
+    def test_project_preflight_routes_before_client_construction(self):
+        transport = MagicMock()
+        transport.repo = "owner/repo"
+        with (
+            patch("cli.GitHubTransport", return_value=transport),
+            patch(
+                "cli.project_preflight",
+                return_value={"status": "PASS", "ready_to_provision": True},
+            ) as preflight,
+            patch("cli._print_result"),
+        ):
+            code = cli.main(["--repo", "owner/repo", "project-preflight"])
+        self.assertEqual(code, 0)
+        preflight.assert_called_once_with("owner/repo")
+
+    def test_project_init_requires_complete_pass(self):
+        transport = MagicMock()
+        transport.repo = "owner/repo"
+        with (
+            patch("cli.GitHubTransport", return_value=transport),
+            patch(
+                "cli.project_provision",
+                return_value={"status": "PASS", "complete": True},
+            ) as provision,
+            patch("cli._print_result"),
+        ):
+            code = cli.main(["--repo", "owner/repo", "project-init"])
+        self.assertEqual(code, 0)
+        provision.assert_called_once_with("owner/repo", run_selftest=True)
+
+    def test_project_init_skip_selftest_is_incomplete(self):
+        transport = MagicMock()
+        transport.repo = "owner/repo"
+        with (
+            patch("cli.GitHubTransport", return_value=transport),
+            patch(
+                "cli.project_provision",
+                return_value={"status": "PASS", "complete": True},
+            ),
+            patch("cli._print_result") as printer,
+        ):
+            code = cli.main(
+                ["--repo", "owner/repo", "project-init", "--skip-selftest"]
+            )
+        self.assertEqual(code, 1)
+        result = printer.call_args.args[0]
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertFalse(result["complete"])
+
     def test_board_routes_to_client(self):
         code, client = self.run_cli(["board"])
         self.assertEqual(code, 0)

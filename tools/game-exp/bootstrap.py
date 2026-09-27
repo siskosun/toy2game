@@ -34,6 +34,7 @@ PRODUCTION_TOOLS = (
     "github_bridge.py",
     "mcp_server.py",
     "project_policy.py",
+    "project_setup.py",
     "protocol_core.py",
     "request_guard.py",
     "rehearsal_control.py",
@@ -56,6 +57,7 @@ PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/references/prototype-handoff.md",
     "plugins/game-exp/skills/game-exp/references/exploration-thread.md",
     "plugins/game-exp/skills/game-exp/references/public-contract.md",
+    "plugins/game-exp/skills/game-exp/references/project-setup.md",
     "plugins/game-exp/skills/game-exp/references/conformance.md",
 )
 

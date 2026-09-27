@@ -696,6 +696,7 @@ class GameExpClient:
                 "dependency_review_hints": True,
                 "godot_handoff": True,
                 "archive_recovery": True,
+                "complete_project_setup": True,
             },
             "queries": [
                 "status",
@@ -708,6 +709,7 @@ class GameExpClient:
                 "operation_get",
                 "notifications",
                 "prototype_handoff",
+                "project_preflight",
             ],
             "commands": [
                 "experiment.bind",
@@ -716,6 +718,7 @@ class GameExpClient:
                 "experiment.decision",
                 "archive.abort",
                 *list(ASYNC_EXECUTION_ACTIONS),
+                "project_init_local_only",
             ],
             "recovery": {
                 "operation_get": True,
@@ -3763,7 +3766,26 @@ class GameExpClient:
             missing = sorted(required - active_names)
             add("rulesets", "PASS" if not missing else "FAIL", {"missing": missing})
         except Exception as exc:
-            add("rulesets", "UNKNOWN", str(exc))
+            detail = str(exc)
+            lowered = detail.lower()
+            if (
+                "upgrade to github pro" in lowered
+                or "make this repository public" in lowered
+            ):
+                add(
+                    "rulesets",
+                    "FAIL",
+                    {
+                        "code": "RULESETS_PLAN_UNSUPPORTED",
+                        "detail": detail,
+                        "resolution_choices": [
+                            "make_repository_public",
+                            "upgrade_github_plan",
+                        ],
+                    },
+                )
+            else:
+                add("rulesets", "UNKNOWN", detail)
 
         keys = self.transport.deploy_keys()
         if keys is None:

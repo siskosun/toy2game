@@ -1,6 +1,6 @@
 ---
 name: game-exp
-description: Orchestrate trusted game experiments through either native game-exp MCP tools or the repository GitHub Issue-comment bridge, plus an authorized source-editing workflow. Use in ChatGPT or Codex when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
+description: Create and operate complete trusted game-exp repositories and gameplay/prototype experiments through MCP, CLI, or the GitHub Bridge. Use when the user wants to bootstrap a new game-exp project/repository; create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose an experiment; validate repository trust prerequisites; or recover cross-interface operations. Require PROJECT_READY trust setup before first-experiment onboarding, preserve human gates, and never bypass the Trusted Writer or protected refs.
 ---
 
 # game-exp
@@ -43,6 +43,19 @@ When the user opens one experiment from the Board, prefer `game_exp_experiment_p
 When the user opens one prototype/subject group, prefer `game_exp_subject_panel`. It returns the stable subject identity, focused lifecycle/health/attention summary, recent activity, child experiment summaries, and relationship edges from the same pinned Ledger snapshot.
 
 For multi-user work, keep `发起人` and `代码贡献者` distinct. The initiator comes from the Trusted Writer-verified binding actor. Contributors come from GitHub commit attribution and are display-only collaboration metadata; never use contributor status as authority.
+
+## Complete project setup
+
+When the user asks game-exp to create, bootstrap, prepare, or initialize a new repository/project, follow `references/project-setup.md` before first-experiment onboarding.
+
+- Installing files is not project completion.
+- After the repository and source exist, install game-exp files, commit/push them to `main`, then run `game_exp_project_preflight` or CLI `project-preflight`.
+- If preflight reports `BLOCKED_PLAN`, `BLOCKED_PERMISSION`, or `BLOCKED_SOURCE`, stop and surface the material blocker. Do not create a degraded trust mode or call the project ready.
+- Run `game_exp_project_init` only through local stdio MCP, or CLI `project-init`, with the repository administrator's GitHub identity.
+- Shared/streamable HTTP MCP must never perform complete project initialization because setup generates a private Deploy Key and repository secret.
+- A project is ready only when project-init returns `status=PASS`, `complete=true`, the Trusted Writer self-test passed, and final repo-level Doctor is PASS.
+- If GitHub plan support is insufficient for a private repository, never change repository visibility automatically. The user must explicitly choose public visibility or a plan that supports private-repository rulesets.
+- Only after `PROJECT_READY` may first-experiment onboarding begin.
 
 ## First-use onboarding
 

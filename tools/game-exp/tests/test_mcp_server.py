@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
@@ -237,6 +237,8 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_conformance_start",
                 "game_exp_conformance_compare",
                 "game_exp_conformance_result",
+                "game_exp_project_preflight",
+                "game_exp_project_init",
                 "game_exp_status",
                 "game_exp_access_check",
                 "game_exp_capabilities",
@@ -344,6 +346,7 @@ class MCPServerTests(unittest.TestCase):
     def test_tool_annotations_distinguish_reads_from_submit(self):
         tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
         for name in (
+            "game_exp_project_preflight",
             "game_exp_status",
             "game_exp_access_check",
             "game_exp_capabilities",
@@ -378,6 +381,43 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse(resume.read_only_hint)
         self.assertFalse(resume.destructive_hint)
         self.assertTrue(resume.idempotent_hint)
+
+    def test_project_init_rejects_shared_http(self):
+        transport = MagicMock()
+        transport.repo = "owner/repo"
+        with (
+            patch.dict(
+                os.environ,
+                {"GAME_EXP_MCP_TRANSPORT": "streamable-http"},
+                clear=False,
+            ),
+            patch("mcp_server.GitHubTransport", return_value=transport),
+            patch("mcp_server.project_provision") as provision,
+        ):
+            result = mcp_server.game_exp_project_init("owner/repo")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["code"], "PROJECT_SETUP_LOCAL_STDIO_REQUIRED")
+        provision.assert_not_called()
+
+    def test_project_init_runs_only_under_local_stdio(self):
+        transport = MagicMock()
+        transport.repo = "owner/repo"
+        with (
+            patch.dict(
+                os.environ,
+                {"GAME_EXP_MCP_TRANSPORT": "stdio"},
+                clear=False,
+            ),
+            patch("mcp_server.GitHubTransport", return_value=transport),
+            patch(
+                "mcp_server.project_provision",
+                return_value={"status": "PASS", "complete": True},
+            ) as provision,
+        ):
+            result = mcp_server.game_exp_project_init("owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertTrue(result["complete"])
+        provision.assert_called_once_with("owner/repo", run_selftest=True)
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_doctor_can_request_archive_health_for_experiment(self, _):
