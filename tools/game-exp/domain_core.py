@@ -512,11 +512,12 @@ def _state_record(experiment_id: str, request_id: str) -> dict[str, Any]:
 
 
 DECISION_TRANSITIONS = {
-    "ACTIVE": {"REVIEW"},
-    "REVIEW": {"ACTIVE", "PROMISING", "REJECTED"},
-    "PROMISING": {"ACTIVE", "SELECTED", "REJECTED"},
-    "SELECTED": set(),
+    "ACTIVE": {"REVIEW", "ABANDONED"},
+    "REVIEW": {"ACTIVE", "PROMISING", "REJECTED", "ABANDONED"},
+    "PROMISING": {"ACTIVE", "SELECTED", "REJECTED", "ABANDONED"},
+    "SELECTED": {"ABANDONED"},
     "REJECTED": set(),
+    "ABANDONED": set(),
     "INTEGRATED": set(),
     "ARCHIVED": set(),
 }
@@ -1645,6 +1646,7 @@ ARCHIVABLE_LIFECYCLES = {
     "PROMISING",
     "SELECTED",
     "REJECTED",
+    "ABANDONED",
     "INTEGRATED",
 }
 
@@ -2154,7 +2156,15 @@ def _plan_execution_claim(
         "rehearse": {"PROMISING", "SELECTED"},
         "integrate": {"SELECTED"},
         "integrate_finalize": {"SELECTED"},
-        "archive": {"ACTIVE", "REVIEW", "PROMISING", "SELECTED", "INTEGRATED"},
+        "archive": {
+            "ACTIVE",
+            "REVIEW",
+            "PROMISING",
+            "SELECTED",
+            "REJECTED",
+            "ABANDONED",
+            "INTEGRATED",
+        },
     }[action]
     if lifecycle not in allowed_lifecycles:
         raise DomainError(

@@ -20,6 +20,17 @@ SUPPORTED_MANIFEST_SCHEMA_VERSIONS = (1, 2)
 RECOMMENDED_MANIFEST_SCHEMA_VERSION = 2
 SUPPORTED_PROJECT_POLICY_SCHEMA_VERSIONS = (1, 2)
 RECOMMENDED_PROJECT_POLICY_SCHEMA_VERSION = 2
+LIFECYCLE_STATES = (
+    "ACTIVE",
+    "REVIEW",
+    "PROMISING",
+    "SELECTED",
+    "REJECTED",
+    "ABANDONED",
+    "INTEGRATED",
+    "ARCHIVED",
+)
+TERMINAL_DECISION_STATES = ("REJECTED", "ABANDONED")
 RESULT_STATUSES = (
     "PASS",
     "WARN",
@@ -49,6 +60,8 @@ def contract_descriptor() -> dict[str, Any]:
         "recommended_manifest_schema_version": RECOMMENDED_MANIFEST_SCHEMA_VERSION,
         "project_policy_schema_versions": list(SUPPORTED_PROJECT_POLICY_SCHEMA_VERSIONS),
         "recommended_project_policy_schema_version": RECOMMENDED_PROJECT_POLICY_SCHEMA_VERSION,
+        "lifecycle_states": list(LIFECYCLE_STATES),
+        "terminal_decision_states": list(TERMINAL_DECISION_STATES),
         "result_statuses": list(RESULT_STATUSES),
         "compatibility": {
             "mutation_unknown_fields": "REJECT",

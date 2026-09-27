@@ -89,6 +89,14 @@ If the execution claim committed but worker dispatch cannot be proven, the Bridg
 
 Use the current protected `last_decision_id`. JSON `null` is allowed when the authoritative state has no previous decision.
 
+To explicitly stop an experiment without claiming a failed Review, submit `ABANDONED`:
+
+~~~json
+{"schema_version":1,"request_id":"req_abandon_42","action":"decision_submit","experiment_id":"EXP-42","to_state":"ABANDONED","reason":"Human chose to stop this experiment for product/resource reasons.","previous_decision_id":"req_previous_or_null"}
+~~~
+
+Do not create a synthetic `review_record FAIL` for abandonment. Closing the Issue alone is not a lifecycle mutation.
+
 ### rehearse
 
 ~~~json

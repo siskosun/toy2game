@@ -234,6 +234,35 @@ New experiments should use Manifest schema v2. Its runtime is project-policy bas
 
 Schema v1 remains accepted for existing Godot-shaped Manifests.
 
+## Explicitly stop an experiment
+
+v0.17 separates "stop this experiment/prototype" from human Review failure.
+
+Use MCP:
+
+```text
+game_exp_abandon(EXP-N, reason, request_id)
+```
+
+or CLI:
+
+```powershell
+python tools/game-exp/cli.py --repo owner/repo abandon EXP-N --reason "priority changed" --request-id req-abandon-n
+```
+
+This records a trusted `ABANDONED` lifecycle decision directly from
+`ACTIVE`, `REVIEW`, `PROMISING`, or `SELECTED`. It does not require or
+create a Review, does not claim a Candidate failed, and does not close the
+GitHub Issue, archive/delete the branch, or delete source. Those are separate
+follow-up actions.
+
+A GitHub Bridge host uses the normal `decision_submit` action with
+`to_state=ABANDONED`.
+
+If the user's language names a prototype/subject rather than one experiment,
+resolve the subject first. Multiple live experiments under that subject require
+one explicit scope choice before applying multiple terminal decisions.
+
 ## Board and Skill
 
 v0.4 adds stable Manifest `subject` identity and a portfolio-style Board:
@@ -254,7 +283,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.3`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.17.0`.
 
 ### Windows UTF-8 compatibility
 

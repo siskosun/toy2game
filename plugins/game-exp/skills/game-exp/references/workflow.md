@@ -12,7 +12,9 @@ Additional paths:
 - `REVIEW -> REJECTED`
 - `PROMISING -> ACTIVE`
 - `PROMISING -> REJECTED`
-- supported non-terminal lifecycles may be archived through the dedicated Archive protocol
+- `ACTIVE / REVIEW / PROMISING / SELECTED -> ABANDONED` for an explicit human stop that is not a Review result
+- `REJECTED / ABANDONED -> ARCHIVED` through the dedicated Archive protocol
+- supported non-terminal lifecycles may also be archived through the dedicated Archive protocol
 
 `INTEGRATED` and `ARCHIVED` are reserved for dedicated trusted operations, not generic lifecycle decisions.
 
@@ -32,7 +34,8 @@ Additional paths:
 | Initialize source refs | `game_exp_initialize` | Idempotent trusted workflow |
 | Build Candidate | `game_exp_candidate_build` | Build/observe/attest/retain/register |
 | Record human review | `game_exp_review_record` | Human outcome only; trusted GitHub actor rechecked |
-| Change lifecycle | `game_exp_decision_submit` | Human gate for PROMISING/SELECTED/REJECTED |
+| Change lifecycle | `game_exp_decision_submit` | Human gate for PROMISING/SELECTED/REJECTED/ABANDONED |
+| Stop/abandon experiment | `game_exp_abandon` | Direct human stop; never fabricate FAIL Review |
 | Latest-main rehearsal | `game_exp_rehearse` | Scope-filtered, trusted tree recompute |
 | Create Integration PR | `game_exp_integrate` | Does not itself mean INTEGRATED |
 | Finalize merged Integration PR | `game_exp_integrate_finalize` | Verifies merged tree/ancestry |
@@ -73,7 +76,8 @@ The agent must not decide these from automated evidence:
 2. Promotion to PROMISING.
 3. Selection to SELECTED.
 4. Rejection when the user has not explicitly made that decision.
-5. Archive branch-retention choice when the user has not made the destructive intent clear.
+5. Abandonment when the user has not explicitly chosen to stop that experiment/prototype scope.
+6. Archive branch-retention choice when the user has not made the destructive intent clear.
 
 ## Trust boundaries
 

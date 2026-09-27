@@ -457,6 +457,31 @@ def game_exp_decision_submit(
     )
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True))
+def game_exp_abandon(
+    experiment_id: str,
+    reason: str,
+    request_id: str,
+    actor_claim: str | None = None,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Explicitly stop an experiment without fabricating a FAIL Review.
+
+    ABANDONED is a terminal human decision for strategic/resource/product stops.
+    It does not close the GitHub Issue, archive/delete the branch, delete source,
+    or imply the Candidate failed its review protocol.
+    """
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).abandon(
+        experiment_id,
+        reason,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_rehearse(
     experiment_id: str,

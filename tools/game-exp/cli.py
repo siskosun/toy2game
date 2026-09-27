@@ -218,6 +218,15 @@ def build_parser() -> argparse.ArgumentParser:
     decision.add_argument("--request-id", required=True)
     decision.add_argument("--actor-claim")
 
+    abandon = sub.add_parser(
+        "abandon",
+        help="stop an experiment without claiming a negative human Review",
+    )
+    abandon.add_argument("experiment_id")
+    abandon.add_argument("--reason", required=True)
+    abandon.add_argument("--request-id", required=True)
+    abandon.add_argument("--actor-claim")
+
     rehearse = sub.add_parser("rehearse", help="run trusted latest-main integration rehearsal")
     rehearse.add_argument("experiment_id")
     rehearse.add_argument("--request-id", required=True)
@@ -519,6 +528,13 @@ def main(argv: list[str] | None = None) -> int:
                     actor_claim=args.actor_claim,
                     request_id=args.request_id,
                 )
+        elif args.command == "abandon":
+            result = client.abandon(
+                args.experiment_id,
+                args.reason,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
         elif args.command == "rehearse":
             result = client.rehearse(
                 args.experiment_id,

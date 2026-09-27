@@ -231,6 +231,55 @@ class DecisionTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "DOMAIN_PREREQUISITE_MISSING")
 
+    def test_active_can_be_abandoned_without_review(self):
+        _payload, plan = self.decision(
+            "req_abandon_1",
+            "ABANDONED",
+            reason="human stopped this experiment for product priority",
+        )
+        state = plan.writes["experiments/EXP-42/state.json"]
+        event = plan.writes["experiments/EXP-42/decisions/req_abandon_1.json"]
+        self.assertEqual(state["lifecycle"], "ABANDONED")
+        self.assertEqual(state["sequence"], 1)
+        self.assertEqual(event["from_state"], "ACTIVE")
+        self.assertEqual(event["to_state"], "ABANDONED")
+        self.assertIn("product priority", event["reason"])
+        self.assertFalse((self.root / "experiments/EXP-42/reviews").exists())
+
+    def test_abandoned_is_terminal_for_lifecycle_decisions(self):
+        _payload, first = self.decision(
+            "req_abandon_1",
+            "ABANDONED",
+            reason="stop",
+        )
+        self.apply(first)
+        with self.assertRaises(DomainError) as ctx:
+            self.decision(
+                "req_after_abandon",
+                "REVIEW",
+                previous="req_abandon_1",
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_INVALID_TRANSITION")
+
+    def test_review_promising_and_selected_can_be_abandoned(self):
+        state_path = self.root / "experiments/EXP-42/state.json"
+        for lifecycle in ("REVIEW", "PROMISING", "SELECTED"):
+            with self.subTest(lifecycle=lifecycle):
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                state["lifecycle"] = lifecycle
+                state["last_decision_id"] = "req_prev"
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+                _payload, plan = self.decision(
+                    f"req_abandon_{lifecycle.lower()}",
+                    "ABANDONED",
+                    previous="req_prev",
+                    reason="stop without negative review claim",
+                )
+                self.assertEqual(
+                    plan.writes["experiments/EXP-42/state.json"]["lifecycle"],
+                    "ABANDONED",
+                )
+
     def test_invalid_transition_rejected(self):
         with self.assertRaises(DomainError) as ctx:
             self.decision("req_decision_1", "REJECTED")

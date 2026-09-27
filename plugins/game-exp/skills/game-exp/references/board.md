@@ -25,7 +25,7 @@ Show:
 - `项目状态`: `project.readiness_zh` and `project.doctor_status_zh`.
 - `我的权限`: `project.access_zh`; use `project.can_create_experiment` for the create-action affordance.
 - `Ledger 快照`: pinned `snapshot_head`.
-- `实验统计`: `statistics.total / active / archived / attention / abnormal_health`.
+- `实验统计`: `statistics.total / active / abandoned / archived / attention / abnormal_health`.
 - `下一步`: `project.next_action_zh`.
 - `仓库信任检查`: render `project.trust_checks` compactly or behind an expandable detail area.
 
@@ -167,6 +167,7 @@ Lifecycle:
 - `SELECTED` -> `已选定`
 - `INTEGRATED` -> `已集成`
 - `REJECTED` -> `已拒绝`
+- `ABANDONED` -> `已终止`
 - `ARCHIVED` -> `已归档`
 
 Health:
@@ -233,7 +234,7 @@ For a new experiment under a subject where another collaborator has prior partic
 
 `depends_on` currently identifies a coarse experiment dependency; it does not state whether the downstream requires an integrated capability, an immutable source snapshot, or continued upstream development.
 
-When an active experiment depends on a REJECTED or ARCHIVED experiment:
+When an active experiment depends on a REJECTED, ABANDONED, or ARCHIVED experiment:
 
 - add `DEPENDENCY_REVIEW_REQUIRED` to the downstream projection;
 - show the upstream lifecycle plus Integration id/final tag when available;
@@ -241,4 +242,4 @@ When an active experiment depends on a REJECTED or ARCHIVED experiment:
 - never auto-reject or auto-archive the downstream experiment;
 - keep `blocks_progress=false` until a more specific dependency predicate exists.
 
-An ARCHIVED upstream may be perfectly valid if its integrated capability or immutable final snapshot satisfies the downstream dependency. Lifecycle alone is insufficient to decide.
+An ABANDONED upstream means work stopped without asserting a failed Review; the downstream must be rechecked rather than auto-rejected. An ARCHIVED upstream may be perfectly valid if its integrated capability or immutable final snapshot satisfies the downstream dependency. Lifecycle alone is insufficient to decide.

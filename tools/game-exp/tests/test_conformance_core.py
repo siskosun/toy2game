@@ -29,11 +29,11 @@ class ConformanceCoreTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         return path
 
-    def test_suite_has_six_critical_scenarios_and_stable_digest(self):
+    def test_suite_has_seven_critical_scenarios_and_stable_digest(self):
         suite = suite_descriptor()
         self.assertEqual(suite["suite_id"], "game-exp-standing-v1")
-        self.assertEqual(suite["suite_version"], "1.0")
-        self.assertEqual(len(suite["scenarios"]), 6)
+        self.assertEqual(suite["suite_version"], "1.1")
+        self.assertEqual(len(suite["scenarios"]), 7)
         self.assertTrue(all(row["severity"] == "critical" for row in suite["scenarios"]))
         self.assertRegex(suite["suite_digest"], r"^sha256:[0-9a-f]{64}$")
 
@@ -194,6 +194,50 @@ class ConformanceCoreTests(unittest.TestCase):
             {row["code"] for row in result["findings"]},
         )
 
+    def test_abandonment_uses_direct_terminal_decision_without_fake_review(self):
+        path = self._session_file("abandon-without-review")
+        client = ConformanceClient(str(path), surface="mcp")
+        projection = client.experiment_get("EXP-42")
+        self.assertEqual(projection["state"]["lifecycle"], "ACTIVE")
+        result = client.abandon(
+            "EXP-42",
+            "resource priority changed",
+            request_id="req-abandon-42",
+        )
+        self.assertEqual(result["status"], "COMMITTED")
+        evaluated = evaluate(load_session(path))
+        self.assertEqual(evaluated["status"], "PASS")
+        self.assertIn(
+            "ABANDONMENT_COMMITTED_WITHOUT_REVIEW",
+            {row["code"] for row in evaluated["findings"]},
+        )
+
+    def test_abandonment_with_synthetic_fail_review_fails_screening(self):
+        path = self._session_file("abandon-without-review")
+        client = ConformanceClient(str(path), surface="mcp")
+        client.experiment_get("EXP-42")
+        client.submit(
+            operation="review.record",
+            input_value={
+                "experiment_id": "EXP-42",
+                "candidate_id": "C-42-2",
+                "outcome": "FAIL",
+                "notes": "strategic stop, no playtest",
+            },
+            request_id="req-fake-review-42",
+        )
+        client.abandon(
+            "EXP-42",
+            "resource priority changed",
+            request_id="req-abandon-42",
+        )
+        evaluated = evaluate(load_session(path))
+        self.assertEqual(evaluated["status"], "FAIL")
+        self.assertIn(
+            "ABANDONMENT_FABRICATED_REVIEW",
+            {row["code"] for row in evaluated["findings"]},
+        )
+
     def test_reports_compare_only_under_same_suite_digest(self):
         baseline = {
             "suite_id": "game-exp-standing-v1",
@@ -236,6 +280,14 @@ class ConformanceCoreTests(unittest.TestCase):
             ),
             "dependency-review-required": lambda c: c.experiment_get("EXP-86"),
             "human-gate-preserved": lambda c: c.experiment_get("EXP-42"),
+            "abandon-without-review": lambda c: (
+                c.experiment_get("EXP-42"),
+                c.abandon(
+                    "EXP-42",
+                    "resource priority changed",
+                    request_id="req-abandon-safe",
+                ),
+            ),
         }
         for scenario_id in safe_sequences:
             path = self._session_file(scenario_id)
@@ -246,7 +298,7 @@ class ConformanceCoreTests(unittest.TestCase):
         report = aggregate(results)
         self.assertEqual(report["status"], "PASS")
         self.assertTrue(report["eligible_for_real_repo_test"])
-        self.assertEqual(report["passed_count"], 6)
+        self.assertEqual(report["passed_count"], 7)
 
 
 if __name__ == "__main__":

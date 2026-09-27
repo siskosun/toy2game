@@ -1726,6 +1726,7 @@ class GameExpClient:
             "SELECTED": "已选定",
             "INTEGRATED": "已集成",
             "REJECTED": "已拒绝",
+            "ABANDONED": "已终止",
             "ARCHIVED": "已归档",
         }.get(lifecycle, lifecycle)
 
@@ -1951,6 +1952,7 @@ class GameExpClient:
             "PROMISING": 60,
             "SELECTED": 80,
             "REJECTED": 90,
+            "ABANDONED": 90,
         }
         decision_label = {
             "REVIEW": "进入评审",
@@ -1958,6 +1960,7 @@ class GameExpClient:
             "PROMISING": "晋级待选择",
             "SELECTED": "已选定候选",
             "REJECTED": "已拒绝",
+            "ABANDONED": "已终止实验",
         }
         for index, row in enumerate(decision_rows):
             to_state = row.get("to_state")
@@ -2404,7 +2407,7 @@ class GameExpClient:
 
         for item in items:
             dependency_reviews: list[dict[str, Any]] = []
-            if item.get("lifecycle") not in {"ARCHIVED", "REJECTED"}:
+            if item.get("lifecycle") not in {"ARCHIVED", "REJECTED", "ABANDONED"}:
                 for edge in item.get("relationships_outgoing") or []:
                     if edge.get("type") != "depends_on":
                         continue
@@ -2412,13 +2415,13 @@ class GameExpClient:
                     if not isinstance(target, dict):
                         continue
                     target_lifecycle = target.get("lifecycle")
-                    if target_lifecycle not in {"REJECTED", "ARCHIVED"}:
+                    if target_lifecycle not in {"REJECTED", "ABANDONED", "ARCHIVED"}:
                         continue
-                    reason = (
-                        "UPSTREAM_REJECTED"
-                        if target_lifecycle == "REJECTED"
-                        else "UPSTREAM_ARCHIVED"
-                    )
+                    reason = {
+                        "REJECTED": "UPSTREAM_REJECTED",
+                        "ABANDONED": "UPSTREAM_ABANDONED",
+                        "ARCHIVED": "UPSTREAM_ARCHIVED",
+                    }[target_lifecycle]
                     dependency_reviews.append(
                         {
                             "code": "DEPENDENCY_REVIEW_REQUIRED",
@@ -2433,6 +2436,8 @@ class GameExpClient:
                             "reason_zh": (
                                 "依赖实验已拒绝，需要确认当前实验是否仍成立"
                                 if target_lifecycle == "REJECTED"
+                                else "依赖实验已终止，需要确认当前实验是否仍成立"
+                                if target_lifecycle == "ABANDONED"
                                 else "依赖实验已归档，需要确认依赖的是已集成能力、不可变快照还是持续开发"
                             ),
                         }
@@ -2495,12 +2500,17 @@ class GameExpClient:
         active_ids = [
             item["experiment_id"]
             for item in items
-            if item["lifecycle"] not in {"ARCHIVED", "REJECTED"}
+            if item["lifecycle"] not in {"ARCHIVED", "REJECTED", "ABANDONED"}
         ]
         archive_ids = [
             item["experiment_id"]
             for item in items
             if item["lifecycle"] == "ARCHIVED"
+        ]
+        abandoned_ids = [
+            item["experiment_id"]
+            for item in items
+            if item["lifecycle"] == "ABANDONED"
         ]
 
         groups: dict[str, dict[str, Any]] = {}
@@ -2547,12 +2557,17 @@ class GameExpClient:
                 1
                 for experiment_id in group["experiment_ids"]
                 if by_id[experiment_id]["lifecycle"]
-                not in {"ARCHIVED", "REJECTED"}
+                not in {"ARCHIVED", "REJECTED", "ABANDONED"}
             )
             group["archived_count"] = sum(
                 1
                 for experiment_id in group["experiment_ids"]
                 if by_id[experiment_id]["lifecycle"] == "ARCHIVED"
+            )
+            group["abandoned_count"] = sum(
+                1
+                for experiment_id in group["experiment_ids"]
+                if by_id[experiment_id]["lifecycle"] == "ABANDONED"
             )
             latest = max(
                 group["experiment_ids"],
@@ -2697,6 +2712,7 @@ class GameExpClient:
             **project_context["statistics"],
             "counts_by_lifecycle": dict(sorted(counts.items())),
             "counts_by_health": dict(sorted(health_counts.items())),
+            "abandoned": len(abandoned_ids),
             "attention_sections": [
                 {
                     "section": section["section"],
@@ -2711,8 +2727,8 @@ class GameExpClient:
         else:
             statistics_zh = (
                 f"全部 {len(items)} 个实验；进行中 {len(active_ids)}；"
-                f"需要处理 {len(attention_ids)}；已归档 {len(archive_ids)}；"
-                f"异常/未知 {abnormal_health_count}"
+                f"需要处理 {len(attention_ids)}；已终止 {len(abandoned_ids)}；"
+                f"已归档 {len(archive_ids)}；异常/未知 {abnormal_health_count}"
             )
         display = {
             "title_zh": f"game-exp 面板 · {self.transport.repo}（总览）",
@@ -2744,6 +2760,7 @@ class GameExpClient:
                 "overview": {
                     "attention_ids": attention_ids,
                     "active_ids": active_ids,
+                    "abandoned_ids": abandoned_ids,
                     "archived_count": len(archive_ids),
                 },
                 "attention": {
@@ -2953,6 +2970,7 @@ class GameExpClient:
             "LIFECYCLE_PROMISING": "experiment.promising",
             "LIFECYCLE_SELECTED": "experiment.selected",
             "LIFECYCLE_REJECTED": "experiment.rejected",
+            "LIFECYCLE_ABANDONED": "experiment.abandoned",
             "INTEGRATED": "experiment.integrated",
             "ARCHIVED": "experiment.archived",
         }
@@ -3332,6 +3350,7 @@ class GameExpClient:
             "summary": {
                 "count": group.get("count", 0),
                 "active_count": group.get("active_count", 0),
+                "abandoned_count": group.get("abandoned_count", 0),
                 "archived_count": group.get("archived_count", 0),
                 "attention_count": group.get("attention_count", 0),
                 "relationship_count": group.get("relationship_count", 0),
@@ -3450,7 +3469,7 @@ class GameExpClient:
             return "TRUSTED_INTEGRATION_OR_REFRESH_REHEARSAL"
         if lifecycle == "INTEGRATED":
             return "ARCHIVE_OR_RETAIN"
-        if lifecycle == "REJECTED":
+        if lifecycle in {"REJECTED", "ABANDONED"}:
             return "ARCHIVE"
         if lifecycle == "ARCHIVED":
             return "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK"
@@ -3830,6 +3849,51 @@ class GameExpClient:
                 "recovery": "query the same request_id; do not create a new one",
             }
         return self.resume_execution(rid)
+
+    def abandon(
+        self,
+        experiment_id: str,
+        reason: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        if not isinstance(reason, str) or not reason.strip():
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "abandon reason is required",
+            }
+        projection = self.experiment_get(experiment_id)
+        if projection.get("status") != "PASS":
+            return projection
+        state = projection.get("state")
+        if not isinstance(state, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "authoritative experiment state is unavailable",
+            }
+        return self.submit(
+            operation="experiment.decision",
+            input_value={
+                "experiment_id": experiment_id,
+                "to_state": "ABANDONED",
+                "previous_decision_id": state.get("last_decision_id"),
+                "reason": reason.strip(),
+            },
+            actor_claim=actor_claim,
+            request_id=request_id,
+        )
 
     def candidate(
         self,
