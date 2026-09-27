@@ -146,10 +146,12 @@ The bridge does not grant source-editing authority. ChatGPT should use its norma
 
 ## One local runtime for Codex, Qoder and Cursor
 
-v0.16.2 uses one atomic local installer so the three Harnesses do not drift onto
+v0.16.3 uses one local installer so the three Harnesses do not drift onto
 different game-exp copies. On Windows, if a live Harness keeps the managed
-runtime/Skill directory open and blocks a directory rename, the installer falls
-back to per-file atomic replacement instead of failing or writing files in place.
+runtime/Skill directory open, the installer first falls back from directory
+swap to per-file atomic replacement. If a specific file also denies
+delete-sharing, that file alone is backed up and overwritten in-place with
+flush/fsync, then validated before the installation is reported as PASS.
 
 From a trusted game-exp checkout:
 
@@ -252,7 +254,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.2`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.3`.
 
 ### Windows UTF-8 compatibility
 
