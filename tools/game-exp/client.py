@@ -3350,6 +3350,7 @@ class GameExpClient:
             "summary": {
                 "count": group.get("count", 0),
                 "active_count": group.get("active_count", 0),
+                "abandoned_count": group.get("abandoned_count", 0),
                 "archived_count": group.get("archived_count", 0),
                 "attention_count": group.get("attention_count", 0),
                 "relationship_count": group.get("relationship_count", 0),
