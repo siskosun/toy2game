@@ -26,3 +26,12 @@ Until a dedicated authoritative exploration object is introduced, use:
 The Board may present a human-facing “探索主题” grouping when the relationship/history is clear, but must not invent an authoritative exploration id.
 
 A future protocol version may add a stable exploration id only if repeated use demonstrates that subject + relationships are insufficient.
+
+
+## Dependency semantics
+
+Do not infer a full dependency predicate from `depends_on` plus lifecycle alone.
+
+If a depended-on experiment is REJECTED or ARCHIVED, surface `DEPENDENCY_REVIEW_REQUIRED` with available evidence. Do not call it `UPSTREAM_TERMINATED` and do not automatically invalidate the downstream experiment.
+
+Historical ancestry (`manifest.parent.experiment`) is not the same as a live product dependency.
