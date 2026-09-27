@@ -17,6 +17,35 @@ def completed(args=None, returncode=0, stdout="", stderr=""):
 
 
 class ProjectSetupTests(unittest.TestCase):
+
+    def test_gh_api_repo_root_has_no_trailing_slash(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="{}")
+            project_setup._gh_api("owner/repo", "")
+        self.assertEqual(run.call_args.args[0][2], "repos/owner/repo")
+
+    def test_gh_api_nested_endpoint_is_joined_once(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="[]")
+            project_setup._gh_api(
+                "owner/repo",
+                "/rulesets?per_page=100",
+                check=False,
+            )
+        self.assertEqual(
+            run.call_args.args[0][2],
+            "repos/owner/repo/rulesets?per_page=100",
+        )
+
+    def test_gh_api_uses_supported_api_version(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="{}")
+            project_setup._gh_api("owner/repo", "")
+        self.assertIn(
+            "X-GitHub-Api-Version: 2022-11-28",
+            run.call_args.args[0],
+        )
+
     def test_preflight_blocks_private_free_ruleset_gap_before_provision(self):
         metadata = {
             "private": True,
