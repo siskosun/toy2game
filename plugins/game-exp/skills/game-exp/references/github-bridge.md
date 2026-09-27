@@ -41,6 +41,10 @@ If a result marker exists, use that result and refresh the protected Ledger.
 
 If a claim exists without a result, treat the bridge request as `UNKNOWN`. Inspect the bridge Actions run linked in the claim and refresh the protected Ledger. Do not post another command or create a new request id until the original outcome is resolved.
 
+For async actions (`initialize`, `candidate_build`, `rehearse`, `integrate`, `integrate_finalize`, `archive`), the Bridge first commits the same protected `execution.claim` used by MCP/CLI. The worker then receives the identical request id and refuses to run unless action, experiment, arguments and trusted actor match that claim.
+
+If the execution claim committed but worker dispatch cannot be proven, the Bridge result is `UNKNOWN`, not `REJECTED`. Recover/query that same request id; never submit a replacement command.
+
 ## Read action
 
 ### status

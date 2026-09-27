@@ -1,10 +1,19 @@
 name: game-exp integration finalize
+run-name: game-exp:integrate_finalize:${{ inputs.request_id }}
+
+concurrency:
+  group: game-exp-integrate_finalize-${{ inputs.request_id }}
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
       experiment_id:
         description: Canonical experiment id, e.g. EXP-21
+        required: true
+        type: string
+      request_id:
+        description: Stable cross-interface operation id
         required: true
         type: string
       pr_number:
@@ -18,7 +27,47 @@ permissions:
   pull-requests: read
 
 jobs:
+  dedupe:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      primary: ${{ steps.guard.outputs.primary }}
+      primary_run_id: ${{ steps.guard.outputs.primary_run_id }}
+      actor_login: ${{ steps.guard.outputs.actor_login }}
+    steps:
+      - name: Checkout request-id guard
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control-guard
+          sparse-checkout: |
+            tools/game-exp/workflow_guard.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Select the first run for this request id
+        id: guard
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python control-guard/tools/game-exp/workflow_guard.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "game-exp-integration-finalize.yml" \
+            --action "integrate_finalize" \
+            --request-id "${{ inputs.request_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --experiment-id "${{ inputs.experiment_id }}" \
+            --argument "pr_number=${{ inputs.pr_number }}" \
+            --github-output "$GITHUB_OUTPUT"
+
   finalize:
+    needs: dedupe
+    if: needs.dedupe.outputs.primary == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

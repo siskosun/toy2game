@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 from protocol_core import (
+    ASYNC_EXECUTION_ACTIONS,
     build_operation_payload,
+    contract_descriptor,
     digest_object,
     encode_payload_b64,
     new_request_id,
@@ -16,6 +20,15 @@ from protocol_core import (
 
 RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:$|[/?#])")
 EXPERIMENT_ID_RE = re.compile(r"^EXP-[1-9][0-9]*$")
+
+WORKFLOW_EXECUTION_SPECS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "initialize": ("game-exp-source-initializer.yml", ()),
+    "candidate_build": ("game-exp-candidate.yml", ()),
+    "rehearse": ("game-exp-rehearsal.yml", ()),
+    "integrate": ("game-exp-integration.yml", ()),
+    "integrate_finalize": ("game-exp-integration-finalize.yml", ("pr_number",)),
+    "archive": ("game-exp-archive.yml", ("mode",)),
+}
 
 
 class ClientError(RuntimeError):
@@ -137,6 +150,7 @@ class GitHubTransport:
         request_id: str,
         expected_head: str,
         payload_b64: str,
+        payload_digest: str,
     ) -> str:
         proc = _run(
             [
@@ -154,6 +168,8 @@ class GitHubTransport:
                 f"expected_head={expected_head}",
                 "-f",
                 f"payload_b64={payload_b64}",
+                "-f",
+                f"payload_digest={payload_digest}",
             ],
             check=False,
             timeout=30,
@@ -170,193 +186,198 @@ class GitHubTransport:
             )
         return url
 
-    def dispatch_initializer(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
+    def find_request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        validate_request_id(request_id)
         proc = _run(
             [
                 "gh",
-                "workflow",
                 "run",
-                "game-exp-source-initializer.yml",
+                "list",
                 "--repo",
                 self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
+                "--workflow",
+                "game-exp-trusted-writer.yml",
+                "--limit",
+                "100",
+                "--json",
+                "databaseId,displayTitle,status,conclusion,url,createdAt",
             ],
             check=False,
             timeout=30,
         )
         if proc.returncode != 0:
+            return []
+        rows = _json_output(proc)
+        if not isinstance(rows, list):
+            return []
+        prefix = f"game-exp:request:{request_id}:"
+        matches: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = row.get("displayTitle")
+            if not isinstance(title, str) or not title.startswith(prefix):
+                continue
+            suffix = title[len(prefix):]
+            match = re.fullmatch(r"(sha256:[0-9a-f]{64}):([0-9a-f]{40})", suffix)
+            if match is None:
+                continue
+            matches.append(
+                {
+                    **row,
+                    "payloadDigest": match.group(1),
+                    "expectedHead": match.group(2),
+                }
+            )
+        matches.sort(key=lambda row: int(row.get("databaseId") or 0))
+        return matches
+
+    def dispatch_execution(
+        self,
+        *,
+        action: str,
+        experiment_id: str,
+        request_id: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
+        if action not in WORKFLOW_EXECUTION_SPECS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        validate_request_id(request_id)
+        workflow, argument_names = WORKFLOW_EXECUTION_SPECS[action]
+        values = arguments or {}
+        if set(values) != set(argument_names):
+            raise ClientError(
+                f"execution arguments mismatch for {action}: "
+                f"expected={sorted(argument_names)} actual={sorted(values)}"
+            )
+        command = [
+            "gh",
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            self.repo,
+            "--ref",
+            "main",
+            "-f",
+            f"experiment_id={experiment_id}",
+            "-f",
+            f"request_id={request_id}",
+        ]
+        for name in argument_names:
+            command.extend(["-f", f"{name}={values[name]}"])
+        proc = _run(command, check=False, timeout=30)
+        if proc.returncode != 0:
             raise TransportUncertainError(
-                "source initializer dispatch did not produce a provable result"
+                f"{action} workflow dispatch did not produce a provable result"
             )
         url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not RUN_URL_RE.search(url):
             raise TransportUncertainError(
-                "source initializer dispatch returned no run URL; outcome is uncertain"
+                f"{action} workflow dispatch returned no run URL; outcome is uncertain"
             )
         return url
 
-    def dispatch_candidate(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
+    def find_execution_run(
+        self,
+        *,
+        action: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        if action not in WORKFLOW_EXECUTION_SPECS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        validate_request_id(request_id)
+        workflow, _ = WORKFLOW_EXECUTION_SPECS[action]
         proc = _run(
             [
                 "gh",
-                "workflow",
                 "run",
-                "game-exp-candidate.yml",
+                "list",
                 "--repo",
                 self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
+                "--workflow",
+                workflow,
+                "--limit",
+                "100",
+                "--json",
+                "databaseId,displayTitle,status,conclusion,url,createdAt",
             ],
             check=False,
             timeout=30,
         )
         if proc.returncode != 0:
-            raise TransportUncertainError(
-                "candidate dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "candidate dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
+            return None
+        rows = _json_output(proc)
+        if not isinstance(rows, list):
+            return None
+        expected_title = f"game-exp:{action}:{request_id}"
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict) and row.get("displayTitle") == expected_title
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda row: int(row.get("databaseId") or 0),
+        )
+        return matches[0]
 
-    def dispatch_rehearsal(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-rehearsal.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_initializer(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="initialize",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "rehearsal dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "rehearsal dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_integration(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-integration.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_candidate(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="candidate_build",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "integration proposal dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "integration proposal dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_integration_finalize(self, experiment_id: str, pr_number: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
-            raise ClientError("pr_number must be a positive integer")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-integration-finalize.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-                "-f",
-                f"pr_number={pr_number}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_rehearsal(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="rehearse",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "integration finalize dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "integration finalize dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_archive(self, experiment_id: str, mode: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
-            raise ClientError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-archive.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-                "-f",
-                f"mode={mode}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_integration(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="integrate",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "archive dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "archive dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
+
+    def dispatch_integration_finalize(
+        self,
+        experiment_id: str,
+        pr_number: str,
+        request_id: str,
+    ) -> str:
+        return self.dispatch_execution(
+            action="integrate_finalize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"pr_number": str(pr_number)},
+        )
+
+    def dispatch_archive(
+        self,
+        experiment_id: str,
+        mode: str,
+        request_id: str,
+    ) -> str:
+        return self.dispatch_execution(
+            action="archive",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"mode": mode},
+        )
 
     def ledger_json(
         self,
@@ -586,6 +607,23 @@ class GitHubTransport:
             "reason": None,
         }
 
+    def collaborator_permission(self, login: str) -> str | None:
+        if not isinstance(login, str) or not login.strip():
+            return None
+        proc = _run(
+            [
+                "gh",
+                "api",
+                f"repos/{self.repo}/collaborators/{login.strip()}/permission",
+            ],
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        value = _json_output(proc)
+        permission = value.get("permission") if isinstance(value, dict) else None
+        return permission if isinstance(permission, str) else None
+
     def branch_contributors(self, ref: str) -> dict[str, Any]:
         proc = _run(
             ["gh", "api", f"repos/{self.repo}/commits?sha={ref}&per_page=100"],
@@ -641,6 +679,52 @@ class GameExpClient:
             "can_create_experiment": bool(access.get("can_write")),
         }
 
+    def capabilities(self) -> dict[str, Any]:
+        access = self.transport.repository_access()
+        return {
+            "status": "PASS" if access.get("can_read") else access.get("status", "UNKNOWN"),
+            "repo": self.transport.repo,
+            "contract": contract_descriptor(),
+            "features": {
+                "board": True,
+                "request_recovery": True,
+                "async_execution_claims": True,
+                "notifications": True,
+                "notification_cursors": True,
+                "dependency_review_hints": True,
+                "godot_handoff": True,
+                "archive_recovery": True,
+            },
+            "queries": [
+                "status",
+                "access_check",
+                "capabilities",
+                "board",
+                "experiment_get",
+                "subject_panel",
+                "experiment_panel",
+                "operation_get",
+                "notifications",
+                "prototype_handoff",
+            ],
+            "commands": [
+                "experiment.bind",
+                "execution.claim",
+                "review.record",
+                "experiment.decision",
+                "archive.abort",
+                *list(ASYNC_EXECUTION_ACTIONS),
+            ],
+            "recovery": {
+                "operation_get": True,
+                "resume_execution": True,
+                "cross_interface": True,
+            },
+            "access_snapshot": access,
+            "access_snapshot_authoritative_for_execution": False,
+            "note_zh": "权限快照仅用于提示；每次写操作仍由可信执行边界重新验证身份和权限。",
+        }
+
     def _contributors_for_item(self, item: dict[str, Any]) -> dict[str, Any]:
         resolver = getattr(self.transport, "branch_contributors", None)
         if not callable(resolver):
@@ -690,6 +774,109 @@ class GameExpClient:
             raise ClientError(f"invalid local request journal {path}: {exc}") from exc
         return data if isinstance(data, dict) else None
 
+    def _request_run_projection(
+        self,
+        request_id: str,
+        run: dict[str, Any],
+        *,
+        expected_digest: str | None = None,
+        expected_head: str | None = None,
+    ) -> dict[str, Any]:
+        run_digest = run.get("payloadDigest")
+        run_head = run.get("expectedHead")
+        base = {
+            "request_id": request_id,
+            "repo": self.transport.repo,
+            "payload_digest": run_digest,
+            "expected_head": run_head,
+            "workflow": run,
+        }
+        if expected_digest is not None and run_digest != expected_digest:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_ID_CONFLICT",
+                "expected_payload_digest": expected_digest,
+                "remote_payload_digest": run_digest,
+                **base,
+            }
+        if expected_head is not None and run_head != expected_head:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_PRECONDITION_CONFLICT",
+                "expected_ledger_head": expected_head,
+                "remote_expected_head": run_head,
+                **base,
+            }
+
+        state = run.get("status")
+        conclusion = run.get("conclusion")
+        if state in {"queued", "in_progress", "waiting", "requested", "pending"}:
+            return {
+                "status": "ACCEPTED",
+                "operation_status": "WRITER_RUNNING",
+                **base,
+            }
+        if state != "completed":
+            return {
+                "status": "UNKNOWN",
+                "reason": "writer_run_state_unknown",
+                **base,
+            }
+        if conclusion == "success":
+            return {
+                "status": "UNKNOWN",
+                "reason": "workflow_succeeded_but_no_ledger_record",
+                "operation_status": "WRITER_COMPLETED",
+                **base,
+            }
+
+        workflow_url = run.get("url")
+        logs = (
+            self.transport.failed_run_logs(workflow_url)
+            if isinstance(workflow_url, str)
+            else ""
+        )
+        domain_error = None
+        if "REQUEST_ID_CONFLICT" in logs:
+            conflict_type = "REQUEST_ID_CONFLICT"
+        elif "HEAD_CONFLICT" in logs:
+            conflict_type = "HEAD_CONFLICT"
+        else:
+            match = re.search(
+                r'"status":"(DOMAIN_[A-Z_]+|EXPERIMENT_IDENTITY_CONFLICT)"',
+                logs,
+            )
+            conflict_type = (
+                match.group(1)
+                if match and match.group(1).endswith("CONFLICT")
+                else None
+            )
+            domain_error = match.group(1) if match else None
+        if conflict_type:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": conflict_type,
+                **base,
+            }
+        result = {
+            "status": "REJECTED",
+            "operation_status": "WRITER_FAILED",
+            **base,
+        }
+        if domain_error:
+            result["domain_error"] = domain_error
+        return result
+
+    def _discover_request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        resolver = getattr(self.transport, "find_request_runs", None)
+        if not callable(resolver):
+            return []
+        try:
+            rows = resolver(request_id)
+        except Exception:
+            return []
+        return rows if isinstance(rows, list) else []
+
     def submit(
         self,
         *,
@@ -721,36 +908,69 @@ class GameExpClient:
                     "new_payload_digest": payload_digest,
                 }
 
-            remote = self.transport.ledger_record(rid)
-            if remote is not None:
-                remote_digest = remote.get("payload_digest")
-                if remote_digest != payload_digest:
-                    result = {
-                        "status": "CONFLICT",
-                        "conflict_type": "REQUEST_ID_CONFLICT",
-                        "request_id": rid,
-                        "repo": self.transport.repo,
-                        "expected_payload_digest": payload_digest,
-                        "remote_payload_digest": remote_digest,
-                        "record": remote,
-                    }
-                else:
-                    result = {
-                        "status": "COMMITTED",
-                        "request_id": rid,
-                        "repo": self.transport.repo,
-                        "payload_digest": remote_digest,
-                        "verified_against_local_request": True,
-                        "record": remote,
-                        "replayed": True,
-                    }
+        remote = self.transport.ledger_record(rid)
+        if remote is not None:
+            remote_digest = remote.get("payload_digest")
+            if remote_digest != payload_digest:
+                result = {
+                    "status": "CONFLICT",
+                    "conflict_type": "REQUEST_ID_CONFLICT",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                    "expected_payload_digest": payload_digest,
+                    "remote_payload_digest": remote_digest,
+                    "record": remote,
+                }
+            else:
+                result = {
+                    "status": "COMMITTED",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                    "payload_digest": remote_digest,
+                    "verified_against_local_request": True,
+                    "record": remote,
+                    "replayed": True,
+                }
+            if existing is not None:
                 self._write_journal({**existing, **result})
-                return result
+            return result
 
-            expected_head = existing["expected_head"]
-        else:
-            expected_head = self.transport.ledger_head()
+        runs = self._discover_request_runs(rid)
+        if runs:
+            first = runs[0]
+            result = self._request_run_projection(
+                rid,
+                first,
+                expected_digest=payload_digest,
+                expected_head=(
+                    existing.get("expected_head")
+                    if isinstance(existing, dict)
+                    else None
+                ),
+            )
+            conflicting_attempts = [
+                {
+                    "databaseId": row.get("databaseId"),
+                    "payloadDigest": row.get("payloadDigest"),
+                    "expectedHead": row.get("expectedHead"),
+                }
+                for row in runs[1:]
+                if (
+                    row.get("payloadDigest") != first.get("payloadDigest")
+                    or row.get("expectedHead") != first.get("expectedHead")
+                )
+            ]
+            if conflicting_attempts:
+                result["conflicting_attempts"] = conflicting_attempts
+            if existing is not None:
+                self._write_journal({**existing, **result})
+            return result
 
+        expected_head = (
+            existing["expected_head"]
+            if isinstance(existing, dict) and isinstance(existing.get("expected_head"), str)
+            else self.transport.ledger_head()
+        )
         pending = {
             "status": "PENDING_DISPATCH",
             "request_id": rid,
@@ -767,6 +987,7 @@ class GameExpClient:
                 request_id=rid,
                 expected_head=expected_head,
                 payload_b64=encode_payload_b64(payload),
+                payload_digest=payload_digest,
             )
         except TransportUncertainError as exc:
             result = {
@@ -774,6 +995,7 @@ class GameExpClient:
                 "status": "UNKNOWN",
                 "reason": "dispatch_outcome_uncertain",
                 "error": str(exc),
+                "recovery": "query the same request_id before any retry",
             }
             self._write_journal(result)
             return result
@@ -785,6 +1007,91 @@ class GameExpClient:
         }
         self._write_journal(result)
         return result
+
+    def bind(
+        self,
+        manifest: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        manifest_request_id = manifest.get("operation_id")
+        if not isinstance(manifest_request_id, str) or not manifest_request_id:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "error": "manifest.operation_id is required",
+            }
+        if request_id is not None and request_id != manifest_request_id:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_ID_MANIFEST_MISMATCH",
+                "repo": self.transport.repo,
+                "request_id": request_id,
+                "manifest_operation_id": manifest_request_id,
+            }
+        return self.submit(
+            operation="experiment.bind",
+            input_value={"manifest": manifest},
+            request_id=manifest_request_id,
+        )
+
+    def review_record(
+        self,
+        experiment_id: str,
+        *,
+        outcome: str,
+        notes: str,
+        request_id: str,
+        candidate_id: str | None = None,
+    ) -> dict[str, Any]:
+        if candidate_id is None:
+            projection = self.experiment_get(experiment_id)
+            if projection.get("status") != "PASS":
+                return projection
+            candidate_id = projection.get("state", {}).get("current_candidate_id")
+            if not isinstance(candidate_id, str) or not candidate_id:
+                return {
+                    "status": "REJECTED",
+                    "repo": self.transport.repo,
+                    "experiment_id": experiment_id,
+                    "request_id": request_id,
+                    "error": "experiment has no current Candidate",
+                }
+        return self.submit(
+            operation="review.record",
+            input_value={
+                "experiment_id": experiment_id,
+                "candidate_id": candidate_id,
+                "outcome": outcome,
+                "notes": notes,
+            },
+            request_id=request_id,
+        )
+
+    def decision_submit(
+        self,
+        experiment_id: str,
+        *,
+        to_state: str,
+        reason: str,
+        request_id: str,
+        previous_decision_id: str | None = None,
+    ) -> dict[str, Any]:
+        if previous_decision_id is None:
+            projection = self.experiment_get(experiment_id)
+            if projection.get("status") != "PASS":
+                return projection
+            previous_decision_id = projection.get("state", {}).get("last_decision_id")
+        return self.submit(
+            operation="experiment.decision",
+            input_value={
+                "experiment_id": experiment_id,
+                "to_state": to_state,
+                "previous_decision_id": previous_decision_id,
+                "reason": reason,
+            },
+            request_id=request_id,
+        )
 
     def experiment_get(self, experiment_id: str) -> dict[str, Any]:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
@@ -1395,10 +1702,16 @@ class GameExpClient:
         subject_id: str | None = None,
         lifecycle: str | None = None,
         attention_only: bool = False,
+        _snapshot_head: str | None = None,
     ) -> dict[str, Any]:
         requested_lifecycle = lifecycle
         try:
-            snapshot_head = self.transport.ledger_head()
+            if _snapshot_head is not None:
+                if not re.fullmatch(r"[0-9a-f]{40}", _snapshot_head):
+                    raise ClientError("Board snapshot head must be a 40-character SHA")
+                snapshot_head = _snapshot_head
+            else:
+                snapshot_head = self.transport.ledger_head()
             paths = self.transport.ledger_paths(snapshot_head)
         except ClientError as exc:
             return {
@@ -1613,6 +1926,57 @@ class GameExpClient:
                         }
                     )
             item["relationships_outgoing"] = normalized_outgoing
+
+        for item in items:
+            dependency_reviews: list[dict[str, Any]] = []
+            if item.get("lifecycle") not in {"ARCHIVED", "REJECTED"}:
+                for edge in item.get("relationships_outgoing") or []:
+                    if edge.get("type") != "depends_on":
+                        continue
+                    target = by_id.get(edge.get("target_experiment_id"))
+                    if not isinstance(target, dict):
+                        continue
+                    target_lifecycle = target.get("lifecycle")
+                    if target_lifecycle not in {"REJECTED", "ARCHIVED"}:
+                        continue
+                    reason = (
+                        "UPSTREAM_REJECTED"
+                        if target_lifecycle == "REJECTED"
+                        else "UPSTREAM_ARCHIVED"
+                    )
+                    dependency_reviews.append(
+                        {
+                            "code": "DEPENDENCY_REVIEW_REQUIRED",
+                            "reason": reason,
+                            "target_experiment_id": target.get("experiment_id"),
+                            "target_title": target.get("title"),
+                            "target_lifecycle": target_lifecycle,
+                            "target_lifecycle_zh": target.get("display", {}).get("lifecycle"),
+                            "target_integration_id": target.get("integration_id"),
+                            "target_final_tag_ref": target.get("final_tag_ref"),
+                            "blocks_progress": False,
+                            "reason_zh": (
+                                "依赖实验已拒绝，需要确认当前实验是否仍成立"
+                                if target_lifecycle == "REJECTED"
+                                else "依赖实验已归档，需要确认依赖的是已集成能力、不可变快照还是持续开发"
+                            ),
+                        }
+                    )
+            item["dependency_reviews"] = dependency_reviews
+            if dependency_reviews and not item.get("attention", {}).get("required"):
+                item["attention"] = {
+                    "required": True,
+                    "priority": 6,
+                    "reason": "DEPENDENCY_REVIEW_REQUIRED",
+                    "reason_zh": "实验依赖需要复核",
+                    "section": "DEPENDENCY_REVIEW",
+                    "section_zh": "依赖需复核",
+                    "action_zh": "确认依赖语义后继续；不会自动淘汰当前实验",
+                }
+                item["display"]["attention_section"] = "依赖需复核"
+                item["display"]["attention_reason"] = "实验依赖需要复核"
+                item["display"]["attention_action"] = "确认依赖语义后继续；不会自动淘汰当前实验"
+
         attention_ids = [
             item["experiment_id"]
             for item in sorted(
@@ -1634,6 +1998,7 @@ class GameExpClient:
             ("REVIEW", "需要你评审"),
             ("DECISION", "需要你决策"),
             ("ARCHIVE_CHOICE", "需要选择归档方式"),
+            ("DEPENDENCY_REVIEW", "依赖需复核"),
         ]
         attention_sections: list[dict[str, Any]] = []
         for section_code, section_zh in attention_section_order:
@@ -1917,15 +2282,27 @@ class GameExpClient:
             }
         runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
         scope = manifest.get("scope") if isinstance(manifest.get("scope"), dict) else {}
+        branch_ref = row.get("branch_ref")
+        branch_head_sha = None
+        if isinstance(branch_ref, str) and branch_ref.startswith("refs/heads/"):
+            ref = self.transport.git_ref(branch_ref.removeprefix("refs/"))
+            obj = ref.get("object") if isinstance(ref, dict) else None
+            if isinstance(obj, dict) and isinstance(obj.get("sha"), str):
+                branch_head_sha = obj["sha"]
+        handoff_id = f"IMPLEMENT_EXPERIMENT:{experiment_id}:{snapshot_head}"
         return {
             "status": "PASS",
             "repo": self.transport.repo,
             "snapshot_head": snapshot_head,
             "experiment_id": experiment_id,
+            "handoff_schema_version": 2,
+            "handoff_id": handoff_id,
             "handoff_target": "godot-prototype-studio",
             "handoff_kind": "IMPLEMENT_EXPERIMENT",
             "source": {
-                "branch_ref": row.get("branch_ref"),
+                "ledger_snapshot": snapshot_head,
+                "branch_ref": branch_ref,
+                "branch_head_sha": branch_head_sha,
                 "parent_sha": row.get("parent_sha"),
                 "subject": row.get("subject"),
             },
@@ -1944,52 +2321,119 @@ class GameExpClient:
                 ),
             },
             "return_contract": {
+                "schema_version": 2,
                 "required": [
                     "source_sha",
+                    "build_identity",
                     "checks",
+                    "check_environment",
                     "playable_status",
+                    "evidence_scope",
+                    "artifacts",
                     "delivery_evidence_if_requested",
                 ],
-                "note_zh": "Godot Prototype Studio 负责实现、运行验证与所需试玩发布；game-exp 只接收结果证据并继续 Candidate/Review 生命周期。",
+                "build_identity": {
+                    "required": ["build_id", "source_sha", "producer", "created_from_handoff_id"],
+                    "created_from_handoff_id": handoff_id,
+                },
+                "checks": {
+                    "each_requires": [
+                        "name",
+                        "status",
+                        "source_sha",
+                        "environment",
+                    ]
+                },
+                "artifacts": {
+                    "each_requires": [
+                        "artifact_id",
+                        "kind",
+                        "location",
+                        "digest",
+                        "portable",
+                    ],
+                    "rule": "local-only paths must set portable=false; cross-Harness evidence should use a durable accessible location",
+                },
+                "evidence_scope": {
+                    "must_bind": [
+                        "experiment_id",
+                        "handoff_id",
+                        "source_sha",
+                        "build_id",
+                    ]
+                },
+                "note_zh": "Godot Prototype Studio 负责实现、运行验证与所需试玩发布；返回证据必须绑定源码、构建身份和可访问产物，game-exp 再继续 Candidate/Review 生命周期。",
             },
         }
 
-    def notification_feed(
-        self,
-        *,
-        viewer_login: str | None = None,
-        subject_id: str | None = None,
-        limit: int = 50,
-    ) -> dict[str, Any]:
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 200:
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "reason": "invalid_limit",
-            }
-        board = self.board(subject_id=subject_id)
-        if board.get("status") != "PASS":
-            return board
+    @staticmethod
+    def _encode_notification_cursor(value: dict[str, Any]) -> str:
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return "n1." + token
 
+    @staticmethod
+    def _decode_notification_cursor(token: str) -> dict[str, Any]:
+        if not isinstance(token, str) or not token.startswith("n1."):
+            raise ClientError("invalid notification cursor")
+        raw = token[3:]
+        raw += "=" * ((4 - len(raw) % 4) % 4)
+        try:
+            value = json.loads(base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8"))
+        except Exception as exc:
+            raise ClientError(f"invalid notification cursor: {exc}") from exc
+        if not isinstance(value, dict) or value.get("v") != 1:
+            raise ClientError("unsupported notification cursor")
+        return value
+
+    def _notification_rows(
+        self,
+        board: dict[str, Any],
+        *,
+        viewer_login: str | None,
+    ) -> list[dict[str, Any]]:
         items = board.get("experiments", [])
+        resolver = getattr(self.transport, "collaborator_permission", None)
+        access_cache: dict[str, bool] = {}
+
+        def has_repo_access(login: str) -> bool:
+            if login in access_cache:
+                return access_cache[login]
+            permission = resolver(login) if callable(resolver) else None
+            allowed = permission in {
+                "pull",
+                "read",
+                "triage",
+                "push",
+                "write",
+                "maintain",
+                "admin",
+            }
+            access_cache[login] = allowed
+            return allowed
         by_subject: dict[str, list[dict[str, Any]]] = {}
         for item in items:
             sid = item.get("subject_id")
             if isinstance(sid, str) and sid:
                 by_subject.setdefault(sid, []).append(item)
 
-        notifications: list[dict[str, Any]] = []
-        important_codes = {
-            "EXPERIMENT_CREATED",
-            "LIFECYCLE_REVIEW",
-            "CANDIDATE_READY",
-            "HUMAN_REVIEW_RECORDED",
-            "LIFECYCLE_PROMISING",
-            "LIFECYCLE_SELECTED",
-            "LIFECYCLE_REJECTED",
-            "INTEGRATED",
-            "ARCHIVED",
+        event_types = {
+            "EXPERIMENT_CREATED": "experiment.created",
+            "LIFECYCLE_REVIEW": "experiment.review_entered",
+            "CANDIDATE_READY": "candidate.ready",
+            "HUMAN_REVIEW_RECORDED": "review.recorded",
+            "LIFECYCLE_PROMISING": "experiment.promising",
+            "LIFECYCLE_SELECTED": "experiment.selected",
+            "LIFECYCLE_REJECTED": "experiment.rejected",
+            "INTEGRATED": "experiment.integrated",
+            "ARCHIVED": "experiment.archived",
         }
+        notifications: list[dict[str, Any]] = []
         for item in items:
             sid = item.get("subject_id")
             if not isinstance(sid, str):
@@ -2007,18 +2451,17 @@ class GameExpClient:
 
             for event in item.get("activity") or []:
                 code = event.get("code")
-                if code not in important_codes:
+                if code not in event_types:
                     continue
                 actor = event.get("actor_login")
                 targets = sorted(
                     login
                     for login in participants
                     if not (isinstance(actor, str) and login == actor)
+                    and has_repo_access(login)
                 )
-                if isinstance(viewer_login, str) and viewer_login.strip():
-                    viewer = viewer_login.strip()
-                    if viewer not in targets:
-                        continue
+                if viewer_login is not None and viewer_login not in targets:
+                    continue
                 source_id = event.get("source_id")
                 event_id = (
                     f'{item.get("experiment_id")}:{code}:'
@@ -2027,6 +2470,8 @@ class GameExpClient:
                 notifications.append(
                     {
                         "event_id": event_id,
+                        "event_type": event_types[code],
+                        "event_version": 1,
                         "experiment_id": item.get("experiment_id"),
                         "subject_id": sid,
                         "subject_name": item.get("subject_name"),
@@ -2038,6 +2483,8 @@ class GameExpClient:
                         "actor_login": actor,
                         "initiator": item.get("initiator"),
                         "targets": targets,
+                        "source_snapshot": board.get("snapshot_head"),
+                        "_order": int(event.get("order") or 0),
                         "delivery": {
                             "mode": "external_adapter",
                             "dedupe_key": event_id,
@@ -2045,28 +2492,246 @@ class GameExpClient:
                     }
                 )
 
-        notifications.sort(
-            key=lambda row: (
-                str(row.get("occurred_at") or ""),
-                int(str(row.get("experiment_id") or "EXP-0").removeprefix("EXP-") or 0),
-                str(row.get("event_id") or ""),
-            ),
-            reverse=True,
+            for review in item.get("dependency_reviews") or []:
+                target_id = review.get("target_experiment_id")
+                event_id = (
+                    f'{item.get("experiment_id")}:DEPENDENCY_REVIEW_REQUIRED:{target_id}'
+                )
+                targets = sorted(
+                    login for login in participants if has_repo_access(login)
+                )
+                if viewer_login is not None and viewer_login not in targets:
+                    continue
+                notifications.append(
+                    {
+                        "event_id": event_id,
+                        "event_type": "dependency.review_required",
+                        "event_version": 1,
+                        "experiment_id": item.get("experiment_id"),
+                        "subject_id": sid,
+                        "subject_name": item.get("subject_name"),
+                        "title": item.get("title"),
+                        "event_code": "DEPENDENCY_REVIEW_REQUIRED",
+                        "event_label_zh": "依赖需要复核",
+                        "detail_zh": review.get("reason_zh"),
+                        "occurred_at": None,
+                        "actor_login": None,
+                        "initiator": item.get("initiator"),
+                        "targets": targets,
+                        "source_snapshot": board.get("snapshot_head"),
+                        "dependency": review,
+                        "_order": 95,
+                        "delivery": {
+                            "mode": "external_adapter",
+                            "dedupe_key": event_id,
+                        },
+                    }
+                )
+        return notifications
+
+    @staticmethod
+    def _notification_sort_key(row: dict[str, Any]) -> tuple[str, int, int, str]:
+        experiment_id = str(row.get("experiment_id") or "EXP-0")
+        try:
+            experiment_number = int(experiment_id.removeprefix("EXP-"))
+        except ValueError:
+            experiment_number = 0
+        return (
+            str(row.get("occurred_at") or ""),
+            experiment_number,
+            int(row.get("_order") or 0),
+            str(row.get("event_id") or ""),
         )
-        notifications = notifications[:limit]
+
+    def notification_feed(
+        self,
+        *,
+        viewer_login: str | None = None,
+        subject_id: str | None = None,
+        limit: int = 50,
+        after: str | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 200:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "reason": "invalid_limit",
+            }
+        viewer = viewer_login.strip() if isinstance(viewer_login, str) and viewer_login.strip() else None
+        subject = subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None
+
+        if viewer is not None:
+            resolver = getattr(self.transport, "collaborator_permission", None)
+            permission = resolver(viewer) if callable(resolver) else None
+            if permission not in {"pull", "read", "triage", "push", "write", "maintain", "admin"}:
+                return {
+                    "status": "REJECTED",
+                    "code": "NOTIFICATION_VIEWER_ACCESS_DENIED",
+                    "repo": self.transport.repo,
+                    "viewer_login": viewer,
+                }
+        else:
+            permission = None
+
+        offset = 0
+        after_snapshot = None
+        page_snapshot = None
+        if after is not None:
+            if cursor is not None:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_ARGUMENT_CONFLICT",
+                    "repo": self.transport.repo,
+                }
+            try:
+                checkpoint = self._decode_notification_cursor(after)
+            except ClientError as exc:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                    "error": str(exc),
+                }
+            if checkpoint.get("kind") != "checkpoint":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID_KIND",
+                    "repo": self.transport.repo,
+                }
+            if checkpoint.get("viewer_login") != viewer or checkpoint.get("subject_id") != subject:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_SCOPE_MISMATCH",
+                    "repo": self.transport.repo,
+                }
+            after_snapshot = checkpoint.get("snapshot")
+        elif cursor is not None:
+            try:
+                page = self._decode_notification_cursor(cursor)
+            except ClientError as exc:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                    "error": str(exc),
+                }
+            if page.get("kind") != "page":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID_KIND",
+                    "repo": self.transport.repo,
+                }
+            if page.get("viewer_login") != viewer or page.get("subject_id") != subject:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_SCOPE_MISMATCH",
+                    "repo": self.transport.repo,
+                }
+            page_snapshot = page.get("snapshot")
+            after_snapshot = page.get("after_snapshot")
+            offset = page.get("offset")
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                }
+
+        board = self.board(subject_id=subject, _snapshot_head=page_snapshot)
+        if board.get("status") != "PASS":
+            if page_snapshot is not None:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_EXPIRED",
+                    "repo": self.transport.repo,
+                    "cursor_snapshot": page_snapshot,
+                }
+            return board
+        snapshot_head = board.get("snapshot_head")
+        rows = self._notification_rows(board, viewer_login=viewer)
+
+        if after_snapshot is not None:
+            if not isinstance(after_snapshot, str) or not re.fullmatch(r"[0-9a-f]{40}", after_snapshot):
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                }
+            old_board = self.board(subject_id=subject, _snapshot_head=after_snapshot)
+            if old_board.get("status") != "PASS":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_EXPIRED",
+                    "repo": self.transport.repo,
+                    "cursor_snapshot": after_snapshot,
+                }
+            old_ids = {
+                row.get("event_id")
+                for row in self._notification_rows(old_board, viewer_login=viewer)
+            }
+            rows = [row for row in rows if row.get("event_id") not in old_ids]
+            rows.sort(key=self._notification_sort_key)
+        else:
+            rows.sort(key=self._notification_sort_key, reverse=True)
+
+        total_available = len(rows)
+        page_rows = rows[offset : offset + limit]
+        for row in page_rows:
+            row.pop("_order", None)
+
+        next_cursor = None
+        next_offset = offset + len(page_rows)
+        if next_offset < total_available:
+            next_cursor = self._encode_notification_cursor(
+                {
+                    "v": 1,
+                    "kind": "page",
+                    "snapshot": snapshot_head,
+                    "after_snapshot": after_snapshot,
+                    "offset": next_offset,
+                    "viewer_login": viewer,
+                    "subject_id": subject,
+                }
+            )
+        checkpoint_cursor = self._encode_notification_cursor(
+            {
+                "v": 1,
+                "kind": "checkpoint",
+                "snapshot": snapshot_head,
+                "viewer_login": viewer,
+                "subject_id": subject,
+            }
+        )
         return {
             "status": "PASS",
             "repo": self.transport.repo,
-            "snapshot_head": board.get("snapshot_head"),
-            "viewer_login": viewer_login.strip() if isinstance(viewer_login, str) and viewer_login.strip() else None,
-            "subject_id": subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None,
-            "count": len(notifications),
-            "notifications": notifications,
+            "snapshot_head": snapshot_head,
+            "viewer_login": viewer,
+            "viewer_permission_snapshot": permission,
+            "viewer_permission_authoritative_for_future_delivery": False,
+            "recipient_access_filtered": True,
+            "subject_id": subject,
+            "count": len(page_rows),
+            "total_available": total_available,
+            "notifications": page_rows,
+            "next_cursor": next_cursor,
+            "checkpoint_cursor": checkpoint_cursor,
+            "checkpoint_ready": next_cursor is None,
             "delivery_contract": {
                 "source": "ledger-derived",
+                "event_schema_version": 1,
                 "dedupe_by": "event_id",
+                "recipient_access_filter": "current repository collaborator permission",
+                "pagination": "cursor",
+                "resume": "after checkpoint_cursor",
                 "game_exp_sends_messages": False,
-                "note_zh": "game-exp 生成可重放通知事件；ChatGPT、飞书、Slack、邮件等由外部适配器负责发送。",
+                "retention": {
+                    "mode": "protected-ledger-history",
+                    "expired_cursor": "CURSOR_EXPIRED",
+                },
+                "rebuild_rule": "events are deterministically rebuilt from one committed protected Ledger snapshot",
+                "note_zh": "外部适配器处理全部分页后再保存 checkpoint_cursor；下次用 after 续读。发送失败不改变实验状态。",
             },
         }
 
@@ -2268,184 +2933,468 @@ class GameExpClient:
             return "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK"
         return "UNKNOWN"
 
-    def candidate(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
-            }
-        try:
-            workflow_url = self.transport.dispatch_candidate(experiment_id)
-        except TransportUncertainError as exc:
-            return {
-                "status": "UNKNOWN",
-                "reason": "candidate_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": False,
-            }
+    @staticmethod
+    def _validate_execution_arguments(
+        action: str,
+        arguments: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if action not in ASYNC_EXECUTION_ACTIONS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        values = dict(arguments or {})
+        expected = {
+            "initialize": set(),
+            "candidate_build": set(),
+            "rehearse": set(),
+            "integrate": set(),
+            "integrate_finalize": {"pr_number"},
+            "archive": {"mode"},
+        }[action]
+        if set(values) != expected:
+            raise ClientError(
+                f"execution arguments mismatch for {action}: "
+                f"expected={sorted(expected)} actual={sorted(values)}"
+            )
+        if action == "integrate_finalize":
+            value = values.get("pr_number")
+            if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value):
+                raise ClientError("pr_number must be a positive integer")
+        if action == "archive" and values.get("mode") not in {
+            "ATOMIC_DELETE",
+            "RETAIN_BRANCH",
+        }:
+            raise ClientError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
+        return values
+
+    @staticmethod
+    def _execution_claim_from_record(
+        record: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = record.get("payload")
+        if (
+            not isinstance(payload, dict)
+            or payload.get("kind") != "operation_request"
+            or payload.get("operation") != "execution.claim"
+        ):
+            return None
+        value = payload.get("input")
+        return value if isinstance(value, dict) else None
+
+    def _execution_claim_matches(
+        self,
+        record: dict[str, Any],
+        *,
+        action: str,
+        experiment_id: str,
+        arguments: dict[str, Any],
+    ) -> bool:
+        claim = self._execution_claim_from_record(record)
+        return bool(
+            isinstance(claim, dict)
+            and claim.get("action") == action
+            and claim.get("experiment_id") == experiment_id
+            and claim.get("arguments") == arguments
+        )
+
+    def _wait_for_request_commit(
+        self,
+        request_id: str,
+        initial: dict[str, Any],
+        *,
+        attempts: int = 20,
+        interval: float = 1.0,
+    ) -> dict[str, Any]:
+        result = initial
+        if result.get("status") in {"COMMITTED", "CONFLICT", "REJECTED"}:
+            return result
+        for _ in range(attempts):
+            time.sleep(interval)
+            result = self.reconcile(request_id)
+            if result.get("status") in {"COMMITTED", "CONFLICT", "REJECTED"}:
+                return result
+        return result
+
+    def _execution_projection_summary(self, experiment_id: str) -> dict[str, Any] | None:
+        projection = self.experiment_get(experiment_id)
+        if projection.get("status") != "PASS":
+            return None
+        state = projection.get("state")
+        if not isinstance(state, dict):
+            return None
         return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
+            "lifecycle": state.get("lifecycle"),
+            "sequence": state.get("sequence"),
+            "last_decision_id": state.get("last_decision_id"),
+            "current_candidate_id": state.get("current_candidate_id"),
+            "current_review_id": state.get("current_review_id"),
+            "current_rehearsal_id": state.get("current_rehearsal_id"),
+            "current_integration_id": state.get("current_integration_id"),
+            "current_archive_id": state.get("current_archive_id"),
         }
 
-    def initialize(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+    def _execution_run_result(
+        self,
+        *,
+        request_id: str,
+        claim_record: dict[str, Any],
+        run: dict[str, Any],
+    ) -> dict[str, Any]:
+        claim = self._execution_claim_from_record(claim_record) or {}
+        experiment_id = claim.get("experiment_id")
+        action = claim.get("action")
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        base = {
+            "request_id": request_id,
+            "repo": self.transport.repo,
+            "action": action,
+            "experiment_id": experiment_id,
+            "arguments": claim.get("arguments") or {},
+            "claim_status": "COMMITTED",
+            "workflow": run,
+        }
+        if status != "completed":
             return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
+                "status": "ACCEPTED",
+                "operation_status": "RUNNING",
+                **base,
             }
-        try:
-            workflow_url = self.transport.dispatch_initializer(experiment_id)
-        except TransportUncertainError as exc:
+        if conclusion == "success":
+            return {
+                "status": "PASS",
+                "operation_status": "SUCCEEDED",
+                **base,
+                "result_projection": (
+                    self._execution_projection_summary(experiment_id)
+                    if isinstance(experiment_id, str)
+                    else None
+                ),
+            }
+        if conclusion in {"cancelled", "skipped", "neutral"}:
             return {
                 "status": "UNKNOWN",
-                "reason": "initializer_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
+                "operation_status": "NOT_COMPLETED",
+                **base,
             }
         return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
+            "status": "REJECTED",
+            "operation_status": "FAILED",
+            **base,
         }
 
-    def rehearse(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+    def operation_get(self, request_id: str) -> dict[str, Any]:
+        rid = validate_request_id(request_id)
+        record = self.transport.ledger_record(rid)
+        if record is None:
+            return self.reconcile(rid)
+        claim = self._execution_claim_from_record(record)
+        if claim is None:
+            return self.reconcile(rid)
+        action = claim.get("action")
+        experiment_id = claim.get("experiment_id")
+        if (
+            not isinstance(action, str)
+            or action not in ASYNC_EXECUTION_ACTIONS
+            or not isinstance(experiment_id, str)
+        ):
             return {
                 "status": "REJECTED",
+                "operation_status": "INVALID_CLAIM",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
             }
-        try:
-            workflow_url = self.transport.dispatch_rehearsal(experiment_id)
-        except TransportUncertainError as exc:
+        run = self.transport.find_execution_run(action=action, request_id=rid)
+        if run is not None:
+            return self._execution_run_result(
+                request_id=rid,
+                claim_record=record,
+                run=run,
+            )
+        return {
+            "status": "ACCEPTED",
+            "operation_status": "CLAIMED",
+            "request_id": rid,
+            "repo": self.transport.repo,
+            "action": action,
+            "experiment_id": experiment_id,
+            "arguments": claim.get("arguments") or {},
+            "claim_status": "COMMITTED",
+            "safe_to_resume": True,
+        }
+
+    def resume_execution(self, request_id: str) -> dict[str, Any]:
+        rid = validate_request_id(request_id)
+        record = self.transport.ledger_record(rid)
+        if record is None:
             return {
                 "status": "UNKNOWN",
-                "reason": "rehearsal_dispatch_outcome_uncertain",
+                "operation_status": "CLAIM_NOT_FOUND",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
+                "reason": "execution_claim_not_committed",
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
-        }
-
-    def integrate(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+        claim = self._execution_claim_from_record(record)
+        if claim is None:
             return {
                 "status": "REJECTED",
+                "operation_status": "NOT_ASYNC_EXECUTION",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
             }
-        try:
-            workflow_url = self.transport.dispatch_integration(experiment_id)
-        except TransportUncertainError as exc:
+        action = claim.get("action")
+        experiment_id = claim.get("experiment_id")
+        arguments = claim.get("arguments")
+        state_digest = claim.get("state_digest")
+        if (
+            not isinstance(action, str)
+            or action not in ASYNC_EXECUTION_ACTIONS
+            or not isinstance(experiment_id, str)
+            or not isinstance(arguments, dict)
+            or not isinstance(state_digest, str)
+        ):
+            return {
+                "status": "REJECTED",
+                "operation_status": "INVALID_CLAIM",
+                "request_id": rid,
+                "repo": self.transport.repo,
+            }
+
+        run = self.transport.find_execution_run(action=action, request_id=rid)
+        if run is not None:
+            return self._execution_run_result(
+                request_id=rid,
+                claim_record=record,
+                run=run,
+            )
+
+        snapshot_head = self.transport.ledger_head()
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(state, dict):
             return {
                 "status": "UNKNOWN",
-                "reason": "integration_dispatch_outcome_uncertain",
+                "operation_status": "PRECONDITION_UNAVAILABLE",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
-        }
-
-    def integrate_finalize(self, experiment_id: str, pr_number: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+        if digest_object(state) != state_digest:
             return {
-                "status": "REJECTED",
+                "status": "CONFLICT",
+                "conflict_type": "EXECUTION_PRECONDITION_CHANGED",
+                "operation_status": "STALE",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
-            }
-        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "pr_number": str(pr_number),
-                "error": "pr_number must be a positive integer",
+                "action": action,
+                "expected_state_digest": state_digest,
+                "actual_state_digest": digest_object(state),
             }
         try:
-            workflow_url = self.transport.dispatch_integration_finalize(
-                experiment_id,
-                str(pr_number),
+            workflow_url = self.transport.dispatch_execution(
+                action=action,
+                experiment_id=experiment_id,
+                request_id=rid,
+                arguments=arguments,
             )
         except TransportUncertainError as exc:
             return {
                 "status": "UNKNOWN",
-                "reason": "integration_finalize_dispatch_outcome_uncertain",
+                "operation_status": "DISPATCH_UNCERTAIN",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "pr_number": str(pr_number),
+                "action": action,
                 "error": str(exc),
-                "retry_safe": True,
+                "recovery": "query the same request_id; do not create a new one",
             }
         return {
             "status": "ACCEPTED",
+            "operation_status": "DISPATCHED",
+            "request_id": rid,
             "repo": self.transport.repo,
             "experiment_id": experiment_id,
-            "pr_number": str(pr_number),
+            "action": action,
+            "arguments": arguments,
             "workflow_url": workflow_url,
         }
 
-    def archive(self, experiment_id: str, mode: str) -> dict[str, Any]:
+    def start_execution(
+        self,
+        *,
+        action: str,
+        experiment_id: str,
+        request_id: str | None,
+        arguments: dict[str, Any] | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        if request_id is None:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "action": action,
+                "error": "stable request_id is required for mutating async operations",
+            }
+        rid = validate_request_id(request_id)
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
             return {
                 "status": "REJECTED",
                 "repo": self.transport.repo,
+                "request_id": rid,
                 "experiment_id": experiment_id,
                 "error": "experiment_id must be EXP-<positive integer>",
             }
-        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+        try:
+            values = self._validate_execution_arguments(action, arguments)
+        except ClientError as exc:
             return {
                 "status": "REJECTED",
                 "repo": self.transport.repo,
+                "request_id": rid,
                 "experiment_id": experiment_id,
-                "mode": mode,
-                "error": "archive mode must be ATOMIC_DELETE or RETAIN_BRANCH",
-            }
-        try:
-            workflow_url = self.transport.dispatch_archive(experiment_id, mode)
-        except TransportUncertainError as exc:
-            return {
-                "status": "UNKNOWN",
-                "reason": "archive_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "mode": mode,
+                "action": action,
                 "error": str(exc),
-                "retry_safe": True,
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "mode": mode,
-            "workflow_url": workflow_url,
-        }
+
+        existing = self.transport.ledger_record(rid)
+        if existing is not None:
+            if not self._execution_claim_matches(
+                existing,
+                action=action,
+                experiment_id=experiment_id,
+                arguments=values,
+            ):
+                return {
+                    "status": "CONFLICT",
+                    "conflict_type": "REQUEST_ID_CONFLICT",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                }
+            return self.resume_execution(rid)
+
+        snapshot_head = self.transport.ledger_head()
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(state, dict):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "request_id": rid,
+                "experiment_id": experiment_id,
+                "error": "experiment is not bound in the authoritative Ledger",
+            }
+        claim = self.submit(
+            operation="execution.claim",
+            input_value={
+                "experiment_id": experiment_id,
+                "action": action,
+                "arguments": values,
+                "state_digest": digest_object(state),
+            },
+            request_id=rid,
+        )
+        claim = self._wait_for_request_commit(rid, claim)
+        if claim.get("status") != "COMMITTED":
+            return {
+                **claim,
+                "operation_status": "CLAIM_PENDING",
+                "action": action,
+                "experiment_id": experiment_id,
+                "recovery": "query the same request_id; do not create a new one",
+            }
+        return self.resume_execution(rid)
+
+    def candidate(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="candidate_build",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def initialize(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="initialize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def rehearse(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="rehearse",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def integrate(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="integrate",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def integrate_finalize(
+        self,
+        experiment_id: str,
+        pr_number: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="integrate_finalize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"pr_number": str(pr_number)},
+            actor_claim=actor_claim,
+        )
+
+    def archive(
+        self,
+        experiment_id: str,
+        mode: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="archive",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"mode": mode},
+            actor_claim=actor_claim,
+        )
 
     def archive_abort(
         self,
@@ -2486,7 +3435,6 @@ class GameExpClient:
                 "archive_id": archive_id,
                 "reason": reason,
             },
-            actor_claim=actor_claim,
             request_id=request_id,
         )
 
@@ -2494,6 +3442,7 @@ class GameExpClient:
         rid = validate_request_id(request_id)
         journal = self._read_journal(rid)
         expected_digest = journal.get("payload_digest") if journal else None
+        expected_head = journal.get("expected_head") if journal else None
         record = self.transport.ledger_record(rid)
 
         if record is not None:
@@ -2521,10 +3470,42 @@ class GameExpClient:
                 self._write_journal({**journal, **result})
             return result
 
+        runs = self._discover_request_runs(rid)
+        if runs:
+            first = runs[0]
+            result = self._request_run_projection(
+                rid,
+                first,
+                expected_digest=expected_digest,
+                expected_head=expected_head,
+            )
+            conflicting_attempts = [
+                {
+                    "databaseId": row.get("databaseId"),
+                    "payloadDigest": row.get("payloadDigest"),
+                    "expectedHead": row.get("expectedHead"),
+                }
+                for row in runs[1:]
+                if (
+                    row.get("payloadDigest") != first.get("payloadDigest")
+                    or row.get("expectedHead") != first.get("expectedHead")
+                )
+            ]
+            if conflicting_attempts:
+                result["conflicting_attempts"] = conflicting_attempts
+            if journal:
+                self._write_journal({**journal, **result})
+            return result
+
         workflow_url = journal.get("workflow_url") if journal else None
         if workflow_url:
             state = self.transport.run_state(workflow_url)
-            if state and state.get("status") in {"queued", "in_progress", "waiting", "requested"}:
+            if state and state.get("status") in {
+                "queued",
+                "in_progress",
+                "waiting",
+                "requested",
+            }:
                 return {
                     "status": "ACCEPTED",
                     "request_id": rid,
@@ -2551,7 +3532,11 @@ class GameExpClient:
                         r'"status":"(DOMAIN_[A-Z_]+|EXPERIMENT_IDENTITY_CONFLICT)"',
                         logs,
                     )
-                    conflict_type = match.group(1) if match and match.group(1).endswith("CONFLICT") else None
+                    conflict_type = (
+                        match.group(1)
+                        if match and match.group(1).endswith("CONFLICT")
+                        else None
+                    )
                     domain_error = match.group(1) if match else None
                 if conflict_type:
                     return {
@@ -2577,7 +3562,7 @@ class GameExpClient:
             "request_id": rid,
             "repo": self.transport.repo,
             "retry_safe_with_same_request_id": journal is not None,
-            "expected_head": journal.get("expected_head") if journal else None,
+            "expected_head": expected_head,
             "payload_digest": expected_digest,
         }
 

@@ -853,6 +853,34 @@ class TrustedResolverTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
 
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "alice"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_execution_claim_actor_requires_trusted_write_identity(self, api):
+        api.return_value = {
+            "permission": "write",
+            "user": {"login": "alice", "id": 1001},
+        }
+        ctx = resolve_trusted_actor(
+            "siskosun/toy2game",
+            {"kind": "operation_request", "operation": "execution.claim"},
+        )
+        self.assertEqual(ctx.login, "alice")
+        self.assertEqual(ctx.permission, "write")
+
+    @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "reader"}, clear=False)
+    @patch("trusted_writer.github_json")
+    def test_execution_claim_actor_rejects_read_only_permission(self, api):
+        api.return_value = {
+            "permission": "read",
+            "user": {"login": "reader", "id": 1002},
+        }
+        with self.assertRaises(DomainError) as ctx:
+            resolve_trusted_actor(
+                "siskosun/toy2game",
+                {"kind": "operation_request", "operation": "execution.claim"},
+            )
+        self.assertEqual(ctx.exception.code, "DOMAIN_AUTHORIZATION_FAILED")
+
     @patch.dict("os.environ", {"GAME_EXP_ACTOR_LOGIN": "siskosun"}, clear=False)
     @patch("trusted_writer.github_json")
     def test_decision_actor_resolves_from_github_permission(self, api):

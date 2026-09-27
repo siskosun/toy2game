@@ -34,18 +34,27 @@ PRODUCTION_TOOLS = (
     "mcp_server.py",
     "project_policy.py",
     "protocol_core.py",
+    "request_guard.py",
     "rehearsal_control.py",
     "requirements-mcp.txt",
     "source_initializer.py",
     "trusted_writer.py",
+    "workflow_guard.py",
 )
 
 PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/SKILL.md",
+    "plugins/game-exp/skills/game-exp/agents/openai.yaml",
+    "plugins/game-exp/skills/game-exp/assets/icon.svg",
     "plugins/game-exp/skills/game-exp/references/workflow.md",
     "plugins/game-exp/skills/game-exp/references/board.md",
     "plugins/game-exp/skills/game-exp/references/github-bridge.md",
-    "plugins/game-exp/skills/game-exp/agents/openai.yaml",
+    "plugins/game-exp/skills/game-exp/references/chat-ui.md",
+    "plugins/game-exp/skills/game-exp/references/onboarding.md",
+    "plugins/game-exp/skills/game-exp/references/notifications.md",
+    "plugins/game-exp/skills/game-exp/references/prototype-handoff.md",
+    "plugins/game-exp/skills/game-exp/references/exploration-thread.md",
+    "plugins/game-exp/skills/game-exp/references/public-contract.md",
 )
 
 NODE_NPM_POLICY = {

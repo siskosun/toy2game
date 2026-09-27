@@ -5,18 +5,20 @@ description: Orchestrate trusted game experiments through either native game-exp
 
 # game-exp
 
-Use game-exp as the experiment control plane. Prefer native `game_exp_*` MCP tools when available. If custom MCP Apps are unavailable but an authorized GitHub connector can read/write the repository, use the repository GitHub Bridge described in `references/workflow.md`. Use the host's authorized source-editing capability for source changes.
+Use game-exp as the experiment control plane. Route by available interface, not Harness brand: prefer native `game_exp_*` MCP tools, then the repository `game-exp` CLI when shell execution is available, then the authorized GitHub Bridge. All three interfaces share the same versioned operation/recovery semantics and re-enter the trusted execution boundary. Read `references/public-contract.md` before changing cross-interface behavior. Use the host's authorized source-editing capability for source changes.
 
 ## Non-negotiable rules
 
 1. Treat the protected game-exp Ledger as authoritative. Local files, labels, branch names, workflow UI, and `actor_claim` are not authority.
 2. Never write protected Ledger/domain records or protected refs directly. Use the game-exp MCP tools and their trusted GitHub workflows.
-3. Never report `ACCEPTED` as completion. Resolve the same request or re-read the experiment projection until the authoritative result is known.
-4. Never auto-approve a human gate. A passing build, Candidate, Review prerequisites, or Rehearsal does not authorize PASS, PROMISING, SELECTED, or REJECTED on the user's behalf.
-5. Do not create a new request id to escape `UNKNOWN`, stale-head, or request-id conflicts. Reconcile the original id first.
-6. Do not weaken scope, Rulesets, retention, Rehearsal freshness, or Archive recovery semantics to make a workflow pass.
-7. For archived experiments, treat the immutable final tag as the official source snapshot. Do not recreate the deleted `exp/*` branch to "restore" the experiment.
-8. Keep game-exp orchestration self-contained. Do not invoke unrelated planning/handoff workflows, create `.ai/HANDOFF.md` or `.ai/STATE.md`, or add extra approval gates unless the repository's own checked-in instructions explicitly require them or the user explicitly asks for them. The game-exp lifecycle gates remain the control plane for experiment work.
+3. Never report `ACCEPTED` as completion. Resolve the same operation id with `game_exp_operation_get`, `game-exp get-operation`, or the Bridge evidence until the authoritative result is known.
+4. After any mutation is `ACCEPTED` or `UNKNOWN`, enter recovery mode: another interface may query/resume that exact operation id, but must never create a replacement id or logical mutation.
+5. An authorization failure is not a transport failure. Do not switch interfaces to retry the same logical mutation under a different authority context.
+6. Never auto-approve a human gate. A passing build, Candidate, Review prerequisites, or Rehearsal does not authorize PASS, PROMISING, SELECTED, or REJECTED on the user's behalf.
+7. Do not create a new request id to escape `UNKNOWN`, stale-head, request-id, execution-claim, or state-precondition conflicts. Reconcile the original id first.
+8. Do not weaken scope, Rulesets, retention, Rehearsal freshness, or Archive recovery semantics to make a workflow pass.
+9. For archived experiments, treat the immutable final tag as the official source snapshot. Do not recreate the deleted `exp/*` branch to "restore" the experiment.
+10. Keep game-exp orchestration self-contained. Do not invoke unrelated planning/handoff workflows, create `.ai/HANDOFF.md` or `.ai/STATE.md`, or add extra approval gates unless the repository's own checked-in instructions explicitly require them or the user explicitly asks for them. The game-exp lifecycle gates remain the control plane for experiment work.
 
 ## Experiment Board
 
@@ -61,25 +63,39 @@ See `references/workflow.md` for the lifecycle/tool map and `references/github-b
 
 ## Backend routing
 
-1. Prefer native `game_exp_*` MCP tools when they are available.
-2. Otherwise, if the host has an authorized GitHub connector with Issue-comment and repository access, use the GitHub Bridge.
-3. If neither exists, stop at the missing capability; never simulate a lifecycle mutation locally.
+Before a mutation has been submitted, use interface probing rather than Harness-name routing:
+
+1. Prefer native game-exp MCP tools.
+2. Otherwise, if the host can execute the repository CLI, use `game-exp` / `python tools/game-exp/cli.py`.
+3. Otherwise, if the host has an authorized GitHub connector with Issue-comment and repository access, use the GitHub Bridge.
+4. If none exists, stop at the missing capability; never simulate a lifecycle mutation locally.
+
+Use `game_exp_capabilities` or `game-exp capabilities` to inspect the public contract and business features. Treat any returned repository permission as a current UX snapshot only; every write is independently authorized again at the trusted execution boundary.
+
+Every mutation requires one stable operation/request id. The same logical operation keeps that id across MCP, CLI and Bridge.
+
+If a mutation returns `ACCEPTED` or `UNKNOWN`:
+
+- do not submit a new logical operation;
+- use `game_exp_operation_get` / `game-exp get-operation` to query the same id;
+- for an already committed async execution claim with no worker run, `game_exp_operation_resume` / `game-exp resume-operation` may resume that same id;
+- if the authoritative experiment state changed after the claim, treat the resume as a conflict rather than silently dispatching against new state.
 
 For the GitHub Bridge:
 
 - Read authoritative state from `game-exp/ledger` through GitHub before deciding the next action.
 - Post one top-level comment on the experiment's canonical Issue. The first line must be exactly `/game-exp`; the rest must be one strict JSON command from `references/github-bridge.md`.
-- Use one stable `request_id` per logical action. Never post a second command with a new id merely because the bridge response is delayed or uncertain.
-- After posting, read Issue comments for the matching `game-exp-bridge:<request_id>:claim` and `:result` markers and inspect the referenced Actions run when necessary.
-- Treat claim-without-result as `UNKNOWN`. Reconcile against the Ledger or existing bridge run; do not resubmit blindly.
-- The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission. Do not place a different actor identity inside the command.
-- Human-owned gates remain human-owned. The presence of the bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
+- Use one stable `request_id` per logical action. Async Bridge actions first commit the same trusted `execution.claim` used by MCP/CLI, then dispatch the worker with that same id.
+- After posting, read Issue comments for matching `game-exp-bridge:<request_id>:claim` and `:result` markers and inspect the referenced Actions run when necessary.
+- Treat claim-without-result as `UNKNOWN`. Reconcile against the Ledger or existing run; do not resubmit blindly.
+- The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission.
+- Human-owned gates remain human-owned. The bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
 
 ## Collaboration notifications
 
 When the user asks what changed, who started a new experiment, or wants collaborator notifications, use `game_exp_notifications` and follow `references/notifications.md`.
 
-Notifications are Ledger-derived, replayable projections. game-exp does not send external messages itself. A ChatGPT task, Feishu/Slack/email bridge, or other adapter may deliver them and must deduplicate by stable `event_id`.
+Notifications are Ledger-derived, replayable projections. game-exp does not send external messages itself. A ChatGPT task, Feishu/Slack/email bridge, or other adapter may deliver them. Process every page using `cursor`, persist `checkpoint_cursor` only after all pages succeed, resume later with `after`, and deduplicate by stable `event_id`.
 
 Do not treat code-contributor identity as lifecycle authority.
 
@@ -89,13 +105,14 @@ Follow `references/exploration-thread.md`. Do not automatically fan one creative
 
 ## Prototype implementation handoff
 
-When a game experiment needs implementation, runtime verification, export, or requested playable delivery, use `game_exp_prototype_handoff` and follow `references/prototype-handoff.md`.
+When a game experiment needs implementation, runtime verification, export, or requested playable delivery, use `game_exp_prototype_handoff` and follow `references/prototype-handoff.md`. Handoff v2 binds the task to a Ledger snapshot and requires returned evidence to identify source SHA, build identity, check environment, artifact digest/location, and artifact portability.
 
 For Godot work, hand the returned brief to Godot Prototype Studio. game-exp remains responsible for experiment identity, scope, lifecycle and human gates; Godot Prototype Studio remains responsible for implementation and playable delivery.
 
 ## Host capability boundary
 
 - Keep game-exp focused on lifecycle control; do not turn its MCP into a generic source editor.
+- Local stdio MCP/CLI use the local GitHub principal. Streamable HTTP write operations fail closed unless the endpoint is explicitly configured as a trusted single-principal endpoint; a shared HTTP server credential is not caller identity.
 - In ChatGPT Work, use an authorized GitHub/code capability for experiment source edits and PR merge actions.
 - In Codex, use normal repository editing/Git capabilities for source changes.
 - If the host cannot edit the source repository, stop at the source-editing step and report that capability gap; do not bypass the protected workflow or broaden game-exp write authority to compensate.
@@ -105,8 +122,8 @@ For Godot work, hand the returned brief to Godot Prototype Studio. game-exp rema
 1. Ensure there is a real GitHub Issue for the experiment. Resolve repository id, Issue id/number, and parent SHA from GitHub or provided authoritative context; never invent them.
 2. Build the canonical Manifest with a stable `operation_id`. Include the user hypothesis, success/kill criteria, scope, runtime and review protocol. For every new experiment also include stable `subject`: use `{type: "game-prototype", id, name, root_path}` for one game prototype, or `{type: "repository", id: "repository", name, root_path: "."}` for repository-level work. Keep `subject.id` stable across later path/name changes. When the experiment has a real dependency/history relationship to an existing healthy bound experiment in the same repository, optionally include `relationships` using only `depends_on`, `blocks`, or `supersedes`; do not invent relationships. `scope` remains the security boundary and must not be used as the long-term subject identity. If criteria are materially ambiguous, ask only for the missing decision; otherwise draft concrete, falsifiable criteria from the request.
 3. Execute Bind through the active backend: `game_exp_experiment_bind` with MCP, or Bridge action `bind`. The request id must equal `manifest.operation_id`.
-4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile the same logical request. With MCP use `game_exp_request_get`; with GitHub Bridge inspect its claim/result markers plus the protected Ledger. Continue only after the binding is committed/applied.
-5. Execute Initialize through `game_exp_initialize` or Bridge action `initialize` to create the canonical experiment branch/base tag.
+4. If the result is `ACCEPTED` or `UNKNOWN`, reconcile the same logical request. With MCP use `game_exp_operation_get`; with CLI use `game-exp get-operation`; with GitHub Bridge inspect its claim/result markers plus the protected Ledger. Continue only after the binding is committed/applied.
+5. Execute Initialize through `game_exp_initialize`, CLI `initialize`, or Bridge action `initialize` with a new stable request id for that Initialize operation. Do not dispatch the underlying workflow without first committing its trusted execution claim.
 6. Work on the canonical `exp/<issue>` branch using the host's authorized source-editing capability (for example GitHub tools in ChatGPT Work or normal Codex Git operations). Keep changes inside Manifest `scope.allowed`; treat `scope.avoid` as forbidden. Do not recreate or rename canonical refs.
 7. Run project checks appropriate to the repository before asking game-exp to build the Candidate.
 
@@ -154,11 +171,14 @@ When a workflow tool returns only a run URL/status, poll by re-reading the exper
 
 ## Recovery behavior
 
-- Lost response: use the original request id with `game_exp_request_get`.
-- Duplicate request with same payload: accept the authoritative idempotent result; do not create another request.
-- Duplicate request with different payload: treat as a hard conflict.
-- Stale lifecycle decision: refresh `game_exp_experiment_get` and bind a new decision to the current `last_decision_id` only if the user still wants that decision.
-- Stale Rehearsal: run a new Rehearsal on current main.
+- Lost response: use the original operation id with `game_exp_operation_get` or `game-exp get-operation`. The backward-compatible MCP alias `game_exp_request_get` resolves the same operation id.
+- An async execution claim that is committed but has no worker run may be resumed with `game_exp_operation_resume` / `game-exp resume-operation`; this resumes the same id, not a new operation.
+- Duplicate request with same payload: accept the authoritative idempotent replay; do not create another request.
+- Duplicate request with different payload: hard `CONFLICT`.
+- A committed async claim is bound to an authoritative experiment-state digest. If state changes before resume, return `EXECUTION_PRECONDITION_CHANGED`; never dispatch against the newer state implicitly.
+- Authorization failure: do not fall back to another interface as a retry mechanism.
+- Stale lifecycle decision: refresh `game_exp_experiment_get` and create a genuinely new decision only if the human still wants that decision against the new state.
+- Stale Rehearsal: a new Rehearsal is a new logical operation with a new id because its intended base/evidence has changed.
 - Archive `REF_CONFLICT`: do not force refs. Preserve the archive lock and use the trusted recovery workflow/evidence.
 
 ## User-facing status format

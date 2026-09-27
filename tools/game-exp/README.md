@@ -7,11 +7,13 @@ This directory contains the minimal trusted request client built on the frozen V
 The CLI never writes `game-exp/ledger` directly.
 
 ```text
-CLI / future MCP
+MCP / CLI / GitHub Bridge
     ↓
-workflow_dispatch request
+versioned command/query contract
     ↓
-game-exp trusted writer
+Trusted Writer + execution.claim
+    ↓
+trusted lifecycle worker
     ↓
 protected game-exp/ledger
 ```
@@ -35,6 +37,7 @@ From the repository root:
 ```powershell
 python tools/game-exp/cli.py --repo siskosun/toy2game --json status
 python tools/game-exp/cli.py --repo siskosun/toy2game --json doctor
+python tools/game-exp/cli.py --repo siskosun/toy2game --json capabilities
 ```
 
 Submit a request:
@@ -47,13 +50,14 @@ Submit a request:
 '@ | Set-Content -Encoding utf8 $env:TEMP\game-exp-input.json
 
 python tools/game-exp/cli.py --repo siskosun/toy2game --json request experiment.create `
+  --request-id req-example-1 `
   --input-file $env:TEMP\game-exp-input.json
 ```
 
 The command returns a stable `request_id`. If the workflow result is uncertain:
 
 ```powershell
-python tools/game-exp/cli.py --repo siskosun/toy2game --json reconcile <request_id>
+python tools/game-exp/cli.py --repo siskosun/toy2game --json get-operation <request_id>
 ```
 
 Re-running `request` with the same request ID and identical payload reuses the original `expected_head`. A different payload with the same request ID is rejected locally before dispatch.
@@ -184,7 +188,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.5.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.12.0`.
 
 Normal users do not need to remember MCP tool names. Examples:
 
@@ -258,10 +262,12 @@ $env:GAME_EXP_MCP_TRANSPORT="streamable-http"
 $env:GAME_EXP_MCP_HOST="127.0.0.1"
 $env:GAME_EXP_MCP_PORT="8765"
 $env:GAME_EXP_MCP_PATH="/mcp"
+# Write tools over HTTP are read-only by default unless this endpoint is truly single-principal:
+$env:GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL="1"
 python tools/game-exp/mcp_server.py
 ```
 
-The local MCP endpoint is then `http://127.0.0.1:8765/mcp`. ChatGPT Web cannot connect to localhost directly. Connect this local endpoint through OpenAI Secure MCP Tunnel, or deploy the same Streamable HTTP server behind a trusted HTTPS endpoint. Do not expose the unauthenticated localhost listener directly to the public internet.
+The local MCP endpoint is then `http://127.0.0.1:8765/mcp`. ChatGPT Web cannot connect to localhost directly. Do not enable `GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL=1` on an endpoint shared by multiple independent users: the current HTTP server does not bind a different GitHub principal per request. Connect this local endpoint through OpenAI Secure MCP Tunnel, or deploy the same Streamable HTTP server behind a trusted HTTPS endpoint. Do not expose the unauthenticated localhost listener directly to the public internet.
 
 The HTTP mode is stateless and uses JSON responses. The existing stdio mode remains the default, so current Codex configuration does not change.
 
@@ -276,7 +282,7 @@ The Harness-native text Board is implemented and validated. Only the graphical M
 After a valid `experiment.bind` request has produced authoritative Binding/Manifest/State records in the protected Ledger, initialize source refs with:
 
 ```powershell
-python tools/game-exp/cli.py --repo owner/repo initialize EXP-21
+python tools/game-exp/cli.py --repo owner/repo initialize EXP-21 --request-id req-init-21
 ```
 
 The client supplies only the canonical experiment ID. The trusted workflow reconstructs all other inputs from `game-exp/ledger`, verifies the original bound request digest and manifest digest, then atomically creates:
@@ -294,7 +300,7 @@ Integration is deliberately two-phase. A selected experiment is not considered i
 Create or reuse the exact Integration PR:
 
 ```powershell
-python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate EXP-21
+python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate EXP-21 --request-id req-integrate-21
 ```
 
 The proposal workflow requires the current lifecycle to be `SELECTED`, requires the current Rehearsal to target the current `main`, and creates a deterministic branch:
@@ -306,9 +312,37 @@ The proposal commit has exactly one parent (the rehearsed main) and its tree is 
 After that PR is actually merged, finalize it:
 
 ```powershell
-python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate-finalize EXP-21 --pr-number 77
+python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate-finalize EXP-21 --pr-number 77 --request-id req-integrate-finalize-21
 ```
 
 The trusted finalize workflow independently verifies the merged PR, head tree, merge tree, merge ancestry in current main, workflow identity, current Candidate and current Rehearsal. Only then does the protected Ledger receive `integration.register` and lifecycle change from `SELECTED` to `INTEGRATED`.
 
-If `main` advances before the Integration PR is prepared, rerun `rehearse EXP-21` first. SELECTED experiments are allowed to refresh their Rehearsal without changing lifecycle.
+If `main` advances before the Integration PR is prepared, run a new Rehearsal with a new logical operation id, for example `rehearse EXP-21 --request-id req-rehearse-21-refresh-1`. SELECTED experiments are allowed to refresh their Rehearsal without changing lifecycle.
+
+
+## Cross-interface operation recovery
+
+game-exp public contract v1.0 treats MCP, CLI and GitHub Bridge as replaceable transports around the same trusted semantics.
+
+Before a mutation, prefer MCP, then CLI, then Bridge. Once a mutation is accepted or uncertain, do not create a replacement operation merely because another interface is available.
+
+Every mutation uses one stable request/operation id. Async actions first commit a protected `execution.claim` that binds the action, exact arguments, experiment-state digest and Trusted Writer-verified GitHub actor. Worker workflows reject invocations that do not match that claim and remotely deduplicate duplicate workflow runs by request id.
+
+A lost MCP reply can be recovered from CLI without repeating the mutation:
+
+```powershell
+python tools/game-exp/cli.py --repo owner/repo --json get-operation req-123
+python tools/game-exp/cli.py --repo owner/repo --json resume-operation req-123
+```
+
+`resume-operation` only resumes an already committed execution claim. If the experiment state changed after the claim, it returns a conflict instead of dispatching against the new state.
+
+Authorization failure is not a transport failure and must not trigger an MCP -> CLI -> Bridge bypass attempt.
+
+## Resumable notifications
+
+Use `notifications --after <checkpoint>` for incremental polling. If a response has `next_cursor`, process every page first. Persist `checkpoint_cursor` only after the final page succeeds. Event delivery is external and deduplicates by `event_id`.
+
+## Portable prototype handoff
+
+Handoff schema v2 binds implementation work to a Ledger snapshot and source identity. Returned Godot evidence must identify build identity, source SHA, check environment, evidence scope, artifact location/digest and whether that location is portable across Harnesses.

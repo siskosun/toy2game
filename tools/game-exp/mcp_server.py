@@ -16,6 +16,36 @@ def _client(repo: str | None = None) -> GameExpClient:
     return GameExpClient(GitHubTransport(target))
 
 
+def _mcp_transport() -> str:
+    return os.environ.get("GAME_EXP_MCP_TRANSPORT", "stdio").strip().lower() or "stdio"
+
+
+def _http_single_principal_write_enabled() -> bool:
+    return os.environ.get(
+        "GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
+def _write_identity_rejection(repo: str | None) -> dict[str, Any] | None:
+    if _mcp_transport() != "streamable-http":
+        return None
+    if _http_single_principal_write_enabled():
+        return None
+    client = _client(repo)
+    return {
+        "status": "REJECTED",
+        "code": "MCP_HTTP_WRITE_IDENTITY_UNBOUND",
+        "repo": client.transport.repo,
+        "error": (
+            "Streamable HTTP write identity is not bound per caller. "
+            "Use a per-user local stdio/CLI identity, GitHub Bridge, or explicitly "
+            "configure a trusted single-principal HTTP endpoint."
+        ),
+        "fallback_policy": "AUTHORIZATION_FAILURE_DO_NOT_RETRY_AS_NEW_OPERATION",
+    }
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_status(repo: str | None = None) -> dict[str, Any]:
     """Return the target repository and authoritative game-exp Ledger head."""
@@ -25,6 +55,29 @@ def game_exp_status(repo: str | None = None) -> dict[str, Any]:
 def game_exp_access_check(repo: str | None = None) -> dict[str, Any]:
     """Return the current GitHub repository access level for onboarding and gating."""
     return _client(repo).access_check()
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_capabilities(repo: str | None = None) -> dict[str, Any]:
+    """Return versioned business capabilities and the active MCP identity boundary."""
+    result = _client(repo).capabilities()
+    transport = _mcp_transport()
+    result["interface"] = {
+        "type": "mcp",
+        "transport": transport,
+        "write_identity": (
+            "local-gh-principal"
+            if transport == "stdio"
+            else "trusted-single-principal"
+            if _http_single_principal_write_enabled()
+            else "unbound-read-only"
+        ),
+        "shared_http_writes_allowed": (
+            transport != "streamable-http"
+            or _http_single_principal_write_enabled()
+        ),
+    }
+    return result
 
 
 
@@ -94,14 +147,17 @@ def game_exp_notifications(
     viewer_login: str | None = None,
     subject_id: str | None = None,
     limit: int = 50,
+    after: str | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return replayable collaboration notifications derived from one pinned Ledger snapshot."""
+    """Return cursor-resumable collaboration events from committed Ledger snapshots."""
     return _client(repo).notification_feed(
         viewer_login=viewer_login,
         subject_id=subject_id,
         limit=limit,
+        after=after,
+        cursor=cursor,
     )
-
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
@@ -116,6 +172,9 @@ def game_exp_experiment_bind(
     The protocol binds Manifest operation_id to the request id. If request_id is
     omitted, manifest.operation_id is used as the idempotency key.
     """
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     manifest_request_id = manifest.get("operation_id")
     if not isinstance(manifest_request_id, str) or not manifest_request_id:
@@ -143,37 +202,53 @@ def game_exp_experiment_bind(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_initialize(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Initialize canonical experiment source refs from the authoritative binding."""
-    return _client(repo).initialize(experiment_id)
+    """Initialize canonical source refs under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).initialize(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_candidate_build(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Build, attest, retain, and register a new trusted Candidate for an experiment."""
-    return _client(repo).candidate(experiment_id)
+    """Build/register a trusted Candidate under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).candidate(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_review_record(
     experiment_id: str,
     outcome: str,
     notes: str,
+    request_id: str,
     candidate_id: str | None = None,
-    request_id: str | None = None,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Record a human PASS/FAIL Review bound to the current Candidate.
-
-    The MCP caller does not establish reviewer authority. The Trusted Writer
-    independently resolves the authenticated GitHub actor and repository
-    permission before accepting the Review.
-    """
+    """Record human PASS/FAIL for one concrete Candidate using a stable request id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     if candidate_id is None:
         projection = client.experiment_get(experiment_id)
@@ -185,6 +260,7 @@ def game_exp_review_record(
                 "status": "REJECTED",
                 "repo": client.transport.repo,
                 "experiment_id": experiment_id,
+                "request_id": request_id,
                 "error": "experiment has no current Candidate",
             }
     return client.submit(
@@ -200,22 +276,20 @@ def game_exp_review_record(
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_decision_submit(
     experiment_id: str,
     to_state: str,
     reason: str,
+    request_id: str,
     previous_decision_id: str | None = None,
-    request_id: str | None = None,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Submit one trusted lifecycle Decision.
-
-    If previous_decision_id is omitted, the tool reads the current protected
-    Ledger state and binds the request to its last Decision id. GitHub actor
-    identity and permission are still verified by the Trusted Writer.
-    """
+    """Submit one lifecycle Decision bound to protected state and a stable request id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     if previous_decision_id is None:
         projection = client.experiment_get(experiment_id)
@@ -235,48 +309,80 @@ def game_exp_decision_submit(
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_rehearse(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Run a trusted scope-filtered latest-main Rehearsal for the current Candidate."""
-    return _client(repo).rehearse(experiment_id)
+    """Run latest-main trusted Rehearsal under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).rehearse(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_integrate(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Create or reuse the trusted Integration PR for the current Rehearsal."""
-    return _client(repo).integrate(experiment_id)
+    """Create/reuse the Integration PR under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).integrate(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_integrate_finalize(
     experiment_id: str,
     pr_number: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Verify a merged Integration PR and register the experiment as INTEGRATED."""
-    return _client(repo).integrate_finalize(experiment_id, pr_number)
+    """Finalize an actually merged Integration PR under the same operation contract."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).integrate_finalize(
+        experiment_id,
+        pr_number,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True))
 def game_exp_archive(
     experiment_id: str,
+    request_id: str,
     mode: str = "ATOMIC_DELETE",
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Run the recoverable trusted Archive workflow.
-
-    ATOMIC_DELETE creates the immutable final tag and atomically deletes the
-    active experiment branch. RETAIN_BRANCH creates the same official final
-    snapshot but retains the branch. The Trusted Archive state machine remains
-    authoritative.
-    """
-    return _client(repo).archive(experiment_id, mode)
+    """Run recoverable Archive under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).archive(
+        experiment_id,
+        mode,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
@@ -284,11 +390,14 @@ def game_exp_archive_abort(
     experiment_id: str,
     archive_id: str,
     reason: str,
-    request_id: str | None = None,
+    request_id: str,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Abort an Archive only while it is PREPARED and has not been claimed."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).archive_abort(
         experiment_id,
         archive_id,
@@ -299,29 +408,55 @@ def game_exp_archive_abort(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_operation_get(
+    request_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a trusted request or async execution using the exact same operation id."""
+    return _client(repo).operation_get(request_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_request_get(
     request_id: str,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a request from authoritative Ledger/workflow evidence."""
-    return _client(repo).reconcile(request_id)
+    """Backward-compatible alias for game_exp_operation_get."""
+    return _client(repo).operation_get(request_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_operation_resume(
+    request_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Resume only the already-claimed async operation with this exact operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
+    return _client(repo).resume_execution(request_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_request_submit(
     operation: str,
     input: dict[str, Any],
+    request_id: str,
     preconditions: dict[str, Any] | None = None,
     actor_claim: str | None = None,
-    request_id: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Submit one controlled operation request through the Trusted Writer.
 
     This tool submits an operation envelope only. It does not claim that the
     requested domain operation has been executed. Use game_exp_request_get to
-    resolve ACCEPTED/UNKNOWN requests against the authoritative Ledger.
+    resolve ACCEPTED/UNKNOWN requests against the authoritative Ledger. A stable
+    request_id is mandatory; authorization failures are not a signal to retry
+    through another interface.
     """
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).submit(
         operation=operation,
         input_value=input,

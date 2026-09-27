@@ -14,11 +14,15 @@ from typing import Any
 
 import archive_runner
 from client import GameExpClient, GitHubTransport
-from protocol_core import build_operation_payload, encode_payload_b64, validate_request_id
+from protocol_core import build_operation_payload, digest_object, encode_payload_b64, validate_request_id
 
 
 class BridgeError(RuntimeError):
     pass
+
+
+class BridgeUncertainError(BridgeError):
+    """The async worker may have been dispatched, but the Bridge cannot prove it."""
 
 
 WRITE_PERMISSIONS = {"admin", "maintain", "write", "push"}
@@ -34,6 +38,7 @@ WORKFLOW_ACTIONS = {
         "game-exp-integration-finalize.yml",
         ("experiment_id", "pr_number"),
     ),
+    "archive": ("game-exp-archive.yml", ("experiment_id", "mode")),
 }
 
 ACTION_KEYS = {
@@ -223,6 +228,50 @@ def _marker(request_id: str, phase: str) -> str:
     return f"<!-- game-exp-bridge:{request_id}:{phase} -->"
 
 
+def _command_digest_line(command_digest: str) -> str:
+    return f"game-exp-command-digest: {command_digest}"
+
+
+def _comment_command_digest(row: dict[str, Any]) -> str | None:
+    body = row.get("body")
+    if not isinstance(body, str):
+        return None
+    match = re.search(
+        r"(?m)^game-exp-command-digest: (sha256:[0-9a-f]{64})$",
+        body,
+    )
+    return match.group(1) if match else None
+
+
+def _marker_replay_status(
+    row: dict[str, Any],
+    *,
+    request_id: str,
+    command_digest: str,
+    phase: str,
+) -> dict[str, Any] | None:
+    stored = _comment_command_digest(row)
+    if stored is None:
+        return {
+            "status": "UNKNOWN",
+            "request_id": request_id,
+            "reason": "legacy_marker_without_command_digest",
+            f"{phase}_comment_id": row.get("id"),
+            f"{phase}_comment_url": row.get("html_url"),
+        }
+    if stored != command_digest:
+        return {
+            "status": "CONFLICT",
+            "conflict_type": "REQUEST_ID_CONFLICT",
+            "request_id": request_id,
+            "expected_command_digest": stored,
+            "new_command_digest": command_digest,
+            f"{phase}_comment_id": row.get("id"),
+            f"{phase}_comment_url": row.get("html_url"),
+        }
+    return None
+
+
 def find_marker_comment(
     repo: str,
     issue_number: str,
@@ -284,6 +333,8 @@ def _dispatch_workflow(
     repo: str,
     workflow: str,
     fields: dict[str, str],
+    *,
+    request_id: str,
 ) -> dict[str, Any]:
     command = [
         "gh",
@@ -294,29 +345,88 @@ def _dispatch_workflow(
         repo,
         "--ref",
         "main",
+        "-f",
+        f"request_id={request_id}",
     ]
     for key, value in fields.items():
         command.extend(["-f", f"{key}={value}"])
     env = os.environ.copy()
     env["GH_TOKEN"] = _token()
-    proc = subprocess.run(
-        command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        timeout=30,
-    )
+    try:
+        proc = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise BridgeUncertainError(
+            "workflow dispatch timed out; recover the same request_id"
+        ) from exc
     if proc.returncode != 0:
-        raise BridgeError(
-            f"workflow dispatch failed ({proc.returncode}): {proc.stderr[-1200:]}"
+        raise BridgeUncertainError(
+            f"workflow dispatch outcome is uncertain ({proc.returncode}): "
+            f"{proc.stderr[-1200:]}"
         )
     url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    if not url:
+        raise BridgeUncertainError(
+            "workflow dispatch returned no run URL; recover the same request_id"
+        )
     return {
         "status": "ACCEPTED",
         "workflow": workflow,
         "workflow_url": url,
     }
+
+
+def _claim_async_execution(
+    command: dict[str, Any],
+    *,
+    repo: str,
+    actor_login: str,
+    comment_id: str,
+    ssh_key: str,
+    run_id: str,
+    run_attempt: str,
+    workflow_source_sha: str,
+) -> dict[str, Any]:
+    action = str(command["action"])
+    experiment_id = str(command["experiment_id"])
+    transport = GitHubTransport(repo)
+    head = transport.ledger_head()
+    state = transport.ledger_json(
+        f"experiments/{experiment_id}/state.json",
+        ref=head,
+    )
+    if not isinstance(state, dict):
+        raise BridgeError("experiment state is unavailable for execution claim")
+    arguments = {
+        key: command[key]
+        for key in ("pr_number", "mode")
+        if key in command
+    }
+    payload = build_operation_payload(
+        "execution.claim",
+        {
+            "experiment_id": experiment_id,
+            "action": action,
+            "arguments": arguments,
+            "state_digest": digest_object(state),
+        },
+    )
+    result = submit_writer(
+        repo,
+        command["request_id"],
+        payload,
+        ssh_key=ssh_key,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        workflow_source_sha=workflow_source_sha,
+    )
+    return result
 
 
 def execute_action(
@@ -336,12 +446,34 @@ def execute_action(
     if action == "status":
         return GameExpClient(GitHubTransport(repo)).experiment_get(str(experiment_id))
 
+    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
+
     if action in WORKFLOW_ACTIONS:
+        claim_result = _claim_async_execution(
+            command,
+            repo=repo,
+            actor_login=actor_login,
+            comment_id=comment_id,
+            ssh_key=ssh_key,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            workflow_source_sha=workflow_source_sha,
+        )
+        if claim_result.get("status") != "COMMITTED":
+            return {
+                **claim_result,
+                "operation_status": "CLAIM_NOT_COMMITTED",
+                "recovery": "resolve the same request_id; do not create a replacement operation",
+            }
         workflow, field_names = WORKFLOW_ACTIONS[action]
         fields = {name: str(command[name]) for name in field_names}
-        return _dispatch_workflow(repo, workflow, fields)
+        return _dispatch_workflow(
+            repo,
+            workflow,
+            fields,
+            request_id=command["request_id"],
+        )
 
-    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
     if action == "bind":
         payload = build_operation_payload(
             "experiment.bind",
@@ -420,43 +552,6 @@ def execute_action(
             workflow_source_sha=workflow_source_sha,
         )
 
-    if action == "archive":
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).with_name("archive_runner.py")),
-                "--repo",
-                repo,
-                "--experiment-id",
-                command["experiment_id"],
-                "--mode",
-                command["mode"],
-                "--ssh-key",
-                ssh_key,
-                "--run-id",
-                run_id,
-                "--run-attempt",
-                run_attempt,
-                "--workflow-source-sha",
-                workflow_source_sha,
-                "--actor-login",
-                actor_login,
-            ],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=900,
-        )
-        lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        result = json.loads(lines[-1]) if lines else {}
-        if proc.returncode != 0:
-            raise BridgeError(
-                f"archive bridge failed ({proc.returncode}): "
-                + json.dumps(result, ensure_ascii=False)
-                + proc.stderr[-1200:]
-            )
-        return result
-
     raise BridgeError(f"unhandled action {action!r}")
 
 
@@ -465,6 +560,7 @@ def _reply_body(
     result: dict[str, Any],
     *,
     phase: str = "result",
+    command_digest: str | None = None,
 ) -> str:
     payload = json.dumps(result, ensure_ascii=False, sort_keys=True)
     if len(payload) > 6000:
@@ -473,6 +569,11 @@ def _reply_body(
         [
             _marker(request_id, phase),
             f"game-exp bridge {phase} for {request_id}",
+            *(
+                [_command_digest_line(command_digest)]
+                if command_digest is not None
+                else []
+            ),
             "",
             "~~~json",
             payload,
@@ -500,6 +601,7 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
 
     command = parse_command(body)
     request_id = command["request_id"]
+    command_digest = digest_object(command)
     validate_issue_binding(command, issue_number)
     permission = verify_actor(args.repo, actor_login)
 
@@ -507,20 +609,38 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         args.repo, issue_number, request_id, "result"
     )
     if previous is not None:
+        marker_status = _marker_replay_status(
+            previous,
+            request_id=request_id,
+            command_digest=command_digest,
+            phase="result",
+        )
+        if marker_status is not None:
+            return marker_status
         return {
             "status": "REPLAYED",
             "request_id": request_id,
             "permission": permission,
+            "command_digest": command_digest,
             "result_comment_id": previous.get("id"),
             "result_comment_url": previous.get("html_url"),
         }
 
     claim = find_marker_comment(args.repo, issue_number, request_id, "claim")
     if claim is not None:
+        marker_status = _marker_replay_status(
+            claim,
+            request_id=request_id,
+            command_digest=command_digest,
+            phase="claim",
+        )
+        if marker_status is not None:
+            return marker_status
         return {
             "status": "UNKNOWN",
             "request_id": request_id,
             "reason": "existing_claim_without_result",
+            "command_digest": command_digest,
             "claim_comment_id": claim.get("id"),
             "claim_comment_url": claim.get("html_url"),
         }
@@ -529,6 +649,7 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         [
             _marker(request_id, "claim"),
             f"game-exp bridge claim for {request_id}",
+            _command_digest_line(command_digest),
             f"Bridge run: https://github.com/{args.repo}/actions/runs/{args.run_id}",
         ]
     )
@@ -545,6 +666,21 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
             run_attempt=args.run_attempt,
             workflow_source_sha=args.workflow_source_sha,
         )
+    except BridgeUncertainError as exc:
+        error = {
+            "status": "UNKNOWN",
+            "request_id": request_id,
+            "reason": "worker_dispatch_outcome_uncertain",
+            "error": str(exc),
+            "claim_comment_id": claim_row.get("id"),
+            "recovery": "query/resume this same request_id; do not submit a new logical operation",
+        }
+        post_comment(
+            args.repo,
+            issue_number,
+            _reply_body(request_id, error, command_digest=command_digest),
+        )
+        return error
     except Exception as exc:
         error = {
             "status": "REJECTED",
@@ -552,7 +688,11 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
             "error": str(exc),
             "claim_comment_id": claim_row.get("id"),
         }
-        post_comment(args.repo, issue_number, _reply_body(request_id, error))
+        post_comment(
+            args.repo,
+            issue_number,
+            _reply_body(request_id, error, command_digest=command_digest),
+        )
         raise
 
     result = {
@@ -562,7 +702,12 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         "bridge_permission": permission,
         "claim_comment_id": claim_row.get("id"),
     }
-    post_comment(args.repo, issue_number, _reply_body(request_id, result))
+    result["bridge_command_digest"] = command_digest
+    post_comment(
+        args.repo,
+        issue_number,
+        _reply_body(request_id, result, command_digest=command_digest),
+    )
     return result
 
 

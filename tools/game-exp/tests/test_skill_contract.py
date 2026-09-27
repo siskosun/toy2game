@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.11.0")
+        self.assertEqual(manifest["version"], "0.12.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -52,6 +52,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         required_tools = {
             "game_exp_status",
             "game_exp_access_check",
+            "game_exp_capabilities",
             "game_exp_notifications",
             "game_exp_prototype_handoff",
             "game_exp_board",
@@ -69,6 +70,8 @@ class GameExpSkillContractTests(unittest.TestCase):
             "game_exp_integrate_finalize",
             "game_exp_archive",
             "game_exp_archive_abort",
+            "game_exp_operation_get",
+            "game_exp_operation_resume",
             "game_exp_request_get",
         }
         for name in required_tools:
@@ -169,6 +172,7 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "prototype-handoff.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "exploration-thread.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "notifications.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "public-contract.md").exists())
 
     def test_chat_inline_ui_contract_is_read_only_and_has_fallback(self):
         content = (
@@ -246,6 +250,71 @@ class GameExpSkillContractTests(unittest.TestCase):
             "Candidate/Review",
         ):
             self.assertIn(phrase, handoff)
+
+    def test_cross_interface_contract_is_recovery_safe(self):
+        skill = SKILL.read_text(encoding="utf-8")
+        contract = (
+            PLUGIN / "skills" / "game-exp" / "references" / "public-contract.md"
+        ).read_text(encoding="utf-8")
+        notifications = (
+            PLUGIN / "skills" / "game-exp" / "references" / "notifications.md"
+        ).read_text(encoding="utf-8")
+        handoff = (
+            PLUGIN / "skills" / "game-exp" / "references" / "prototype-handoff.md"
+        ).read_text(encoding="utf-8")
+        board = (
+            PLUGIN / "skills" / "game-exp" / "references" / "board.md"
+        ).read_text(encoding="utf-8")
+
+        for phrase in (
+            "MCP tools",
+            "CLI",
+            "GitHub Bridge",
+            "game_exp_operation_get",
+            "game_exp_operation_resume",
+            "authorization failure",
+            "recovery mode",
+            "game_exp_capabilities",
+        ):
+            self.assertIn(phrase, skill)
+
+        for phrase in (
+            "Current public contract: `1.0`",
+            "Same id + same request",
+            "Same id + different request",
+            "Authorization failure",
+            "execution.claim",
+            "Trusted Writer",
+            "Interface availability is not permission",
+            "CURSOR_EXPIRED",
+            "Handoff schema v2",
+            "A2A",
+        ):
+            self.assertIn(phrase, contract)
+
+        for phrase in (
+            "checkpoint_cursor",
+            "next_cursor",
+            "CURSOR_EXPIRED",
+            "event_version",
+            "viewer_login",
+        ):
+            self.assertIn(phrase, notifications)
+
+        for phrase in (
+            "Handoff schema v2",
+            "build_identity",
+            "portable",
+            "source SHA",
+        ):
+            self.assertIn(phrase, handoff)
+
+        for phrase in (
+            "DEPENDENCY_REVIEW_REQUIRED",
+            "blocks_progress=false",
+            "Lifecycle alone is insufficient",
+        ):
+            self.assertIn(phrase, board)
 
     def test_plugin_contains_exactly_one_skill_entrypoint(self):
         entrypoints = list(PLUGIN.glob("skills/**/SKILL.md"))

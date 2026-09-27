@@ -2,36 +2,53 @@
 
 ## Boundary
 
-game-exp owns experiment identity, scope, lifecycle, evidence references, human gates, and selection.
+game-exp owns experiment identity, scope, lifecycle, evidence references, human gates and selection.
 
-Godot Prototype Studio owns prototype implementation, runtime verification, export, and requested playtest delivery.
+Godot Prototype Studio owns prototype implementation, runtime verification, export, and requested playable delivery.
 
 game-exp must not rebuild Godot editing/export/publishing capabilities.
 
-## Handoff
+## Handoff schema v2
 
-Use `game_exp_prototype_handoff(experiment_id)` to create a pinned implementation brief containing:
+Use `game_exp_prototype_handoff(experiment_id)`.
 
-- canonical experiment branch and parent SHA;
+The package is bound to:
+
+- protected Ledger snapshot;
+- stable `handoff_id`;
+- canonical experiment branch;
+- observed branch-head SHA when available;
+- parent SHA;
 - subject/prototype root;
 - title and hypothesis;
-- success criteria;
-- kill criteria;
-- allowed and avoided scope;
+- success/kill criteria;
+- allowed/avoided scope;
 - runtime requirements;
-- review protocol.
+- Review protocol.
 
 Pass this package to Godot Prototype Studio when implementation or playable delivery is needed.
 
 ## Return evidence
 
-Godot Prototype Studio should return:
+The implementation return must identify:
 
-- exact source SHA;
+- exact `source_sha`;
+- `build_identity`: build id, source SHA, producer, and originating handoff id;
 - checks actually run;
+- check environment;
 - playable status;
+- evidence scope;
+- artifacts;
 - delivery evidence only when delivery was requested.
 
-These are implementation/runtime facts. They do not automatically authorize Review PASS, PROMISING, SELECTED, merge, or Archive.
+Each artifact requires an id, kind, location, digest and `portable` flag.
 
-After implementation evidence is available, game-exp resumes the normal Candidate/Review lifecycle.
+A local filesystem path may be valid in one Harness but is not durable cross-Harness evidence. If an artifact exists only locally, mark `portable=false`. Evidence intended to survive machine/Harness switching should use a durable accessible location plus digest.
+
+Checks must state the source SHA and environment they validate. A check result for an older source SHA does not automatically validate later code.
+
+These implementation/runtime facts never authorize Review PASS, PROMISING, SELECTED, merge or Archive. game-exp resumes the normal Candidate/Review lifecycle after evidence is available.
+
+## Future A2A
+
+If Godot Prototype Studio later becomes an independent Agent, this task/evidence package may be transported as an A2A task/artifact set. A2A transport must not redefine game-exp idempotency, human approval scope, or evidence validity.

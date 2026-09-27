@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from protocol_core import ProtocolError, digest_object
+from protocol_core import ASYNC_EXECUTION_ACTIONS, ProtocolError, digest_object
 
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 EXP_RE = re.compile(r"^EXP-[1-9][0-9]*$")
@@ -2042,6 +2042,109 @@ def _plan_archive_commit(
     )
 
 
+def _plan_execution_claim(
+    *,
+    repo_dir: Path,
+    payload: dict[str, Any],
+    request_id: str,
+    trusted_actor: TrustedActorContext | None,
+) -> DomainPlan:
+    input_value = _mapping(payload.get("input"), "operation.input")
+    _expect_keys(
+        input_value,
+        {"experiment_id", "action", "arguments", "state_digest"},
+        where="operation.input",
+    )
+    experiment_id = _string(
+        input_value["experiment_id"], "operation.input.experiment_id"
+    )
+    action = _string(input_value["action"], "operation.input.action")
+    if action not in ASYNC_EXECUTION_ACTIONS:
+        raise DomainError(
+            f"unsupported async execution action: {action}",
+            code="DOMAIN_EXECUTION_INVALID",
+        )
+    arguments = _mapping(input_value["arguments"], "operation.input.arguments")
+    allowed_argument_keys = {
+        "initialize": set(),
+        "candidate_build": set(),
+        "rehearse": set(),
+        "integrate": set(),
+        "integrate_finalize": {"pr_number"},
+        "archive": {"mode"},
+    }[action]
+    if set(arguments) != allowed_argument_keys:
+        raise DomainError(
+            f"execution arguments mismatch for {action}: "
+            f"expected={sorted(allowed_argument_keys)} actual={sorted(arguments)}",
+            code="DOMAIN_EXECUTION_INVALID",
+        )
+    if action == "integrate_finalize":
+        pr_number = arguments.get("pr_number")
+        if not isinstance(pr_number, str) or not re.fullmatch(r"[1-9][0-9]*", pr_number):
+            raise DomainError(
+                "integrate_finalize requires a positive decimal pr_number",
+                code="DOMAIN_EXECUTION_INVALID",
+            )
+    if action == "archive" and arguments.get("mode") not in {
+        "ATOMIC_DELETE",
+        "RETAIN_BRANCH",
+    }:
+        raise DomainError(
+            "archive execution requires ATOMIC_DELETE or RETAIN_BRANCH",
+            code="DOMAIN_EXECUTION_INVALID",
+        )
+    state_digest = _string(input_value["state_digest"], "operation.input.state_digest")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", state_digest):
+        raise DomainError(
+            "execution state_digest must be sha256:<64 lowercase hex>",
+            code="DOMAIN_EXECUTION_INVALID",
+        )
+    if trusted_actor is None:
+        raise DomainError(
+            "trusted actor context is required for async execution claims",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    if trusted_actor.permission not in {"admin", "maintain", "write"}:
+        raise DomainError(
+            f"actor {trusted_actor.login!r} lacks write permission",
+            code="DOMAIN_AUTHORIZATION_FAILED",
+        )
+    _binding, _manifest, state, _binding_operation = _load_bound_experiment(
+        repo_dir, experiment_id
+    )
+    actual_state_digest = digest_object(state)
+    if actual_state_digest != state_digest:
+        raise DomainError(
+            "async execution claim was based on stale experiment state",
+            code="DOMAIN_EXECUTION_CONFLICT",
+        )
+    if state.get("archive_lock") is not None and action != "archive":
+        raise DomainError(
+            "async execution is blocked while archive mutation lock is active",
+            code="DOMAIN_EXECUTION_CONFLICT",
+        )
+    lifecycle = state.get("lifecycle")
+    allowed_lifecycles = {
+        "initialize": {"ACTIVE"},
+        "candidate_build": {"ACTIVE", "REVIEW"},
+        "rehearse": {"PROMISING", "SELECTED"},
+        "integrate": {"SELECTED"},
+        "integrate_finalize": {"SELECTED"},
+        "archive": {"ACTIVE", "REVIEW", "PROMISING", "SELECTED", "INTEGRATED"},
+    }[action]
+    if lifecycle not in allowed_lifecycles:
+        raise DomainError(
+            f"{action} is not allowed in lifecycle {lifecycle!r}",
+            code="DOMAIN_EXECUTION_CONFLICT",
+        )
+    return DomainPlan(
+        status="REQUEST_ONLY",
+        experiment_id=experiment_id,
+        writes={},
+    )
+
+
 def plan_domain_mutation(
     *,
     repo_dir: Path,
@@ -2060,6 +2163,13 @@ def plan_domain_mutation(
     if payload.get("kind") != "operation_request":
         return DomainPlan(status="REQUEST_ONLY", experiment_id=None, writes={})
     operation = payload.get("operation")
+    if operation == "execution.claim":
+        return _plan_execution_claim(
+            repo_dir=repo_dir,
+            payload=payload,
+            request_id=request_id,
+            trusted_actor=trusted_actor,
+        )
     if operation == "archive.prepare":
         return _plan_archive_prepare(
             repo_dir=repo_dir,

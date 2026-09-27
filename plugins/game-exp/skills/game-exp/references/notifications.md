@@ -2,59 +2,69 @@
 
 ## Purpose
 
-Notify collaborators when meaningful experiment events happen without turning game-exp into a messaging platform.
+Notify collaborators about meaningful experiment changes without turning game-exp into a messaging platform.
 
-Notification facts are derived from one pinned protected Ledger snapshot. Delivery is delegated to the host or an external adapter such as ChatGPT tasks, Feishu, Slack, email, or another team channel.
+Events are deterministic projections of committed protected-Ledger snapshots. Delivery is delegated to ChatGPT tasks, Feishu, Slack, email, webhook, or another adapter.
 
-## Event source
+## Event contract
 
-Use `game_exp_notifications`.
+Use `game_exp_notifications` or CLI `notifications`.
 
-Important events include:
+Every row includes:
 
-- new experiment;
-- enters Review;
-- Candidate ready;
-- human Review recorded;
-- PROMISING;
-- SELECTED;
-- REJECTED;
-- integrated;
-- archived.
+- stable `event_id` for delivery deduplication;
+- namespaced `event_type`;
+- `event_version`;
+- experiment and subject identity;
+- actor when authoritative activity contains one;
+- intended collaboration targets;
+- `source_snapshot` identifying the Ledger snapshot used to rebuild the event.
 
-Each notification has a stable `event_id`. Delivery adapters MUST deduplicate by `event_id`.
+Meaningful events include new experiments, Review entry, Candidate readiness, human Review, PROMISING, SELECTED, REJECTED, Integration, Archive, and `dependency.review_required`.
 
-## Recipients
+Contributor identity remains collaboration metadata only and never grants lifecycle authority.
 
-For one subject/prototype, collaborators are the trusted initiators and GitHub-linked code contributors observed across its experiments.
+## Access
 
-For an event, exclude the event actor when that actor is known. The remaining collaborators are `targets`.
+When `viewer_login` is supplied, game-exp checks that viewer currently has repository collaboration access before returning the personalized feed. Independently, every generated target is filtered against current repository collaborator permission, including aggregate feeds without a viewer. This is a read-time access check, not durable future authority.
 
-This means that when Alice creates a new experiment under a prototype where Bob has already initiated or contributed to another experiment, Bob is a target for the new-experiment notification.
+External adapters must also enforce the destination system's own authorization. A stale cached permission must not be treated as permission to deliver forever.
 
-Contributor identity is collaboration metadata only. It never grants lifecycle authority.
+## Cursor protocol
 
-## Delivery boundary
+Historical/incremental delivery uses two cursor forms.
 
-game-exp does not send chat messages, emails, Slack messages, or Feishu messages itself.
+- `cursor`: page continuation within one pinned snapshot.
+- `checkpoint_cursor`: after all pages have been processed successfully, persist this as the external adapter's checkpoint.
+- `after=<checkpoint_cursor>`: next polling cycle returns events that were absent from the checkpoint snapshot and exist in the newer committed snapshot.
 
-It exposes replayable events and target identities. A delivery adapter:
+Adapter algorithm:
 
-1. polls or receives the event feed;
-2. filters to its destination/user;
-3. deduplicates by `event_id`;
-4. sends through the external system;
-5. persists its own delivery cursor/state.
+1. request feed with prior `after` checkpoint;
+2. process one page;
+3. while `next_cursor` exists, request the next page using `cursor`;
+4. deduplicate sends by `event_id`;
+5. only after all pages succeed, persist `checkpoint_cursor`;
+6. on a later poll, pass that value as `after`.
 
-A delivery failure must not alter experiment lifecycle state.
+Never advance the checkpoint merely because one page was fetched. This avoids silent event loss after partial delivery failure.
 
-## Suggested Chinese message
+If the referenced Ledger snapshot can no longer be reconstructed, game-exp returns `CURSOR_EXPIRED`. The adapter must explicitly resynchronize rather than silently treating the feed as empty.
+
+## Rebuild and retention
+
+Events are rebuilt from immutable committed Ledger history rather than stored as a second lifecycle state machine. Delivery state, retries, read receipts and subscription preferences remain external.
+
+The retention model is therefore bounded by availability of the protected Ledger history used by the cursor. No message queue is required by game-exp itself.
+
+## Suggested Chinese notification
 
 ```text
-{subject_name} 有新的实验 {experiment_id}
-发起人：{actor_or_initiator}
+{subject_name} 有新的实验动态
+实验：{experiment_id}
+发起人/操作者：{actor}
+事件：{event_label_zh}
 目标：{title}
-当前事件：{event_label_zh}
 ```
 
-Keep messages compact. Link to the experiment panel when the host supports it.
+Keep messages compact and link to the experiment panel when supported.

@@ -21,6 +21,7 @@ Additional paths:
 | User intent | Preferred MCP tool | Notes |
 |---|---|---|
 | Inspect repo/Ledger | `game_exp_status` | Read-only |
+| Inspect public contract/features | `game_exp_capabilities` | Read-only; access snapshot is not execution authority |
 | Open experiment Board / panel | `game_exp_board` | Read-only consistent Ledger snapshot |
 | Collaboration notification feed | `game_exp_notifications` | Read-only, replayable, external delivery adapters dedupe by event_id |
 | Build implementation brief | `game_exp_prototype_handoff` | Read-only handoff to Godot Prototype Studio; no lifecycle mutation |
@@ -36,44 +37,32 @@ Additional paths:
 | Finalize merged Integration PR | `game_exp_integrate_finalize` | Verifies merged tree/ancestry |
 | Recoverable Archive | `game_exp_archive` | `ATOMIC_DELETE` or `RETAIN_BRANCH` |
 | Abort PREPARED Archive | `game_exp_archive_abort` | Forbidden after Claim |
-| Reconcile request | `game_exp_request_get` | Use for ACCEPTED/UNKNOWN/lost response |
+| Resolve operation | `game_exp_operation_get` | Use same id for ACCEPTED/UNKNOWN/lost response across MCP/CLI/Bridge |
+| Resume claimed async operation | `game_exp_operation_resume` | Same id only; refuses state drift |
+| Reconcile request | `game_exp_request_get` | Backward-compatible alias for operation_get |
 | Low-level request | `game_exp_request_submit` | Recovery/unsupported cases only; prefer domain tools |
 
 
 ## Backend routing
 
-Use the first available backend that preserves the trust model:
+Before submitting a mutation:
 
-1. Native game-exp MCP tools.
-2. GitHub Bridge through the repository Issue that owns the experiment.
-3. If neither backend is available, stop and report the missing capability.
+1. Native game-exp MCP.
+2. game-exp CLI when shell execution is available.
+3. GitHub Bridge through the canonical Issue.
+4. Otherwise stop at the missing capability.
 
-The GitHub Bridge is for ChatGPT sessions where the normal GitHub connector is available but custom MCP Apps / Developer Mode are unavailable. It does not replace the protected Ledger or Trusted Writer.
+This is interface probing, not Harness-name routing.
 
-For mutating bridge actions, add one Issue comment whose first line is exactly `/game-exp` and whose remaining body is one strict JSON object. Every mutation requires a stable `request_id`. Never create a second request id to escape an uncertain result.
+After a mutation is `ACCEPTED` or `UNKNOWN`, do not route a replacement mutation through another interface. Query or resume the exact same operation id. Authorization rejection is not a reason to try another interface.
 
-| MCP intent | Bridge action |
-|---|---|
-| Bind Manifest | `bind` |
-| Initialize refs | `initialize` |
-| Build Candidate | `candidate_build` |
-| Record Review | `review_record` |
-| Lifecycle Decision | `decision_submit` |
-| Rehearsal | `rehearse` |
-| Create/reuse Integration PR | `integrate` |
-| Finalize merged Integration PR | `integrate_finalize` |
-| Archive | `archive` |
-| Abort PREPARED Archive | `archive_abort` |
-| Read one experiment | `status` |
+Async worker actions first commit a trusted `execution.claim` containing action, exact arguments and experiment-state digest. The worker validates that protected claim and its Trusted Writer-verified actor before effects. GitHub Actions deduplicates duplicate runs by the same request id.
 
-Bridge invariants:
+See `public-contract.md` for versioning, status, recovery, evidence and compatibility semantics.
 
-- The command must be posted on the GitHub Issue whose number equals the experiment number.
-- The bridge independently resolves the Issue-comment author and repository write permission.
-- Human-gated actions still require an explicit human decision before posting the bridge command.
-- The bridge posts a request-scoped claim marker before execution and a result marker after execution.
-- If a claim exists without a result, treat the outcome as `UNKNOWN`; inspect the referenced bridge run and authoritative Ledger before retrying.
-- Do not post duplicate bridge comments while the original request is unresolved.
+## GitHub Bridge
+
+The Bridge is a transport fallback, not a separate authority system. Mutating Bridge actions use the same stable request id. Async actions commit the same `execution.claim` before dispatching the same worker workflow. Claim-without-result remains `UNKNOWN`; reconcile the same id.
 
 ## Human-owned gates
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.11.0",
-  "description": "Trusted game experiment workflow with collaborator notifications, Godot Prototype Studio handoff, repository access checks, multi-user attribution, Chinese Chat UI, timelines, and relationships.",
+  "version": "0.12.0",
+  "description": "Harness-neutral trusted game experiment workflow with cross-interface operation recovery, resumable collaboration notifications, portable Godot handoff evidence, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "多人实验通知 + Godot交接 + Chat中文实验面板",
-        "longDescription": "Manage protected-Ledger game experiments with a Chinese action Inbox, prototype grouping, Ledger-derived timelines, experiment relationships, read-only focus filters, human gates, trusted Rehearsal, Integration, and recoverable Archive.",
+        "shortDescription": "跨Harness恢复 + 多人通知 + Godot交接",
+        "longDescription": "Manage protected-Ledger game experiments through a versioned MCP/CLI/GitHub-Bridge contract with stable operation ids, trusted execution claims, human gates, resumable notifications, portable implementation handoffs, Rehearsal, Integration, and recoverable Archive.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [

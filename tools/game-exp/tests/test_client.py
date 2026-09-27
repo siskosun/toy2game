@@ -20,6 +20,9 @@ class FakeTransport:
         self.head = "a" * 40
         self.dispatched = []
         self.record = None
+        self.records = {}
+        self.execution_runs = {}
+        self.request_runs = {}
         self.state = None
         self.logs = ""
         self.dispatch_uncertain = False
@@ -48,6 +51,9 @@ class FakeTransport:
             "reason": None,
         }
 
+    def collaborator_permission(self, login):
+        return "write" if login in {"alice", "bob", "carol"} else None
+
     def branch_contributors(self, ref):
         if ref in {"exp/7", "exp-final/7"}:
             return {
@@ -72,6 +78,32 @@ class FakeTransport:
         if self.dispatch_uncertain:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/123"
+
+    def dispatch_execution(
+        self,
+        *,
+        action,
+        experiment_id,
+        request_id,
+        arguments=None,
+    ):
+        self.dispatched.append(
+            {
+                "execution": action,
+                "experiment_id": experiment_id,
+                "request_id": request_id,
+                "arguments": arguments or {},
+            }
+        )
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/900"
+
+    def find_execution_run(self, *, action, request_id):
+        return self.execution_runs.get((action, request_id))
+
+    def find_request_runs(self, request_id):
+        return list(self.request_runs.get(request_id, []))
 
     def dispatch_initializer(self, experiment_id):
         self.dispatched.append({"initializer": experiment_id})
@@ -126,7 +158,7 @@ class FakeTransport:
         return self._tag_objects[tag_object_sha]
 
     def ledger_record(self, request_id):
-        return self.record
+        return self.records.get(request_id, self.record)
 
     def run_state(self, workflow_url):
         return self.state
@@ -193,6 +225,101 @@ class ClientTests(unittest.TestCase):
             "payload": payload,
         }
         return request_id
+
+    def test_cross_machine_reconcile_discovers_writer_run_without_local_journal(self):
+        transport = FakeTransport()
+        transport.request_runs["req_cross_machine"] = [
+            {
+                "databaseId": 700,
+                "displayTitle": "game-exp:request:req_cross_machine:ignored",
+                "status": "in_progress",
+                "conclusion": None,
+                "url": "https://github.com/owner/repo/actions/runs/700",
+                "payloadDigest": "sha256:" + "1" * 64,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).reconcile("req_cross_machine")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "WRITER_RUNNING")
+        self.assertEqual(result["payload_digest"], "sha256:" + "1" * 64)
+
+    def test_same_cross_machine_request_does_not_dispatch_second_writer(self):
+        transport = FakeTransport()
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.create",
+            "input": {"hypothesis": "same"},
+            "preconditions": {},
+        }
+        digest = digest_object(payload)
+        transport.request_runs["req_cross_same"] = [
+            {
+                "databaseId": 701,
+                "displayTitle": "game-exp request",
+                "status": "in_progress",
+                "conclusion": None,
+                "url": "https://github.com/owner/repo/actions/runs/701",
+                "payloadDigest": digest,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "same"},
+            request_id="req_cross_same",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_cross_machine_same_id_different_payload_conflicts_before_redispatch(self):
+        transport = FakeTransport()
+        first_payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.create",
+            "input": {"hypothesis": "first"},
+            "preconditions": {},
+        }
+        transport.request_runs["req_cross_conflict"] = [
+            {
+                "databaseId": 702,
+                "displayTitle": "game-exp request",
+                "status": "completed",
+                "conclusion": "failure",
+                "url": "https://github.com/owner/repo/actions/runs/702",
+                "payloadDigest": digest_object(first_payload),
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "different"},
+            request_id="req_cross_conflict",
+        )
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "REQUEST_ID_CONFLICT")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_cross_machine_writer_run_preserves_original_head_conflict(self):
+        transport = FakeTransport()
+        transport.request_runs["req_cross_head"] = [
+            {
+                "databaseId": 703,
+                "displayTitle": "game-exp request",
+                "status": "completed",
+                "conclusion": "failure",
+                "url": "https://github.com/owner/repo/actions/runs/703",
+                "payloadDigest": "sha256:" + "2" * 64,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        transport.logs = '{"status":"HEAD_CONFLICT"}'
+        result = GameExpClient(transport).reconcile("req_cross_head")
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "HEAD_CONFLICT")
+        self.assertEqual(result["expected_head"], "a" * 40)
 
     def test_submit_then_reconcile_committed(self):
         transport = FakeTransport()
@@ -588,6 +715,13 @@ class ClientTests(unittest.TestCase):
             "EXP-21",
         )
         self.assertEqual(
+            result["experiments"][0]["dependency_reviews"][0]["code"],
+            "DEPENDENCY_REVIEW_REQUIRED",
+        )
+        self.assertFalse(
+            result["experiments"][0]["dependency_reviews"][0]["blocks_progress"]
+        )
+        self.assertEqual(
             result["experiments"][1]["relationships_incoming"][0]["type_zh"],
             "被依赖",
         )
@@ -640,9 +774,12 @@ class ClientTests(unittest.TestCase):
         handoff = GameExpClient(transport).prototype_handoff("EXP-7")
         self.assertEqual(handoff["status"], "PASS")
         self.assertEqual(handoff["handoff_target"], "godot-prototype-studio")
+        self.assertEqual(handoff["handoff_schema_version"], 2)
         self.assertEqual(handoff["source"]["branch_ref"], "refs/heads/exp/7")
         self.assertEqual(handoff["brief"]["hypothesis"], "roles improve readability")
         self.assertIn("source_sha", handoff["return_contract"]["required"])
+        self.assertIn("artifacts", handoff["return_contract"]["required"])
+        self.assertIn("build_identity", handoff["return_contract"]["required"])
 
         self.assertEqual(
             result["focus"],
@@ -806,99 +943,131 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["views"]["attention"]["experiment_ids"], ["EXP-19"])
         self.assertEqual(result["counts_by_health"], {"FAIL": 1})
 
-    def test_candidate_dispatches_trusted_workflow(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).candidate("EXP-21")
+    def test_async_wrappers_route_through_stable_execution_contract(self):
+        client = GameExpClient(FakeTransport())
+        cases = [
+            (
+                lambda: client.candidate(
+                    "EXP-21",
+                    request_id="req_candidate_21",
+                    actor_claim="ignored-transport-metadata",
+                ),
+                {
+                    "action": "candidate_build",
+                    "experiment_id": "EXP-21",
+                    "request_id": "req_candidate_21",
+                    "actor_claim": "ignored-transport-metadata",
+                },
+            ),
+            (
+                lambda: client.initialize(
+                    "EXP-21",
+                    request_id="req_init_21",
+                ),
+                {
+                    "action": "initialize",
+                    "experiment_id": "EXP-21",
+                    "request_id": "req_init_21",
+                    "actor_claim": None,
+                },
+            ),
+            (
+                lambda: client.rehearse(
+                    "EXP-21",
+                    request_id="req_rehearse_21",
+                ),
+                {
+                    "action": "rehearse",
+                    "experiment_id": "EXP-21",
+                    "request_id": "req_rehearse_21",
+                    "actor_claim": None,
+                },
+            ),
+            (
+                lambda: client.integrate(
+                    "EXP-21",
+                    request_id="req_integrate_21",
+                ),
+                {
+                    "action": "integrate",
+                    "experiment_id": "EXP-21",
+                    "request_id": "req_integrate_21",
+                    "actor_claim": None,
+                },
+            ),
+        ]
+        for invoke, expected in cases:
+            with self.subTest(action=expected["action"]):
+                with patch.object(
+                    client,
+                    "start_execution",
+                    return_value={"status": "ACCEPTED"},
+                ) as start_execution:
+                    result = invoke()
+                self.assertEqual(result["status"], "ACCEPTED")
+                start_execution.assert_called_once_with(**expected)
+
+    def test_integrate_finalize_and_archive_route_exact_arguments(self):
+        client = GameExpClient(FakeTransport())
+        with patch.object(
+            client,
+            "start_execution",
+            return_value={"status": "ACCEPTED"},
+        ) as start_execution:
+            result = client.integrate_finalize(
+                "EXP-21",
+                "77",
+                request_id="req_finalize_21",
+            )
         self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(transport.dispatched[-1], {"candidate": "EXP-21"})
-
-    def test_candidate_uncertain_dispatch_is_not_claimed_retry_safe(self):
-        transport = FakeTransport()
-        transport.dispatch_uncertain = True
-        result = GameExpClient(transport).candidate("EXP-21")
-        self.assertEqual(result["status"], "UNKNOWN")
-        self.assertFalse(result["retry_safe"])
-
-    def test_initialize_dispatches_only_canonical_experiment_id(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).initialize("EXP-42")
-        self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(result["experiment_id"], "EXP-42")
-        self.assertEqual(transport.dispatched[-1], {"initializer": "EXP-42"})
-
-    def test_initialize_rejects_noncanonical_id_before_dispatch(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).initialize("exp/42")
-        self.assertEqual(result["status"], "REJECTED")
-        self.assertEqual(transport.dispatched, [])
-
-    def test_initialize_uncertain_dispatch_is_retry_safe(self):
-        transport = FakeTransport()
-        transport.dispatch_uncertain = True
-        result = GameExpClient(transport).initialize("EXP-42")
-        self.assertEqual(result["status"], "UNKNOWN")
-        self.assertTrue(result["retry_safe"])
-
-    def test_rehearse_dispatches_only_canonical_experiment_id(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).rehearse("EXP-42")
-        self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(result["experiment_id"], "EXP-42")
-        self.assertEqual(transport.dispatched[-1], {"rehearsal": "EXP-42"})
-
-    def test_rehearse_rejects_noncanonical_id_before_dispatch(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).rehearse("exp/42")
-        self.assertEqual(result["status"], "REJECTED")
-        self.assertEqual(transport.dispatched, [])
-
-    def test_rehearse_uncertain_dispatch_is_retry_safe(self):
-        transport = FakeTransport()
-        transport.dispatch_uncertain = True
-        result = GameExpClient(transport).rehearse("EXP-42")
-        self.assertEqual(result["status"], "UNKNOWN")
-        self.assertTrue(result["retry_safe"])
-
-    def test_integrate_dispatches_proposal_workflow(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).integrate("EXP-21")
-        self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(transport.dispatched[-1], {"integration": "EXP-21"})
-
-    def test_integrate_finalize_dispatches_merged_pr_verifier(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).integrate_finalize("EXP-21", "77")
-        self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(
-            transport.dispatched[-1],
-            {"integration_finalize": "EXP-21", "pr_number": "77"},
+        start_execution.assert_called_once_with(
+            action="integrate_finalize",
+            experiment_id="EXP-21",
+            request_id="req_finalize_21",
+            arguments={"pr_number": "77"},
+            actor_claim=None,
         )
 
-    def test_integrate_finalize_rejects_invalid_pr_number(self):
-        result = GameExpClient(FakeTransport()).integrate_finalize("EXP-21", "0")
-        self.assertEqual(result["status"], "REJECTED")
-
-    def test_archive_dispatches_trusted_workflow(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).archive("EXP-21", "ATOMIC_DELETE")
+        with patch.object(
+            client,
+            "start_execution",
+            return_value={"status": "ACCEPTED"},
+        ) as start_execution:
+            result = client.archive(
+                "EXP-21",
+                "ATOMIC_DELETE",
+                request_id="req_archive_21",
+            )
         self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(
-            transport.dispatched[-1],
-            {"archive": "EXP-21", "mode": "ATOMIC_DELETE"},
+        start_execution.assert_called_once_with(
+            action="archive",
+            experiment_id="EXP-21",
+            request_id="req_archive_21",
+            arguments={"mode": "ATOMIC_DELETE"},
+            actor_claim=None,
         )
 
-    def test_archive_rejects_invalid_mode_before_dispatch(self):
-        transport = FakeTransport()
-        result = GameExpClient(transport).archive("EXP-21", "DELETE")
-        self.assertEqual(result["status"], "REJECTED")
-        self.assertEqual(transport.dispatched, [])
+    def test_async_validation_rejects_invalid_values_without_dispatch(self):
+        client = GameExpClient(FakeTransport())
+        invalid_id = client.initialize(
+            "exp/42",
+            request_id="req_invalid_id",
+        )
+        self.assertEqual(invalid_id["status"], "REJECTED")
 
-    def test_archive_uncertain_dispatch_is_retry_safe(self):
-        transport = FakeTransport()
-        transport.dispatch_uncertain = True
-        result = GameExpClient(transport).archive("EXP-21", "RETAIN_BRANCH")
-        self.assertEqual(result["status"], "UNKNOWN")
-        self.assertTrue(result["retry_safe"])
+        invalid_pr = client.integrate_finalize(
+            "EXP-21",
+            "0",
+            request_id="req_invalid_pr",
+        )
+        self.assertEqual(invalid_pr["status"], "REJECTED")
+
+        invalid_mode = client.archive(
+            "EXP-21",
+            "DELETE",
+            request_id="req_invalid_archive",
+        )
+        self.assertEqual(invalid_mode["status"], "REJECTED")
 
     def test_archive_abort_submits_human_gated_request(self):
         transport = FakeTransport()
@@ -1003,6 +1172,182 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertTrue(all(row["status"] == "PASS" for row in result["checks"]))
 
+
+    def _execution_claim_record(
+        self,
+        *,
+        action="candidate_build",
+        experiment_id="EXP-21",
+        arguments=None,
+        state=None,
+    ):
+        state = state or {
+            "experiment_id": experiment_id,
+            "lifecycle": "REVIEW",
+            "sequence": 1,
+            "last_decision_id": "req_prev",
+            "archive_lock": None,
+        }
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "execution.claim",
+            "input": {
+                "experiment_id": experiment_id,
+                "action": action,
+                "arguments": arguments or {},
+                "state_digest": digest_object(state),
+            },
+            "preconditions": {},
+        }
+        return state, {
+            "request_id": "req_exec_21",
+            "payload": payload,
+            "payload_digest": digest_object(payload),
+            "domain_status": "REQUEST_ONLY",
+            "domain_experiment_id": experiment_id,
+            "trusted_actor": {
+                "login": "alice",
+                "user_id": "1001",
+                "permission": "write",
+            },
+        }
+
+    def test_capabilities_expose_contract_without_treating_access_as_authority(self):
+        result = GameExpClient(FakeTransport()).capabilities()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["contract"]["version"], "1.0")
+        self.assertTrue(result["recovery"]["cross_interface"])
+        self.assertFalse(result["access_snapshot_authoritative_for_execution"])
+
+    def test_async_mutation_requires_stable_request_id(self):
+        result = GameExpClient(FakeTransport()).candidate("EXP-21")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("stable request_id", result["error"])
+
+    def test_operation_get_resolves_committed_execution_claim_without_resubmitting(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        result = GameExpClient(transport).operation_get("req_exec_21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "CLAIMED")
+        self.assertTrue(result["safe_to_resume"])
+        self.assertEqual(transport.dispatched, [])
+
+    def test_resume_execution_dispatches_same_claim_id_once(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        transport._ledger_json["experiments/EXP-21/state.json"] = state
+        result = GameExpClient(transport).resume_execution("req_exec_21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "DISPATCHED")
+        self.assertEqual(
+            transport.dispatched[-1],
+            {
+                "execution": "candidate_build",
+                "experiment_id": "EXP-21",
+                "request_id": "req_exec_21",
+                "arguments": {},
+            },
+        )
+
+    def test_resume_execution_rejects_state_drift_instead_of_redispatching(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        changed = dict(state)
+        changed["sequence"] = 2
+        transport._ledger_json["experiments/EXP-21/state.json"] = changed
+        result = GameExpClient(transport).resume_execution("req_exec_21")
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(
+            result["conflict_type"],
+            "EXECUTION_PRECONDITION_CHANGED",
+        )
+        self.assertEqual(transport.dispatched, [])
+
+    def test_same_operation_id_with_different_async_claim_is_conflict(self):
+        transport = FakeTransport()
+        _state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        result = GameExpClient(transport).start_execution(
+            action="rehearse",
+            experiment_id="EXP-21",
+            request_id="req_exec_21",
+        )
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "REQUEST_ID_CONFLICT")
+
+    def test_operation_get_reports_completed_worker_result(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        transport.execution_runs[("candidate_build", "req_exec_21")] = {
+            "databaseId": 900,
+            "displayTitle": "game-exp:candidate_build:req_exec_21",
+            "status": "completed",
+            "conclusion": "success",
+            "url": "https://github.com/owner/repo/actions/runs/900",
+        }
+        transport._ledger_json["experiments/EXP-21/state.json"] = state
+        result = GameExpClient(transport).operation_get("req_exec_21")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["operation_status"], "SUCCEEDED")
+
+    def test_notification_cursor_scope_and_incremental_resume(self):
+        client = GameExpClient(FakeTransport())
+        checkpoint = client._encode_notification_cursor(
+            {
+                "v": 1,
+                "kind": "checkpoint",
+                "snapshot": "a" * 40,
+                "viewer_login": "bob",
+                "subject_id": "arena-duel",
+            }
+        )
+        new_board = {"status": "PASS", "snapshot_head": "b" * 40}
+        old_board = {"status": "PASS", "snapshot_head": "a" * 40}
+        old_event = {
+            "event_id": "EXP-1:EXPERIMENT_CREATED:EXP-1",
+            "experiment_id": "EXP-1",
+            "occurred_at": "2026-09-26T00:00:00Z",
+            "_order": 0,
+        }
+        new_event = {
+            "event_id": "EXP-2:EXPERIMENT_CREATED:EXP-2",
+            "experiment_id": "EXP-2",
+            "occurred_at": "2026-09-27T00:00:00Z",
+            "_order": 0,
+        }
+        with (
+            patch.object(client, "board", side_effect=[new_board, old_board]),
+            patch.object(
+                client,
+                "_notification_rows",
+                side_effect=[[old_event, new_event], [old_event]],
+            ),
+        ):
+            result = client.notification_feed(
+                viewer_login="bob",
+                subject_id="arena-duel",
+                after=checkpoint,
+            )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(
+            [row["event_id"] for row in result["notifications"]],
+            ["EXP-2:EXPERIMENT_CREATED:EXP-2"],
+        )
+        self.assertTrue(result["checkpoint_ready"])
+        self.assertIsNotNone(result["checkpoint_cursor"])
+
+        mismatch = client.notification_feed(
+            viewer_login="bob",
+            subject_id="other",
+            after=checkpoint,
+        )
+        self.assertEqual(mismatch["code"], "CURSOR_SCOPE_MISMATCH")
 
     def test_notification_feed_rejects_invalid_limit(self):
         result = GameExpClient(FakeTransport()).notification_feed(limit=0)

@@ -39,9 +39,10 @@ Do not repeatedly force onboarding after the repository already has experiments.
 
 4. `建立实验`
    - resolve/create the real GitHub Issue through the host's authorized GitHub capability;
-   - Bind through `game_exp_experiment_bind`;
-   - reconcile ACCEPTED/UNKNOWN until authoritative;
-   - Initialize through `game_exp_initialize`.
+   - Bind through `game_exp_experiment_bind`; the agent generates the stable Manifest operation id internally;
+   - reconcile ACCEPTED/UNKNOWN with `game_exp_operation_get` / the same operation id until authoritative;
+   - Initialize through `game_exp_initialize` with a new stable request id for that Initialize operation;
+   - do not make the user invent or copy request ids manually.
 
 5. `开发与试玩`
    - source work happens on the canonical `exp/<issue>` branch;
@@ -79,7 +80,7 @@ Accept simple user intents such as:
 - `这个实验开发完成，进入评审`
 - `我试玩过了，PASS`
 
-Translate these intents to the existing trusted workflow. Do not require users to name MCP tools or lifecycle enums.
+Translate these intents to the existing trusted workflow. Do not require users to name MCP tools, lifecycle enums, or request ids. The agent must still generate and preserve stable ids internally for every mutation.
 
 ## Completion
 

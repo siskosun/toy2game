@@ -36,6 +36,8 @@ def _print_result(result: dict[str, Any], *, as_json: bool) -> None:
         print(f"request_id: {result['request_id']}")
     if result.get("repo"):
         print(f"repo: {result['repo']}")
+    if result.get("operation_status"):
+        print(f"operation_status: {result['operation_status']}")
     if result.get("workflow_url"):
         print(f"workflow: {result['workflow_url']}")
     if result.get("ledger_head"):
@@ -67,66 +69,121 @@ def _print_result(result: dict[str, Any], *, as_json: bool) -> None:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="game-exp",
-        description="Trusted request client for the game-exp protocol.",
+        description="Harness-neutral client for the trusted game-exp contract.",
     )
     ap.add_argument("--repo", help="GitHub repository in owner/name form")
     ap.add_argument("--json", action="store_true", help="emit JSON output")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("status", help="show target repository and Ledger head")
-    sub.add_parser("board", help="show lightweight snapshot of all experiments")
+    sub.add_parser("status", help="show repository and authoritative Ledger head")
+    sub.add_parser("access-check", help="show current repository access snapshot")
+    sub.add_parser("capabilities", help="show public contract/features and recovery support")
+
+    board = sub.add_parser("board", help="show one consistent experiment Board snapshot")
+    board.add_argument("--query")
+    board.add_argument("--subject-id")
+    board.add_argument("--lifecycle")
+    board.add_argument("--attention-only", action="store_true")
+
+    experiment = sub.add_parser("experiment", help="show one authoritative experiment")
+    experiment.add_argument("experiment_id")
+
+    subject = sub.add_parser("subject", help="show one subject/prototype panel")
+    subject.add_argument("subject_id")
+
+    handoff = sub.add_parser("handoff", help="build Godot Prototype Studio handoff package")
+    handoff.add_argument("experiment_id")
+
+    notifications = sub.add_parser("notifications", help="read resumable collaboration events")
+    notifications.add_argument("--viewer")
+    notifications.add_argument("--subject-id")
+    notifications.add_argument("--limit", type=int, default=50)
+    notifications.add_argument("--after", help="checkpoint cursor from a completed earlier feed")
+    notifications.add_argument("--cursor", help="page cursor within one pinned feed snapshot")
+
     doctor = sub.add_parser("doctor", help="validate trusted repository prerequisites")
-    doctor.add_argument(
-        "--experiment-id",
-        help="optionally include archive health for one experiment",
-    )
+    doctor.add_argument("--experiment-id")
 
-    req = sub.add_parser("request", help="submit a controlled operation request")
-    req.add_argument("operation", help="operation name, e.g. experiment.create")
-    req.add_argument("--input", help="operation input JSON object")
-    req.add_argument("--input-file", help="path to operation input JSON")
-    req.add_argument("--preconditions", help="preconditions JSON object")
-    req.add_argument("--preconditions-file", help="path to preconditions JSON")
-    req.add_argument("--actor-claim", help="descriptive actor claim; not an auth boundary")
-    req.add_argument("--request-id", help="stable idempotency key")
+    req = sub.add_parser("request", help="submit one low-level controlled operation request")
+    req.add_argument("operation")
+    req.add_argument("--input")
+    req.add_argument("--input-file")
+    req.add_argument("--preconditions")
+    req.add_argument("--preconditions-file")
+    req.add_argument("--actor-claim")
+    req.add_argument("--request-id", required=True, help="stable cross-interface idempotency key")
 
-    rec = sub.add_parser("reconcile", help="resolve an uncertain request from remote evidence")
-    rec.add_argument("request_id")
+    get_op = sub.add_parser("get-operation", help="resolve one operation without resubmitting it")
+    get_op.add_argument("request_id")
+    reconcile = sub.add_parser("reconcile", help="compatibility alias for get-operation")
+    reconcile.add_argument("request_id")
+    resume = sub.add_parser("resume-operation", help="resume only an already-claimed async operation")
+    resume.add_argument("request_id")
 
-    init = sub.add_parser("initialize", help="initialize canonical experiment source refs from Ledger")
-    init.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    init = sub.add_parser("initialize", help="initialize canonical experiment source refs")
+    init.add_argument("experiment_id")
+    init.add_argument("--request-id", required=True)
+    init.add_argument("--actor-claim")
+
+    candidate = sub.add_parser("candidate", help="build/register a trusted Candidate")
+    candidate.add_argument("experiment_id")
+    candidate.add_argument("--request-id", required=True)
+    candidate.add_argument("--actor-claim")
+
+    review = sub.add_parser("review", help="record an explicit human PASS/FAIL Review")
+    review.add_argument("experiment_id")
+    review.add_argument("--outcome", choices=("PASS", "FAIL"), required=True)
+    review.add_argument("--notes", required=True)
+    review.add_argument("--candidate-id")
+    review.add_argument("--request-id", required=True)
+    review.add_argument("--actor-claim")
+
+    decision = sub.add_parser("decision", help="submit an explicit human lifecycle decision")
+    decision.add_argument("experiment_id")
+    decision.add_argument("--to-state", required=True)
+    decision.add_argument("--reason", required=True)
+    decision.add_argument("--previous-decision-id")
+    decision.add_argument("--request-id", required=True)
+    decision.add_argument("--actor-claim")
 
     rehearse = sub.add_parser("rehearse", help="run trusted latest-main integration rehearsal")
-    rehearse.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    rehearse.add_argument("experiment_id")
+    rehearse.add_argument("--request-id", required=True)
+    rehearse.add_argument("--actor-claim")
 
-    integrate = sub.add_parser("integrate", help="create or reuse the trusted Integration PR")
-    integrate.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    integrate = sub.add_parser("integrate", help="create/reuse the trusted Integration PR")
+    integrate.add_argument("experiment_id")
+    integrate.add_argument("--request-id", required=True)
+    integrate.add_argument("--actor-claim")
 
     integrate_finalize = sub.add_parser(
         "integrate-finalize",
         help="verify a merged Integration PR and register INTEGRATED",
     )
-    integrate_finalize.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
-    integrate_finalize.add_argument("--pr-number", required=True, help="merged Integration PR number")
+    integrate_finalize.add_argument("experiment_id")
+    integrate_finalize.add_argument("--pr-number", required=True)
+    integrate_finalize.add_argument("--request-id", required=True)
+    integrate_finalize.add_argument("--actor-claim")
 
     archive = sub.add_parser("archive", help="run trusted recoverable Archive")
-    archive.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
+    archive.add_argument("experiment_id")
     archive.add_argument(
         "--mode",
         choices=("ATOMIC_DELETE", "RETAIN_BRANCH"),
         default="ATOMIC_DELETE",
-        help="archive ref policy",
     )
+    archive.add_argument("--request-id", required=True)
+    archive.add_argument("--actor-claim")
 
     archive_abort = sub.add_parser(
         "archive-abort",
-        help="abort an Archive only while it is still PREPARED",
+        help="abort Archive only while PREPARED and not yet claimed",
     )
-    archive_abort.add_argument("experiment_id", help="canonical experiment id, e.g. EXP-21")
-    archive_abort.add_argument("--archive-id", required=True, help="archive id, e.g. A-21-1")
-    archive_abort.add_argument("--reason", required=True, help="human reason for aborting")
-    archive_abort.add_argument("--actor-claim", help="descriptive actor claim; not an auth boundary")
-    archive_abort.add_argument("--request-id", help="stable idempotency key")
+    archive_abort.add_argument("experiment_id")
+    archive_abort.add_argument("--archive-id", required=True)
+    archive_abort.add_argument("--reason", required=True)
+    archive_abort.add_argument("--request-id", required=True)
+    archive_abort.add_argument("--actor-claim")
 
     return ap
 
@@ -141,8 +198,36 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "status":
             result = client.status()
+        elif args.command == "access-check":
+            result = client.access_check()
+        elif args.command == "capabilities":
+            result = client.capabilities()
+            result["interface"] = {
+                "type": "cli",
+                "transport": "local-process",
+                "write_identity": "local-gh-principal",
+            }
         elif args.command == "board":
-            result = client.board()
+            result = client.board(
+                query=args.query,
+                subject_id=args.subject_id,
+                lifecycle=args.lifecycle,
+                attention_only=args.attention_only,
+            )
+        elif args.command == "experiment":
+            result = client.experiment_get(args.experiment_id)
+        elif args.command == "subject":
+            result = client.subject_panel(args.subject_id)
+        elif args.command == "handoff":
+            result = client.prototype_handoff(args.experiment_id)
+        elif args.command == "notifications":
+            result = client.notification_feed(
+                viewer_login=args.viewer,
+                subject_id=args.subject_id,
+                limit=args.limit,
+                after=args.after,
+                cursor=args.cursor,
+            )
         elif args.command == "doctor":
             result = client.doctor(args.experiment_id)
         elif args.command == "request":
@@ -159,21 +244,119 @@ def main(argv: list[str] | None = None) -> int:
                 actor_claim=args.actor_claim,
                 request_id=args.request_id,
             )
-        elif args.command == "reconcile":
-            result = client.reconcile(args.request_id)
+        elif args.command in {"get-operation", "reconcile"}:
+            result = client.operation_get(args.request_id)
+        elif args.command == "resume-operation":
+            result = client.resume_execution(args.request_id)
         elif args.command == "initialize":
-            result = client.initialize(args.experiment_id)
+            result = client.initialize(
+                args.experiment_id,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
+        elif args.command == "candidate":
+            result = client.candidate(
+                args.experiment_id,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
+        elif args.command == "review":
+            candidate_id = args.candidate_id
+            if candidate_id is None:
+                projection = client.experiment_get(args.experiment_id)
+                if projection.get("status") != "PASS":
+                    result = projection
+                else:
+                    candidate_id = projection.get("state", {}).get("current_candidate_id")
+                    if not isinstance(candidate_id, str) or not candidate_id:
+                        result = {
+                            "status": "REJECTED",
+                            "repo": client.transport.repo,
+                            "experiment_id": args.experiment_id,
+                            "request_id": args.request_id,
+                            "error": "experiment has no current Candidate",
+                        }
+                    else:
+                        result = client.submit(
+                            operation="review.record",
+                            input_value={
+                                "experiment_id": args.experiment_id,
+                                "candidate_id": candidate_id,
+                                "outcome": args.outcome,
+                                "notes": args.notes,
+                            },
+                            actor_claim=args.actor_claim,
+                            request_id=args.request_id,
+                        )
+            else:
+                result = client.submit(
+                    operation="review.record",
+                    input_value={
+                        "experiment_id": args.experiment_id,
+                        "candidate_id": candidate_id,
+                        "outcome": args.outcome,
+                        "notes": args.notes,
+                    },
+                    actor_claim=args.actor_claim,
+                    request_id=args.request_id,
+                )
+        elif args.command == "decision":
+            previous_decision_id = args.previous_decision_id
+            if previous_decision_id is None:
+                projection = client.experiment_get(args.experiment_id)
+                if projection.get("status") != "PASS":
+                    result = projection
+                else:
+                    previous_decision_id = projection.get("state", {}).get("last_decision_id")
+                    result = client.submit(
+                        operation="experiment.decision",
+                        input_value={
+                            "experiment_id": args.experiment_id,
+                            "to_state": args.to_state,
+                            "previous_decision_id": previous_decision_id,
+                            "reason": args.reason,
+                        },
+                        actor_claim=args.actor_claim,
+                        request_id=args.request_id,
+                    )
+            else:
+                result = client.submit(
+                    operation="experiment.decision",
+                    input_value={
+                        "experiment_id": args.experiment_id,
+                        "to_state": args.to_state,
+                        "previous_decision_id": previous_decision_id,
+                        "reason": args.reason,
+                    },
+                    actor_claim=args.actor_claim,
+                    request_id=args.request_id,
+                )
         elif args.command == "rehearse":
-            result = client.rehearse(args.experiment_id)
+            result = client.rehearse(
+                args.experiment_id,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
         elif args.command == "integrate":
-            result = client.integrate(args.experiment_id)
+            result = client.integrate(
+                args.experiment_id,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
         elif args.command == "integrate-finalize":
             result = client.integrate_finalize(
                 args.experiment_id,
                 args.pr_number,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
             )
         elif args.command == "archive":
-            result = client.archive(args.experiment_id, args.mode)
+            result = client.archive(
+                args.experiment_id,
+                args.mode,
+                request_id=args.request_id,
+                actor_claim=args.actor_claim,
+            )
         elif args.command == "archive-abort":
             result = client.archive_abort(
                 args.experiment_id,
