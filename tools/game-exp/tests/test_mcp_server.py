@@ -235,6 +235,7 @@ class MCPServerTests(unittest.TestCase):
             {
                 "game_exp_conformance_suite",
                 "game_exp_conformance_start",
+                "game_exp_conformance_compare",
                 "game_exp_conformance_result",
                 "game_exp_status",
                 "game_exp_access_check",
@@ -308,6 +309,28 @@ class MCPServerTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "ACCEPTED")
                 self.assertTrue(result["conformance_simulation"])
+
+    def test_conformance_compare_rejects_regression(self):
+        baseline = {
+            "suite_id": "game-exp-standing-v1",
+            "suite_digest": "sha256:" + "a" * 64,
+            "eligible_for_real_repo_test": True,
+            "passed_count": 6,
+            "scenarios": [
+                {"scenario_id": "lost-response-recovery", "status": "PASS"},
+            ],
+        }
+        candidate = {
+            **baseline,
+            "eligible_for_real_repo_test": False,
+            "passed_count": 5,
+            "scenarios": [
+                {"scenario_id": "lost-response-recovery", "status": "FAIL"},
+            ],
+        }
+        result = mcp_server.game_exp_conformance_compare(baseline, candidate)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(len(result["regressions"]), 1)
 
     def test_tool_schemas_are_explicit(self):
         tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
