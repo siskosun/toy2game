@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.12.0")
+        self.assertEqual(manifest["version"], "0.13.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -50,6 +50,10 @@ class GameExpSkillContractTests(unittest.TestCase):
         content = SKILL.read_text(encoding="utf-8")
         self.assertRegex(content, r"(?s)^---\nname: game-exp\ndescription: .+?\n---")
         required_tools = {
+            "game_exp_conformance_suite",
+            "game_exp_conformance_start",
+            "game_exp_conformance_result",
+            "game_exp_conformance_compare",
             "game_exp_status",
             "game_exp_access_check",
             "game_exp_capabilities",
@@ -173,6 +177,34 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "exploration-thread.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "notifications.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "public-contract.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "conformance.md").exists())
+
+    def test_conformance_contract_is_screening_only(self):
+        skill = SKILL.read_text(encoding="utf-8")
+        reference = (
+            PLUGIN / "skills" / "game-exp" / "references" / "conformance.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "## Harness conformance screening",
+            "eligible_for_real_repo_test=true",
+            "game_exp_conformance_suite",
+            "game_exp_conformance_start",
+            "game_exp_conformance_result",
+            "game_exp_conformance_compare",
+            "same `suite_digest`",
+        ):
+            self.assertIn(phrase, skill)
+        for phrase in (
+            "game-exp-standing-v1",
+            "lost-response-recovery",
+            "authorization-no-fallback",
+            "review-bound-to-candidate",
+            "stale-rehearsal-refresh",
+            "dependency-review-required",
+            "human-gate-preserved",
+            "not a substitute for trusted end-to-end validation",
+        ):
+            self.assertIn(phrase, reference)
 
     def test_chat_inline_ui_contract_is_read_only_and_has_fallback(self):
         content = (
