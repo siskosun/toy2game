@@ -241,7 +241,17 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _configure_windows_stdio_utf8() -> None:
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_windows_stdio_utf8()
     ap = build_parser()
     args = ap.parse_args(argv)
 
