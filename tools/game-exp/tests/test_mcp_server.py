@@ -160,6 +160,15 @@ class FakeClient:
             "actor_claim": actor_claim,
         }
 
+    def abandon(self, experiment_id, reason, *, request_id=None, actor_claim=None):
+        return {
+            "status": "ACCEPTED",
+            "experiment_id": experiment_id,
+            "reason": reason,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
+        }
+
     def candidate(self, experiment_id, *, request_id=None, actor_claim=None):
         return {
             "status": "ACCEPTED",
@@ -263,6 +272,7 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_candidate_build",
                 "game_exp_review_record",
                 "game_exp_decision_submit",
+                "game_exp_abandon",
                 "game_exp_rehearse",
                 "game_exp_integrate",
                 "game_exp_integrate_finalize",
@@ -381,6 +391,11 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(submit.idempotent_hint)
         self.assertTrue(submit.open_world_hint)
 
+        abandon = tools["game_exp_abandon"].annotations
+        self.assertFalse(abandon.read_only_hint)
+        self.assertTrue(abandon.destructive_hint)
+        self.assertTrue(abandon.idempotent_hint)
+
         archive = tools["game_exp_archive"].annotations
         self.assertFalse(archive.read_only_hint)
         self.assertTrue(archive.destructive_hint)
@@ -450,6 +465,18 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(doctor["status"], "PASS")
         self.assertEqual(request["status"], "COMMITTED")
         self.assertEqual(operation["status"], "COMMITTED")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_abandon_delegates_explicit_stop_without_review(self, _):
+        result = mcp_server.game_exp_abandon(
+            "EXP-21",
+            "product priority changed",
+            "req_abandon_21",
+            repo="owner/repo",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["experiment_id"], "EXP-21")
+        self.assertEqual(result["reason"], "product priority changed")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_operation_resume_delegates_same_id(self, _):
