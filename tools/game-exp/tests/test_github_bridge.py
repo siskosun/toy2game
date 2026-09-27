@@ -147,6 +147,20 @@ class GitHubBridgeTests(unittest.TestCase):
             request_id="req_bridge_archive_50",
         )
 
+    @patch("github_bridge._token", return_value="token")
+    @patch("github_bridge.subprocess.run")
+    def test_worker_dispatch_failure_is_unknown_not_rejected(self, run, _token):
+        run.return_value.returncode = 1
+        run.return_value.stdout = ""
+        run.return_value.stderr = "network uncertain"
+        with self.assertRaises(github_bridge.BridgeUncertainError):
+            github_bridge._dispatch_workflow(
+                "owner/repo",
+                "game-exp-candidate.yml",
+                {"experiment_id": "EXP-50"},
+                request_id="req_bridge_candidate_50",
+            )
+
     def test_marker_is_request_scoped(self):
         self.assertEqual(
             github_bridge._marker("req_bridge_50", "claim"),
