@@ -1,5 +1,5 @@
 name: game-exp trusted writer
-run-name: game-exp:request:${{ inputs.request_id }}:${{ inputs.payload_digest }}
+run-name: game-exp:request:${{ inputs.request_id }}:${{ inputs.payload_digest }}:${{ inputs.expected_head }}
 
 concurrency:
   group: game-exp-request-${{ inputs.request_id }}
@@ -59,6 +59,7 @@ jobs:
             --request-id "${{ inputs.request_id }}" \
             --payload-b64 "${{ inputs.payload_b64 }}" \
             --payload-digest "${{ inputs.payload_digest }}" \
+            --expected-head "${{ inputs.expected_head }}" \
             --run-id "${{ github.run_id }}"
 
   mutate-ledger:
