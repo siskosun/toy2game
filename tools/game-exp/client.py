@@ -2126,6 +2126,24 @@ class GameExpClient:
         viewer_login: str | None,
     ) -> list[dict[str, Any]]:
         items = board.get("experiments", [])
+        resolver = getattr(self.transport, "collaborator_permission", None)
+        access_cache: dict[str, bool] = {}
+
+        def has_repo_access(login: str) -> bool:
+            if login in access_cache:
+                return access_cache[login]
+            permission = resolver(login) if callable(resolver) else None
+            allowed = permission in {
+                "pull",
+                "read",
+                "triage",
+                "push",
+                "write",
+                "maintain",
+                "admin",
+            }
+            access_cache[login] = allowed
+            return allowed
         by_subject: dict[str, list[dict[str, Any]]] = {}
         for item in items:
             sid = item.get("subject_id")
@@ -2168,6 +2186,7 @@ class GameExpClient:
                     login
                     for login in participants
                     if not (isinstance(actor, str) and login == actor)
+                    and has_repo_access(login)
                 )
                 if viewer_login is not None and viewer_login not in targets:
                     continue
@@ -2206,7 +2225,9 @@ class GameExpClient:
                 event_id = (
                     f'{item.get("experiment_id")}:DEPENDENCY_REVIEW_REQUIRED:{target_id}'
                 )
-                targets = sorted(participants)
+                targets = sorted(
+                    login for login in participants if has_repo_access(login)
+                )
                 if viewer_login is not None and viewer_login not in targets:
                     continue
                 notifications.append(
@@ -2417,6 +2438,7 @@ class GameExpClient:
             "viewer_login": viewer,
             "viewer_permission_snapshot": permission,
             "viewer_permission_authoritative_for_future_delivery": False,
+            "recipient_access_filtered": True,
             "subject_id": subject,
             "count": len(page_rows),
             "total_available": total_available,
@@ -2428,6 +2450,7 @@ class GameExpClient:
                 "source": "ledger-derived",
                 "event_schema_version": 1,
                 "dedupe_by": "event_id",
+                "recipient_access_filter": "current repository collaborator permission",
                 "pagination": "cursor",
                 "resume": "after checkpoint_cursor",
                 "game_exp_sends_messages": False,
