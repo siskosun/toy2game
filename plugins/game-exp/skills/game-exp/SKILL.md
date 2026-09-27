@@ -1,6 +1,6 @@
 ---
 name: game-exp
-description: Orchestrate trusted game experiments through either native game-exp MCP tools or the repository GitHub Issue-comment bridge, plus an authorized source-editing workflow. Use in ChatGPT or Codex when the user wants to create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose a game-exp-managed gameplay/prototype experiment. Preserve human Review/selection gates, reconcile asynchronous requests against the protected Ledger, respect experiment scope, and never bypass the Trusted Writer or protected refs.
+description: Create and operate complete trusted game-exp repositories and gameplay/prototype experiments through MCP, CLI, or the GitHub Bridge. Use when the user wants to bootstrap a new game-exp project/repository; create, continue, inspect, review, promote, select, integrate, archive, recover, or diagnose an experiment; validate repository trust prerequisites; or recover cross-interface operations. Require PROJECT_READY trust setup before first-experiment onboarding, preserve human gates, and never bypass the Trusted Writer or protected refs.
 ---
 
 # game-exp
