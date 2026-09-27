@@ -74,10 +74,13 @@ def _gh_api(
     check: bool = True,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
+    endpoint = f"repos/{repo}"
+    if suffix:
+        endpoint += f"/{suffix.lstrip('/')}"
     command = [
         "gh",
         "api",
-        f"repos/{repo}/{suffix.lstrip('/')}",
+        endpoint,
         "-H",
         "Accept: application/vnd.github+json",
         "-H",
