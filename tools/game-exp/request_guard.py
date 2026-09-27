@@ -16,7 +16,8 @@ class RequestGuardError(RuntimeError):
 
 
 TITLE_RE = re.compile(
-    r"^game-exp:request:([A-Za-z0-9][A-Za-z0-9_.-]{0,95}):(sha256:[0-9a-f]{64})$"
+    r"^game-exp:request:([A-Za-z0-9][A-Za-z0-9_.-]{0,95}):"
+    r"(sha256:[0-9a-f]{64}):([0-9a-f]{40})$"
 )
 
 
@@ -48,9 +49,12 @@ def decide_request_identity(
     request_id: str,
     payload_b64: str,
     payload_digest: str,
+    expected_head: str,
     run_id: str,
 ) -> dict[str, Any]:
     validate_request_id(request_id)
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
+        raise RequestGuardError("expected_head must be a 40-character SHA")
     if not run_id.isdigit():
         raise RequestGuardError("run_id must be a decimal string")
     payload = decode_payload_b64(payload_b64)
@@ -82,6 +86,7 @@ def decide_request_identity(
                         {
                             "id": row.get("id"),
                             "digest": match.group(2),
+                            "expected_head": match.group(3),
                             "title": title,
                         }
                     )
@@ -101,7 +106,7 @@ def decide_request_identity(
             f"current workflow run {current} was not discoverable for request {request_id}"
         )
     first = valid[0]
-    if first["digest"] != payload_digest:
+    if first["digest"] != payload_digest or first["expected_head"] != expected_head:
         return {
             "status": "CONFLICT",
             "conflict_type": "REQUEST_ID_CONFLICT",
@@ -110,6 +115,8 @@ def decide_request_identity(
             "first_run_id": str(first["id"]),
             "first_payload_digest": first["digest"],
             "new_payload_digest": payload_digest,
+            "first_expected_head": first["expected_head"],
+            "new_expected_head": expected_head,
         }
     return {
         "status": "PASS",
@@ -117,6 +124,7 @@ def decide_request_identity(
         "run_id": run_id,
         "first_run_id": str(first["id"]),
         "payload_digest": payload_digest,
+        "expected_head": expected_head,
     }
 
 
@@ -127,6 +135,7 @@ def main() -> int:
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--payload-b64", required=True)
     parser.add_argument("--payload-digest", required=True)
+    parser.add_argument("--expected-head", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--github-output")
     args = parser.parse_args()
@@ -137,6 +146,7 @@ def main() -> int:
         request_id=args.request_id,
         payload_b64=args.payload_b64,
         payload_digest=args.payload_digest,
+        expected_head=args.expected_head,
         run_id=args.run_id,
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
