@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -643,10 +644,11 @@ def _latest_selftest_run(repo: str, not_before: float) -> dict[str, Any] | None:
         if not isinstance(created, str):
             continue
         try:
-            stamp = time.mktime(time.strptime(created, "%Y-%m-%dT%H:%M:%SZ"))
+            stamp = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            epoch = stamp.astimezone(timezone.utc).timestamp()
         except ValueError:
             continue
-        if stamp >= not_before - 10:
+        if epoch >= not_before - 10:
             return row
     return None
 
