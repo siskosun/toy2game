@@ -14,7 +14,7 @@ from typing import Any
 
 import archive_runner
 from client import GameExpClient, GitHubTransport
-from protocol_core import build_operation_payload, encode_payload_b64, validate_request_id
+from protocol_core import build_operation_payload, digest_object, encode_payload_b64, validate_request_id
 
 
 class BridgeError(RuntimeError):
@@ -34,6 +34,7 @@ WORKFLOW_ACTIONS = {
         "game-exp-integration-finalize.yml",
         ("experiment_id", "pr_number"),
     ),
+    "archive": ("game-exp-archive.yml", ("experiment_id", "mode")),
 }
 
 ACTION_KEYS = {
@@ -284,6 +285,8 @@ def _dispatch_workflow(
     repo: str,
     workflow: str,
     fields: dict[str, str],
+    *,
+    request_id: str,
 ) -> dict[str, Any]:
     command = [
         "gh",
@@ -294,6 +297,8 @@ def _dispatch_workflow(
         repo,
         "--ref",
         "main",
+        "-f",
+        f"request_id={request_id}",
     ]
     for key, value in fields.items():
         command.extend(["-f", f"{key}={value}"])
@@ -319,6 +324,60 @@ def _dispatch_workflow(
     }
 
 
+def _claim_async_execution(
+    command: dict[str, Any],
+    *,
+    repo: str,
+    actor_login: str,
+    comment_id: str,
+    ssh_key: str,
+    run_id: str,
+    run_attempt: str,
+    workflow_source_sha: str,
+) -> dict[str, Any]:
+    action = str(command["action"])
+    experiment_id = str(command["experiment_id"])
+    transport = GitHubTransport(repo)
+    head = transport.ledger_head()
+    state = transport.ledger_json(
+        f"experiments/{experiment_id}/state.json",
+        ref=head,
+    )
+    if not isinstance(state, dict):
+        raise BridgeError("experiment state is unavailable for execution claim")
+    arguments = {
+        key: command[key]
+        for key in ("pr_number", "mode")
+        if key in command
+    }
+    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
+    payload = build_operation_payload(
+        "execution.claim",
+        {
+            "experiment_id": experiment_id,
+            "action": action,
+            "arguments": arguments,
+            "state_digest": digest_object(state),
+        },
+        actor_claim=actor_claim,
+    )
+    result = submit_writer(
+        repo,
+        command["request_id"],
+        payload,
+        ssh_key=ssh_key,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        workflow_source_sha=workflow_source_sha,
+    )
+    if result.get("status") != "COMMITTED":
+        raise BridgeError(
+            "async execution claim did not commit: "
+            + json.dumps(result, ensure_ascii=False, sort_keys=True)
+        )
+    return result
+
+
 def execute_action(
     command: dict[str, Any],
     *,
@@ -336,12 +395,28 @@ def execute_action(
     if action == "status":
         return GameExpClient(GitHubTransport(repo)).experiment_get(str(experiment_id))
 
+    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
+
     if action in WORKFLOW_ACTIONS:
+        _claim_async_execution(
+            command,
+            repo=repo,
+            actor_login=actor_login,
+            comment_id=comment_id,
+            ssh_key=ssh_key,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            workflow_source_sha=workflow_source_sha,
+        )
         workflow, field_names = WORKFLOW_ACTIONS[action]
         fields = {name: str(command[name]) for name in field_names}
-        return _dispatch_workflow(repo, workflow, fields)
+        return _dispatch_workflow(
+            repo,
+            workflow,
+            fields,
+            request_id=command["request_id"],
+        )
 
-    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
     if action == "bind":
         payload = build_operation_payload(
             "experiment.bind",
@@ -419,43 +494,6 @@ def execute_action(
             run_attempt=run_attempt,
             workflow_source_sha=workflow_source_sha,
         )
-
-    if action == "archive":
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).with_name("archive_runner.py")),
-                "--repo",
-                repo,
-                "--experiment-id",
-                command["experiment_id"],
-                "--mode",
-                command["mode"],
-                "--ssh-key",
-                ssh_key,
-                "--run-id",
-                run_id,
-                "--run-attempt",
-                run_attempt,
-                "--workflow-source-sha",
-                workflow_source_sha,
-                "--actor-login",
-                actor_login,
-            ],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=900,
-        )
-        lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        result = json.loads(lines[-1]) if lines else {}
-        if proc.returncode != 0:
-            raise BridgeError(
-                f"archive bridge failed ({proc.returncode}): "
-                + json.dumps(result, ensure_ascii=False)
-                + proc.stderr[-1200:]
-            )
-        return result
 
     raise BridgeError(f"unhandled action {action!r}")
 
