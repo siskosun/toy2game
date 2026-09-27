@@ -356,6 +356,8 @@ def _dispatch_workflow(
         proc = subprocess.run(
             command,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
