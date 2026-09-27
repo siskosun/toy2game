@@ -9,6 +9,7 @@ from mcp.types import ToolAnnotations
 from client import GameExpClient, GitHubTransport
 from conformance_core import (
     ConformanceClient,
+    compare_reports as conformance_compare_reports,
     evaluate as conformance_evaluate,
     load_session as conformance_load_session,
     save_session as conformance_save_session,
@@ -94,6 +95,15 @@ def game_exp_conformance_start(
         "suite_digest": session["suite_digest"],
         "task_zh": session["task_zh"],
     }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def game_exp_conformance_compare(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare two screening reports only when their suite digest is identical."""
+    return conformance_compare_reports(baseline, candidate)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
