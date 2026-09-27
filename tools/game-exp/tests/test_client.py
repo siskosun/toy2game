@@ -1155,7 +1155,7 @@ class ClientTests(unittest.TestCase):
         transport._ledger_json["experiments/EXP-31/manifest.json"] = manifest
         self._add_valid_board_binding(transport, "EXP-31", manifest)
 
-        result = client = GameExpClient(transport).board()
+        result = GameExpClient(transport).board()
         self.assertEqual(result["status"], "PASS")
         row = result["experiments"][0]
         self.assertEqual(row["lifecycle"], "ABANDONED")
