@@ -6,7 +6,6 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from protocol_core import contract_descriptor, digest_object, validate_request_id
@@ -14,6 +13,7 @@ from protocol_core import contract_descriptor, digest_object, validate_request_i
 CONFORMANCE_SCHEMA_VERSION = 1
 STANDING_SUITE_ID = "game-exp-standing-v1"
 STANDING_SUITE_VERSION = "1.0"
+STANDING_EVALUATOR_VERSION = "1"
 
 MUTATING_TOOLS = {
     "game_exp_request_submit",
@@ -169,6 +169,7 @@ def _suite_descriptor_without_digest() -> dict[str, Any]:
                 "scenario_id": scenario_id,
                 "title_zh": scenario["title_zh"],
                 "severity": scenario["severity"],
+                "evaluator_version": STANDING_EVALUATOR_VERSION,
                 "scenario_digest": digest_object(
                     {
                         "scenario_id": scenario_id,
@@ -176,6 +177,8 @@ def _suite_descriptor_without_digest() -> dict[str, Any]:
                         "severity": scenario["severity"],
                         "task_zh": scenario["task_zh"],
                         "initial_state": scenario["initial_state"],
+                        "known_operations": scenario.get("known_operations", {}),
+                        "evaluator_version": STANDING_EVALUATOR_VERSION,
                     }
                 ),
             }
@@ -741,6 +744,66 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "scenario_count": len(scenario_rows),
         "passed_count": sum(1 for row in scenario_rows if row["status"] == "PASS"),
         "scenarios": scenario_rows,
+    }
+
+
+def compare_reports(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    for label, report in (("baseline", baseline), ("candidate", candidate)):
+        if not isinstance(report, dict):
+            raise ValueError(f"{label} report must be an object")
+        if report.get("suite_id") != STANDING_SUITE_ID:
+            raise ValueError(f"{label} report uses a different suite")
+    if baseline.get("suite_digest") != candidate.get("suite_digest"):
+        return {
+            "status": "CONFLICT",
+            "code": "CONFORMANCE_SUITE_MISMATCH",
+            "baseline_suite_digest": baseline.get("suite_digest"),
+            "candidate_suite_digest": candidate.get("suite_digest"),
+            "comparable": False,
+        }
+
+    def rows(report: dict[str, Any]) -> dict[str, str]:
+        return {
+            row["scenario_id"]: str(row.get("status"))
+            for row in report.get("scenarios", [])
+            if isinstance(row, dict) and isinstance(row.get("scenario_id"), str)
+        }
+
+    before = rows(baseline)
+    after = rows(candidate)
+    regressions = []
+    improvements = []
+    unchanged = []
+    for scenario_id in sorted(set(before) | set(after)):
+        old = before.get(scenario_id, "MISSING")
+        new = after.get(scenario_id, "MISSING")
+        row = {
+            "scenario_id": scenario_id,
+            "baseline_status": old,
+            "candidate_status": new,
+        }
+        if old == "PASS" and new != "PASS":
+            regressions.append(row)
+        elif old != "PASS" and new == "PASS":
+            improvements.append(row)
+        else:
+            unchanged.append(row)
+
+    eligible = bool(candidate.get("eligible_for_real_repo_test")) and not regressions
+    return {
+        "status": "PASS" if eligible else "FAIL",
+        "comparable": True,
+        "suite_id": STANDING_SUITE_ID,
+        "suite_digest": candidate.get("suite_digest"),
+        "eligible_for_real_repo_test": eligible,
+        "regressions": regressions,
+        "improvements": improvements,
+        "unchanged": unchanged,
+        "baseline_passed_count": baseline.get("passed_count"),
+        "candidate_passed_count": candidate.get("passed_count"),
     }
 
 
