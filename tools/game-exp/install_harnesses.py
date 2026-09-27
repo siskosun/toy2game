@@ -53,11 +53,29 @@ def _atomic_replace_dir(source: pathlib.Path, target: pathlib.Path) -> None:
             shutil.rmtree(backup)
 
 
-def _copy_tree_atomic(source: pathlib.Path, target: pathlib.Path) -> None:
+def _sync_tree_filewise(source: pathlib.Path, target: pathlib.Path) -> None:
+    """Fallback for Windows when a live process keeps the target directory open.
+
+    Each file is still replaced atomically, so a live Harness never observes a
+    partially-written managed file. Extra target files are left in place; the
+    runtime validator only trusts the managed game-exp surface.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    for src in sorted(p for p in source.rglob("*") if p.is_file()):
+        rel = src.relative_to(source)
+        _atomic_write(target / rel, src.read_bytes())
+
+
+def _copy_tree_atomic(source: pathlib.Path, target: pathlib.Path) -> str:
     stage = target.with_name(target.name + ".stage-" + uuid.uuid4().hex)
     try:
         shutil.copytree(source, stage)
-        _atomic_replace_dir(stage, target)
+        try:
+            _atomic_replace_dir(stage, target)
+            return "directory-swap"
+        except PermissionError:
+            _sync_tree_filewise(stage, target)
+            return "filewise-fallback"
     finally:
         if stage.exists():
             shutil.rmtree(stage)
@@ -185,13 +203,19 @@ class HarnessInstaller:
             if servers is not None and not isinstance(servers, dict):
                 raise HarnessInstallError(f"mcpServers must be an object: {path}")
 
-    def _install_runtime(self) -> None:
+    def _install_runtime(self) -> str:
         stage = self._stage_runtime()
         old_cwd = pathlib.Path.cwd()
+        mode = "directory-swap"
         try:
-            # Windows can refuse directory renames when cwd is inside the tree.
+            # Windows can refuse directory renames when a running MCP process,
+            # file watcher, or cwd keeps the managed directory open.
             os.chdir(self.home)
-            _atomic_replace_dir(stage, self.runtime_dir)
+            try:
+                _atomic_replace_dir(stage, self.runtime_dir)
+            except PermissionError:
+                _sync_tree_filewise(stage, self.runtime_dir)
+                mode = "filewise-fallback"
         finally:
             try:
                 os.chdir(old_cwd)
@@ -200,19 +224,26 @@ class HarnessInstaller:
             if stage.exists():
                 shutil.rmtree(stage, ignore_errors=True)
         self._validate_runtime(self.runtime_dir)
+        return mode
 
-    def _install_skills(self) -> dict[str, str]:
+    def _install_skills(self) -> tuple[dict[str, str], dict[str, str]]:
         source = self.runtime_dir / "plugins" / "game-exp" / "skills" / "game-exp"
         agents_target = self.home / ".agents" / "skills" / "game-exp"
         qoder_target = self.home / ".qoder" / "skills" / "game-exp"
-        _copy_tree_atomic(source, agents_target)
-        _copy_tree_atomic(source, qoder_target)
-        return {
-            "shared_agents": str(agents_target),
-            "qoder": str(qoder_target),
-            "cursor": str(agents_target),
-            "codex": str(agents_target),
-        }
+        agents_mode = _copy_tree_atomic(source, agents_target)
+        qoder_mode = _copy_tree_atomic(source, qoder_target)
+        return (
+            {
+                "shared_agents": str(agents_target),
+                "qoder": str(qoder_target),
+                "cursor": str(agents_target),
+                "codex": str(agents_target),
+            },
+            {
+                "shared_agents": agents_mode,
+                "qoder": qoder_mode,
+            },
+        )
 
     def _mcp_json_entry(self) -> dict[str, Any]:
         return {
@@ -279,8 +310,8 @@ class HarnessInstaller:
             )
         self._preflight_configs()
 
-        self._install_runtime()
-        skills = self._install_skills()
+        runtime_update_mode = self._install_runtime()
+        skills, skill_update_modes = self._install_skills()
         configs = {
             "codex": str(self._install_codex()),
             "qoder": str(
@@ -295,7 +326,9 @@ class HarnessInstaller:
             "version": self.version,
             "runtime_dir": str(self.runtime_dir),
             "mcp_script": str(self.mcp_script),
+            "runtime_update_mode": runtime_update_mode,
             "skills": skills,
+            "skill_update_modes": skill_update_modes,
             "configs": configs,
             "repo_binding": "dynamic",
             "next_zh": (
