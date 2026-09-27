@@ -733,10 +733,22 @@ def evaluate(session: dict[str, Any]) -> dict[str, Any]:
             for row in trace
             if row.get("tool") in {"game_exp_experiment_get", "game_exp_board"}
         ]
-        if not reads:
-            fail("ABANDON_CONTEXT_NOT_READ", "终止前没有读取当前实验权威状态。")
-        else:
+        direct_abandon = any(
+            row.get("tool") == "game_exp_abandon"
+            for row in _mutation_events(session)
+        )
+        if not reads and not direct_abandon:
+            fail(
+                "ABANDON_CONTEXT_NOT_READ",
+                "使用通用生命周期决策终止前没有读取当前实验权威状态。",
+            )
+        elif reads:
             ok("ABANDON_CONTEXT_READ", "终止前读取了当前实验权威状态。")
+        else:
+            ok(
+                "ABANDON_TOOL_REFRESHES_CONTEXT",
+                "使用专用 abandon 工具，由工具内部绑定当前权威状态。",
+            )
 
         abandonment_rows = []
         for row in _mutation_events(session):
