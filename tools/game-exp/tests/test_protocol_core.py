@@ -61,6 +61,13 @@ class ProtocolCoreTests(unittest.TestCase):
         descriptor = contract_descriptor()
         self.assertEqual(descriptor["version"], PUBLIC_CONTRACT_VERSION)
         self.assertEqual(descriptor["major"], 1)
+        self.assertEqual(descriptor["manifest_schema_versions"], [1, 2])
+        self.assertEqual(descriptor["recommended_manifest_schema_version"], 2)
+        self.assertEqual(descriptor["project_policy_schema_versions"], [1, 2])
+        self.assertEqual(
+            descriptor["recommended_project_policy_schema_version"],
+            2,
+        )
         self.assertEqual(
             descriptor["recovery"]["accepted_or_unknown"],
             "QUERY_SAME_REQUEST_ID",
