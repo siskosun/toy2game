@@ -16,12 +16,17 @@ Show first-use onboarding when any of these is true:
 - the user explicitly asks how to start or says they are using game-exp for the first time;
 - the user opens the Board and no valid experiment exists yet.
 
+Prefer the `project` and `onboarding` blocks returned by `game_exp_board`. They are the cross-Harness current-state projection. Do not override them with old chat context, cached preflight output, or remembered repository visibility.
+
+If `project.readiness=PROJECT_READY`, repository setup is complete. In an empty repository this means onboarding starts at step 2, `描述第一个实验`; do not rerun or recommend `project-init`.
+
 Do not repeatedly force onboarding after the repository already has experiments. Provide a visible `新手引导` entry instead.
 
 ## Six-step flow
 
 1. `连接检查`
-   - confirm repo-level `game_exp_doctor` is PASS; if not, route to `references/project-setup.md`;
+   - if the Board already returns `project.readiness=PROJECT_READY`, treat this step as complete and continue to step 2;
+   - otherwise confirm repo-level `game_exp_doctor` is PASS; if not, route to `references/project-setup.md`;
    - run `game_exp_access_check` and classify access as `NO_ACCESS`, `READ_ONLY`, `WRITE`, or `ADMIN`;
    - `NO_ACCESS`: explain that the repository cannot be read and stop;
    - `READ_ONLY`: allow Board viewing but disable creating or advancing experiments; ask for repository write permission or another repository;
@@ -62,9 +67,11 @@ Do not repeatedly force onboarding after the repository already has experiments.
 
 When Chat inline UI is supported, empty repositories should render an onboarding card instead of only `暂无实验`.
 
+Use the Board response's `onboarding` fields directly when available.
+
 Show:
 
-- progress: `1/6` through `6/6`;
+- progress: `1/6` through `6/6`; a ready empty repository normally shows `2/6`;
 - current step title;
 - one-sentence explanation;
 - one primary next action;
