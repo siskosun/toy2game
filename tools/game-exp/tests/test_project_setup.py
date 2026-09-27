@@ -17,6 +17,16 @@ def completed(args=None, returncode=0, stdout="", stderr=""):
 
 
 class ProjectSetupTests(unittest.TestCase):
+    def test_repository_metadata_uses_canonical_endpoint(self):
+        with patch(
+            "project_setup._run",
+            return_value=completed(stdout='{"full_name":"owner/repo"}'),
+        ) as run:
+            metadata = project_setup._repo_metadata("owner/repo")
+        self.assertEqual(metadata["full_name"], "owner/repo")
+        command = run.call_args.args[0]
+        self.assertEqual(command[2], "repos/owner/repo")
+
     def test_preflight_blocks_private_free_ruleset_gap_before_provision(self):
         metadata = {
             "private": True,
