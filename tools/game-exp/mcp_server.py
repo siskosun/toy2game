@@ -27,6 +27,12 @@ def game_exp_access_check(repo: str | None = None) -> dict[str, Any]:
     return _client(repo).access_check()
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_capabilities(repo: str | None = None) -> dict[str, Any]:
+    """Return versioned game-exp business capabilities plus a non-authoritative access snapshot."""
+    return _client(repo).capabilities()
+
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_doctor(
@@ -94,14 +100,17 @@ def game_exp_notifications(
     viewer_login: str | None = None,
     subject_id: str | None = None,
     limit: int = 50,
+    after: str | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return replayable collaboration notifications derived from one pinned Ledger snapshot."""
+    """Return cursor-resumable collaboration events from committed Ledger snapshots."""
     return _client(repo).notification_feed(
         viewer_login=viewer_login,
         subject_id=subject_id,
         limit=limit,
+        after=after,
+        cursor=cursor,
     )
-
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
