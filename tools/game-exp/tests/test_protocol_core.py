@@ -9,8 +9,11 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
 from protocol_core import (  # noqa: E402
+    ASYNC_EXECUTION_ACTIONS,
+    PUBLIC_CONTRACT_VERSION,
     ProtocolError,
     build_operation_payload,
+    contract_descriptor,
     canonical_json_bytes,
     decode_payload_b64,
     digest_object,
@@ -53,6 +56,21 @@ class ProtocolCoreTests(unittest.TestCase):
             base64.b64decode(encoded),
             canonical_json_bytes(value),
         )
+
+    def test_public_contract_freezes_recovery_semantics(self):
+        descriptor = contract_descriptor()
+        self.assertEqual(descriptor["version"], PUBLIC_CONTRACT_VERSION)
+        self.assertEqual(descriptor["major"], 1)
+        self.assertEqual(
+            descriptor["recovery"]["accepted_or_unknown"],
+            "QUERY_SAME_REQUEST_ID",
+        )
+        self.assertEqual(
+            descriptor["recovery"]["authorization_failure"],
+            "DO_NOT_FALLBACK_RETRY",
+        )
+        self.assertIn("candidate_build", ASYNC_EXECUTION_ACTIONS)
+        self.assertIn("archive", ASYNC_EXECUTION_ACTIONS)
 
     def test_operation_envelope(self):
         payload = build_operation_payload(
