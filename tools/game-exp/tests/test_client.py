@@ -20,6 +20,8 @@ class FakeTransport:
         self.head = "a" * 40
         self.dispatched = []
         self.record = None
+        self.records = {}
+        self.execution_runs = {}
         self.state = None
         self.logs = ""
         self.dispatch_uncertain = False
@@ -48,6 +50,9 @@ class FakeTransport:
             "reason": None,
         }
 
+    def collaborator_permission(self, login):
+        return "write" if login in {"alice", "bob", "carol"} else None
+
     def branch_contributors(self, ref):
         if ref in {"exp/7", "exp-final/7"}:
             return {
@@ -72,6 +77,29 @@ class FakeTransport:
         if self.dispatch_uncertain:
             raise TransportUncertainError("network outcome unknown")
         return "https://github.com/owner/repo/actions/runs/123"
+
+    def dispatch_execution(
+        self,
+        *,
+        action,
+        experiment_id,
+        request_id,
+        arguments=None,
+    ):
+        self.dispatched.append(
+            {
+                "execution": action,
+                "experiment_id": experiment_id,
+                "request_id": request_id,
+                "arguments": arguments or {},
+            }
+        )
+        if self.dispatch_uncertain:
+            raise TransportUncertainError("network outcome unknown")
+        return "https://github.com/owner/repo/actions/runs/900"
+
+    def find_execution_run(self, *, action, request_id):
+        return self.execution_runs.get((action, request_id))
 
     def dispatch_initializer(self, experiment_id):
         self.dispatched.append({"initializer": experiment_id})
@@ -126,7 +154,7 @@ class FakeTransport:
         return self._tag_objects[tag_object_sha]
 
     def ledger_record(self, request_id):
-        return self.record
+        return self.records.get(request_id, self.record)
 
     def run_state(self, workflow_url):
         return self.state
