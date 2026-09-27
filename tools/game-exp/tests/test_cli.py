@@ -38,7 +38,12 @@ class CLIRoutingTests(unittest.TestCase):
     def test_board_routes_to_client(self):
         code, client = self.run_cli(["board"])
         self.assertEqual(code, 0)
-        client.board.assert_called_once_with()
+        client.board.assert_called_once_with(
+            query=None,
+            subject_id=None,
+            lifecycle=None,
+            attention_only=False,
+        )
 
     def test_integrate_routes_to_client(self):
         code, client = self.run_cli(["integrate", "EXP-21", "--request-id", "req_integrate_21"])
