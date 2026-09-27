@@ -144,6 +144,41 @@ If a claim exists without a result, treat the request as `UNKNOWN`; inspect the 
 
 The bridge does not grant source-editing authority. ChatGPT should use its normal authorized GitHub connector for experiment branch edits, PR creation when the trusted Integration workflow cannot open the PR, and explicit user-authorized PR merge actions.
 
+## One local runtime for Codex, Qoder and Cursor
+
+v0.16.1 adds an atomic local installer so the three Harnesses do not drift onto
+different game-exp copies.
+
+From a trusted game-exp checkout:
+
+```powershell
+python tools/game-exp/install_harnesses.py --json
+```
+
+The installer:
+
+- stages and validates one runtime under `~/.agents/tools/game-exp`, then swaps
+  the directory instead of updating files in place;
+- validates `icon.svg`, `SKILL.md`, MCP server presence and plugin version
+  before activating the new runtime;
+- installs the shared Skill at `~/.agents/skills/game-exp` for Codex/Cursor and
+  a Qoder-compatible copy at `~/.qoder/skills/game-exp`;
+- merges a global stdio MCP entry into `~/.codex/config.toml`,
+  `~/.qoder/settings.json`, and `~/.cursor/mcp.json`;
+- preserves unrelated MCP servers/settings;
+- preflights existing TOML/JSON before changing the runtime;
+- never writes a global `GAME_EXP_REPO`. The shared MCP remains repository
+  dynamic, so the Skill must resolve the current GitHub `owner/name` and pass
+  `repo` explicitly to `game_exp_*` tools.
+
+The installer requires `uv` on PATH. Re-running it is supported and replaces
+the previous managed game-exp runtime/Skill/config entry without duplicating
+entries.
+
+After installation, start a new Harness session (or reload MCP/Skills where the
+Harness supports it) so the running process picks up the new Skill and MCP
+configuration.
+
 ## MCP hosts: Codex and ChatGPT Web
 
 The adapter uses the official Python MCP SDK v2 and delegates to the same validated Client / Trusted Domain Core. MCP never gets direct Git authority. The same tool surface supports local stdio for Codex and Streamable HTTP for ChatGPT Web.
@@ -215,7 +250,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.1`.
 
 ### Windows UTF-8 compatibility
 
