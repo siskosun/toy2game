@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.14.0",
-  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
+  "version": "0.14.1",
+  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, rich cross-Harness Board status, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "完整项目初始化 + 跨Harness恢复 + 行为仿真",
-        "longDescription": "Create PROJECT_READY repositories with Ledger initialization, Trusted Writer configuration, Immutable Releases, verified Rulesets, self-test and Doctor PASS, then manage experiments through the versioned MCP/CLI/GitHub-Bridge contract.",
+        "shortDescription": "完整项目初始化 + 丰富跨Harness面板 + 恢复",
+        "longDescription": "Create PROJECT_READY repositories with Ledger initialization, Trusted Writer configuration, Immutable Releases, verified Rulesets, self-test and Doctor PASS, then expose consistent project readiness, access, trust checks, statistics and onboarding across Harnesses before managing experiments through the versioned MCP/CLI/GitHub-Bridge contract.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [
