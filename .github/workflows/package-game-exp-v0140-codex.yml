@@ -1,0 +1,36 @@
+name: package game-exp v0.14.0 Codex bundle
+
+on:
+  push:
+    branches:
+      - package/game-exp-v0140-skill
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3640846292da7c1f86efddf83d34f240553b99c5
+      - name: Build Codex bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist staging
+          mkdir -p dist staging/game-exp
+          cp -R .agents staging/game-exp/.agents
+          cp -R plugins staging/game-exp/plugins
+          mkdir -p staging/game-exp/tools
+          cp -R tools/game-exp staging/game-exp/tools/game-exp
+          printf '%s\n' 'game-exp 0.14.0' 'source_repository=siskosun/toy2game' 'source_commit=3640846292da7c1f86efddf83d34f240553b99c5' > staging/game-exp/VERSION.txt
+          cd staging
+          zip -qr ../dist/game-exp-codex-v0140.zip game-exp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-codex-v0140
+          path: dist/game-exp-codex-v0140.zip
+          if-no-files-found: error
+          retention-days: 1
