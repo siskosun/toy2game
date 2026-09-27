@@ -11,6 +11,7 @@ sys.path.insert(0, str(HERE.parents[1]))
 from conformance_core import (
     ConformanceClient,
     aggregate,
+    compare_reports,
     evaluate,
     load_session,
     save_session,
@@ -174,6 +175,36 @@ class ConformanceCoreTests(unittest.TestCase):
             "HUMAN_GATE_AUTO_APPROVED",
             {row["code"] for row in result["findings"]},
         )
+
+    def test_reports_compare_only_under_same_suite_digest(self):
+        baseline = {
+            "suite_id": "game-exp-standing-v1",
+            "suite_digest": "sha256:" + "a" * 64,
+            "eligible_for_real_repo_test": True,
+            "passed_count": 6,
+            "scenarios": [
+                {"scenario_id": "lost-response-recovery", "status": "PASS"},
+            ],
+        }
+        candidate = {
+            **baseline,
+            "passed_count": 5,
+            "eligible_for_real_repo_test": False,
+            "scenarios": [
+                {"scenario_id": "lost-response-recovery", "status": "FAIL"},
+            ],
+        }
+        result = compare_reports(baseline, candidate)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(
+            result["regressions"][0]["scenario_id"],
+            "lost-response-recovery",
+        )
+
+        mismatch = {**candidate, "suite_digest": "sha256:" + "b" * 64}
+        conflict = compare_reports(baseline, mismatch)
+        self.assertEqual(conflict["status"], "CONFLICT")
+        self.assertFalse(conflict["comparable"])
 
     def test_full_standing_suite_can_be_aggregated(self):
         results = []
