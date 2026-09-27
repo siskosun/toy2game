@@ -52,6 +52,36 @@ Manifest schema v1 remains accepted for existing experiments and uses the legacy
 
 The example Manifest returned by `experiment-template` contains unresolved placeholders and is explicitly non-bindable. The Agent must resolve the real Issue identity, parent SHA, stable operation id, scope, subject and timestamp before Bind.
 
+## Project policy schema
+
+Project validation policy is repository-local and independent from Manifest schema.
+
+- Project policy schema v1 remains compatible and is limited to the legacy `node-npm` shape.
+- Project policy schema v2 is recommended. It keeps install/test/build as argv arrays and makes the adapter generic.
+- For `node-npm`, schema v2 requires an exact `toolchain.node_version`. Trusted Candidate/Rehearsal workflows use that value with `actions/setup-node`; they no longer require a repository `.node-version` file.
+- For adapters other than `node-npm`, `toolchain` is currently empty and game-exp performs no implicit runtime installation. The declared install/test/build argv commands must therefore be self-contained on the trusted `ubuntu-latest` runner.
+
+Example Node/npm policy:
+
+```json
+{
+  "schema_version": 2,
+  "adapter": "node-npm",
+  "toolchain": {"node_version": "22.21.1"},
+  "install": {"argv": ["npm", "ci"]},
+  "test": {"argv": ["npm", "test"]},
+  "build": {"argv": ["npm", "run", "build"]},
+  "candidate": {
+    "include": ["dist"],
+    "required_paths": ["dist/index.html"]
+  }
+}
+```
+
+Bootstrap must not guess Node/npm for an unknown repository type. It auto-generates a Node/npm policy only when a locked Node project is detected (`package.json` plus `package-lock.json` or `npm-shrinkwrap.json`). Otherwise an explicit valid `.game-exp/project-policy.json` is required before installation can continue.
+
+This fail-closed behavior prevents a clean Godot, Python, or other repository from silently receiving an incorrect Node/npm validation policy.
+
 ## Stable operation identity
 
 Every logical mutation has one stable `request_id` / operation id.

@@ -1166,12 +1166,26 @@ class GameExpClient:
             "project_policy": {
                 "path": POLICY_PATH,
                 "digest": policy_digest(policy),
+                "schema_version": policy.get("schema_version"),
+                "recommended_schema_version": 2,
                 "adapter": adapter,
+                "toolchain": policy.get("toolchain", {}),
+                "builtin_runner_setup": (
+                    "actions/setup-node"
+                    if adapter == "node-npm"
+                    else None
+                ),
+                "command_execution": "argv-no-shell",
                 "install": policy.get("install"),
                 "test": policy.get("test"),
                 "build": policy.get("build"),
                 "candidate": policy.get("candidate"),
                 "raw": policy,
+                "note_zh": (
+                    "node-npm 使用受信任的 Node 工具链设置；其他 schema v2 adapter "
+                    "不会获得隐式运行时安装，install/test/build 命令必须在 GitHub "
+                    "ubuntu-latest runner 上自洽执行。"
+                ),
             },
             "defaults": {
                 "runtime": runtime,

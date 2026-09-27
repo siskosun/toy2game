@@ -5,6 +5,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS_DIR))
@@ -30,8 +31,22 @@ class BootstrapTests(unittest.TestCase):
             else:
                 path.write_text(f"source:{rel}\n", encoding="utf-8")
 
-    def make_target(self, root: pathlib.Path) -> None:
+    def make_target(self, root: pathlib.Path, *, node_project: bool = True) -> None:
         (root / ".git").mkdir(parents=True)
+        if node_project:
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "test-project",
+                        "engines": {"node": "22.21.1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "package-lock.json").write_text(
+                json.dumps({"lockfileVersion": 3}),
+                encoding="utf-8",
+            )
     def test_plan_generates_repo_specific_config(self):
         with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
             source, target = pathlib.Path(sd), pathlib.Path(td)
@@ -45,7 +60,55 @@ class BootstrapTests(unittest.TestCase):
             plugin = json.loads(by_rel["plugins/game-exp/plugin.json"])
             self.assertEqual(plugin["repository"], "https://github.com/acme/game")
             policy = json.loads(by_rel[".game-exp/project-policy.json"])
+            self.assertEqual(policy["schema_version"], 2)
             self.assertEqual(policy["adapter"], "node-npm")
+            self.assertEqual(policy["toolchain"]["node_version"], "22.21.1")
+
+    def test_node_range_without_local_exact_version_fails_closed(self):
+        with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
+            source, target = pathlib.Path(sd), pathlib.Path(td)
+            self.make_source(source)
+            self.make_target(target)
+            package = target / "package.json"
+            package.write_text(
+                json.dumps({"name": "test-project", "engines": {"node": ">=22"}}),
+                encoding="utf-8",
+            )
+            with mock.patch("bootstrap.shutil.which", return_value=None):
+                with self.assertRaisesRegex(BootstrapError, "not an exact version"):
+                    Bootstrapper(source, target, "acme/game").plan()
+
+    def test_unknown_project_type_fails_instead_of_guessing_node(self):
+        with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
+            source, target = pathlib.Path(sd), pathlib.Path(td)
+            self.make_source(source)
+            self.make_target(target, node_project=False)
+            with self.assertRaisesRegex(BootstrapError, "cannot infer a trusted project policy"):
+                Bootstrapper(source, target, "acme/game").plan()
+            self.assertFalse((target / ".game-exp/project-policy.json").exists())
+
+    def test_existing_schema_v2_generic_policy_is_preserved(self):
+        with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
+            source, target = pathlib.Path(sd), pathlib.Path(td)
+            self.make_source(source)
+            self.make_target(target, node_project=False)
+            policy = {
+                "schema_version": 2,
+                "adapter": "command",
+                "toolchain": {},
+                "install": {"argv": ["python", "-m", "pip", "install", "-r", "requirements.txt"]},
+                "test": {"argv": ["python", "-m", "pytest"]},
+                "build": {"argv": ["python", "build.py"]},
+                "candidate": {
+                    "include": ["dist"],
+                    "required_paths": ["dist/index.html"],
+                },
+            }
+            path = target / ".game-exp/project-policy.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(policy), encoding="utf-8")
+            Bootstrapper(source, target, "acme/game").install()
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), policy)
 
     def test_install_preserves_other_marketplace_plugins(self):
         with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:

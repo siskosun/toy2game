@@ -78,15 +78,19 @@ It exists only to remember the original payload digest, expected Ledger head and
 
 Repository-specific build assumptions are defined in `.game-exp/project-policy.json`, not hard-coded into Candidate, Rehearsal, or archived-snapshot workflows.
 
-Schema v1 currently supports the `node-npm` adapter and declares:
+Schema v1 remains compatible for legacy `node-npm` repositories. Schema v2 is recommended and declares:
 
+- a normalized adapter id;
+- adapter toolchain metadata;
 - install/test/build commands as argv arrays (no shell command strings);
 - Candidate paths to package;
 - Candidate paths that must exist in the trusted archive.
 
+For `node-npm`, schema v2 requires an exact `toolchain.node_version`. Candidate and Rehearsal use that value with `actions/setup-node`, so the build no longer depends on a separate `.node-version` file. Other schema-v2 adapters receive no implicit runtime installation; their argv commands must be self-contained on the trusted Ubuntu runner.
+
 The trusted workflows load this policy from the immutable `github.workflow_sha`. Experiment branches cannot alter the policy used to validate themselves. The Candidate receipt records the policy digest, so changing project validation rules changes Candidate identity evidence.
 
-This is the extension point for future adapters such as Godot. Adding an adapter should extend `project_policy.py` and its tests rather than duplicating lifecycle workflows.
+Bootstrap auto-generates a Node/npm policy only for a locked Node project (`package.json` plus `package-lock.json` or `npm-shrinkwrap.json`). For an unknown clean repository type, bootstrap fails and requires an explicit valid policy instead of guessing Node/npm.
 
 ## Bootstrap into another repository
 
@@ -99,7 +103,7 @@ python tools/game-exp/bootstrap.py install --target C:\path\to\target-repo --rep
 
 The bootstrap copies the production game-exp tools, lifecycle workflows, Skill/Plugin files, and generates/merges:
 
-- `.game-exp/project-policy.json` for the supported Node/npm adapter;
+- `.game-exp/project-policy.json` only when a locked Node/npm project can be inferred; otherwise an explicit valid policy must already exist;
 - `.agents/plugins/marketplace.json`;
 - `.codex/config.toml` with the target `GAME_EXP_REPO`.
 
@@ -171,7 +175,7 @@ Low-level fallback:
 
 ## Self-describing first experiment
 
-v0.15 removes the need for a new Harness to inspect toy2game or historical Ledger records before creating its first experiment.
+v0.15 removes the need for a new Harness to inspect toy2game or historical Ledger records before creating its first experiment. v0.16 also removes the hidden Node/npm assumption from project-policy generation and publishes project-policy schema v2.
 
 Use:
 
@@ -211,7 +215,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.14.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.16.0`.
 
 ### Windows UTF-8 compatibility
 

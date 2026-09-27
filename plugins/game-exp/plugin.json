@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.15.0",
-  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, self-describing Manifest v2, rich cross-Harness Board status, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
+  "version": "0.16.0",
+  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, self-describing Manifest v2, project-policy v2, rich cross-Harness Board status, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "自描述实验 + 丰富跨Harness面板 + 恢复",
-        "longDescription": "Create PROJECT_READY repositories, expose a repository-local Manifest v2 blueprint from the current project policy, then provide consistent readiness, access, trust checks, statistics and onboarding across Harnesses before managing experiments through the versioned MCP/CLI/GitHub-Bridge contract.",
+        "shortDescription": "自描述实验 + 项目策略v2 + 跨Harness面板",
+        "longDescription": "Create PROJECT_READY repositories without guessing the project runtime, expose repository-local Manifest v2 and project-policy v2 contracts, then provide consistent readiness, access, trust checks, statistics and onboarding across Harnesses before managing experiments through the versioned MCP/CLI/GitHub-Bridge contract.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [

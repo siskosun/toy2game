@@ -4,6 +4,8 @@ import argparse
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -61,17 +63,24 @@ PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/references/conformance.md",
 )
 
-NODE_NPM_POLICY = {
-    "schema_version": 1,
-    "adapter": "node-npm",
-    "install": {"argv": ["npm", "ci"]},
-    "test": {"argv": ["npm", "test"]},
-    "build": {"argv": ["npm", "run", "build"]},
-    "candidate": {
-        "include": ["dist"],
-        "required_paths": ["dist/index.html"],
-    },
-}
+def node_npm_policy(node_version: str) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "adapter": "node-npm",
+        "toolchain": {"node_version": node_version},
+        "install": {"argv": ["npm", "ci"]},
+        "test": {"argv": ["npm", "test"]},
+        "build": {"argv": ["npm", "run", "build"]},
+        "candidate": {
+            "include": ["dist"],
+            "required_paths": ["dist/index.html"],
+        },
+    }
+
+
+# Backward-compatible export for tests/importers. Bootstrap generation resolves
+# the repository's actual Node version instead of blindly using this default.
+NODE_NPM_POLICY = node_npm_policy("22.21.1")
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -114,6 +123,77 @@ class Bootstrapper:
         self.target_root = target_root.resolve()
         self.repo = _validate_repo(repo)
 
+    def _node_version(self) -> str | None:
+        exact_re = re.compile(
+            r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        )
+
+        version_file = self.target_root / ".node-version"
+        if version_file.is_file():
+            value = version_file.read_text(encoding="utf-8").strip().removeprefix("v")
+            if exact_re.fullmatch(value):
+                return value
+            raise BootstrapError(
+                ".node-version must contain an exact Node version such as 22.21.1"
+            )
+
+        package_path = self.target_root / "package.json"
+        node_spec = None
+        if package_path.is_file():
+            try:
+                package = json.loads(package_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise BootstrapError(f"invalid package.json: {exc}") from exc
+            engines = package.get("engines") if isinstance(package, dict) else None
+            raw_node_spec = engines.get("node") if isinstance(engines, dict) else None
+            if isinstance(raw_node_spec, str) and raw_node_spec.strip():
+                node_spec = raw_node_spec.strip().removeprefix("v")
+                if exact_re.fullmatch(node_spec):
+                    return node_spec
+
+        node = shutil.which("node")
+        if node:
+            proc = subprocess.run(
+                [node, "--version"],
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if proc.returncode == 0:
+                value = proc.stdout.strip().removeprefix("v")
+                if exact_re.fullmatch(value):
+                    return value
+
+        if node_spec:
+            raise BootstrapError(
+                "package.json engines.node is not an exact version and local Node "
+                "could not provide one; add .node-version with an exact version"
+            )
+        return None
+
+    def _inferred_policy(self) -> dict[str, object]:
+        package = self.target_root / "package.json"
+        lock = self.target_root / "package-lock.json"
+        shrinkwrap = self.target_root / "npm-shrinkwrap.json"
+        if package.is_file() and (lock.is_file() or shrinkwrap.is_file()):
+            node_version = self._node_version()
+            if not node_version:
+                raise BootstrapError(
+                    "node-npm project detected but Node version could not be resolved; "
+                    "add .node-version or package.json engines.node"
+                )
+            return node_npm_policy(node_version)
+
+        raise BootstrapError(
+            "cannot infer a trusted project policy for this repository; "
+            "add .game-exp/project-policy.json using schema v2. "
+            "Node/npm auto-detection requires package.json plus package-lock.json "
+            "or npm-shrinkwrap.json."
+        )
+
     def _source_bytes(self, rel: str) -> bytes:
         path = self.source_root / rel
         if not path.is_file():
@@ -145,10 +225,11 @@ class Bootstrapper:
                 validate_policy(current)
             except Exception as exc:
                 raise BootstrapError(f"existing project policy is invalid: {exc}") from exc
-            if current.get("adapter") != "node-npm":
-                raise BootstrapError("bootstrap schema v1 currently supports node-npm only")
             return None
-        return PlannedWrite(path, _json_bytes(NODE_NPM_POLICY), "generated")
+
+        inferred = self._inferred_policy()
+        validate_policy(inferred)
+        return PlannedWrite(path, _json_bytes(inferred), "generated")
 
     def _marketplace_write(self) -> tuple[PlannedWrite, str]:
         path = self.target_root / ".agents/plugins/marketplace.json"

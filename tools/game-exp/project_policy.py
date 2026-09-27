@@ -6,6 +6,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tarfile
 from typing import Any
@@ -13,9 +14,13 @@ from typing import Any
 from protocol_core import digest_object
 
 POLICY_PATH = ".game-exp/project-policy.json"
-_ALLOWED_TOP = {"schema_version", "adapter", "install", "test", "build", "candidate"}
+_ALLOWED_TOP_V1 = {"schema_version", "adapter", "install", "test", "build", "candidate"}
+_ALLOWED_TOP_V2 = _ALLOWED_TOP_V1 | {"toolchain"}
 _ALLOWED_STEP = {"argv"}
 _ALLOWED_CANDIDATE = {"include", "required_paths"}
+_ALLOWED_NODE_TOOLCHAIN = {"node_version"}
+_ADAPTER_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_NODE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class ProjectPolicyError(ValueError):
@@ -55,11 +60,44 @@ def _argv(value: Any, where: str) -> list[str]:
 def validate_policy(policy: Any) -> dict[str, Any]:
     if not isinstance(policy, dict):
         raise ProjectPolicyError("policy: expected object")
-    _strict_keys(policy, _ALLOWED_TOP, "policy")
-    if policy["schema_version"] != 1:
-        raise ProjectPolicyError("policy.schema_version must equal 1")
-    if policy["adapter"] != "node-npm":
-        raise ProjectPolicyError("policy.adapter must equal 'node-npm' in schema v1")
+
+    schema_version = policy.get("schema_version")
+    if schema_version == 1:
+        _strict_keys(policy, _ALLOWED_TOP_V1, "policy")
+        if policy["adapter"] != "node-npm":
+            raise ProjectPolicyError(
+                "policy.adapter must equal 'node-npm' in schema v1"
+            )
+    elif schema_version == 2:
+        _strict_keys(policy, _ALLOWED_TOP_V2, "policy")
+        adapter = policy.get("adapter")
+        if (
+            not isinstance(adapter, str)
+            or not adapter
+            or not _ADAPTER_RE.fullmatch(adapter)
+        ):
+            raise ProjectPolicyError(
+                "policy.adapter must be a normalized lowercase adapter id"
+            )
+        toolchain = policy.get("toolchain")
+        if not isinstance(toolchain, dict):
+            raise ProjectPolicyError("policy.toolchain: expected object")
+        if adapter == "node-npm":
+            _strict_keys(toolchain, _ALLOWED_NODE_TOOLCHAIN, "policy.toolchain")
+            node_version = toolchain["node_version"]
+            if (
+                not isinstance(node_version, str)
+                or not _NODE_VERSION_RE.fullmatch(node_version)
+            ):
+                raise ProjectPolicyError(
+                    "policy.toolchain.node_version: expected exact Node version such as 22.21.1"
+                )
+        elif toolchain:
+            raise ProjectPolicyError(
+                "policy.toolchain must be empty for adapters without built-in setup"
+            )
+    else:
+        raise ProjectPolicyError("policy.schema_version must equal 1 or 2")
 
     for name in ("install", "test", "build"):
         _argv(policy[name], f"policy.{name}")

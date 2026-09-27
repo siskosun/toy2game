@@ -77,6 +77,8 @@ jobs:
       run_id: ${{ steps.prepare.outputs.run_id }}
       run_attempt: ${{ steps.prepare.outputs.run_attempt }}
       adapter: ${{ steps.prepare.outputs.adapter }}
+      policy_schema: ${{ steps.prepare.outputs.policy_schema }}
+      node_version: ${{ steps.prepare.outputs.node_version }}
     steps:
       - name: Checkout trusted rehearsal control
         uses: actions/checkout@v6
@@ -120,6 +122,9 @@ jobs:
                   out.write(f"{key}={x[key]}\n")
               policy=load_policy("control/.game-exp/project-policy.json")
               out.write(f"adapter={policy['adapter']}\n")
+              out.write(f"policy_schema={policy['schema_version']}\n")
+              node_version=(policy.get("toolchain") or {}).get("node_version","")
+              out.write(f"node_version={node_version}\n")
           PY
 
   rehearse:
@@ -172,9 +177,14 @@ jobs:
           test -n "$tree"
           echo "integration_tree_sha=$tree" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v6
-        if: needs.prepare.outputs.adapter == 'node-npm'
+        if: needs.prepare.outputs.adapter == 'node-npm' && needs.prepare.outputs.policy_schema == '1'
         with:
           node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-node@v6
+        if: needs.prepare.outputs.adapter == 'node-npm' && needs.prepare.outputs.policy_schema == '2'
+        with:
+          node-version: ${{ needs.prepare.outputs.node_version }}
           cache: npm
       - name: Install locked dependencies
         run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run install --cwd .

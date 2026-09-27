@@ -59,8 +59,9 @@ class FakeTransport:
     def repository_json(self, path, ref=None):
         if path == ".game-exp/project-policy.json":
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "adapter": "node-npm",
+                "toolchain": {"node_version": "22.21.1"},
                 "install": {"argv": ["npm", "ci"]},
                 "test": {"argv": ["npm", "test"]},
                 "build": {"argv": ["npm", "run", "build"]},
@@ -550,7 +551,16 @@ class ClientTests(unittest.TestCase):
             result["manifest_contract"]["supported_schema_versions"],
             [1, 2],
         )
+        self.assertEqual(result["project_policy"]["schema_version"], 2)
         self.assertEqual(result["project_policy"]["adapter"], "node-npm")
+        self.assertEqual(
+            result["project_policy"]["toolchain"],
+            {"node_version": "22.21.1"},
+        )
+        self.assertEqual(
+            result["project_policy"]["builtin_runner_setup"],
+            "actions/setup-node",
+        )
         self.assertEqual(
             result["defaults"]["runtime"],
             {
