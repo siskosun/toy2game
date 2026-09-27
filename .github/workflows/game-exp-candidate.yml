@@ -68,6 +68,8 @@ jobs:
       manifest_digest: ${{ steps.resolve.outputs.manifest_digest }}
       policy_digest: ${{ steps.resolve.outputs.policy_digest }}
       adapter: ${{ steps.resolve.outputs.adapter }}
+      policy_schema: ${{ steps.resolve.outputs.policy_schema }}
+      node_version: ${{ steps.resolve.outputs.node_version }}
     steps:
       - name: Checkout trusted protocol core
         uses: actions/checkout@v6
@@ -127,6 +129,9 @@ jobs:
               fh.write(f"manifest_digest={manifest_digest}\n")
               fh.write(f"policy_digest={policy_digest(policy)}\n")
               fh.write(f"adapter={policy['adapter']}\n")
+              fh.write(f"policy_schema={policy['schema_version']}\n")
+              node_version=(policy.get("toolchain") or {}).get("node_version","")
+              fh.write(f"node_version={node_version}\n")
           PY
 
   build:
@@ -153,9 +158,14 @@ jobs:
             .game-exp/project-policy.json
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v6
-        if: needs.resolve.outputs.adapter == 'node-npm'
+        if: needs.resolve.outputs.adapter == 'node-npm' && needs.resolve.outputs.policy_schema == '1'
         with:
           node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-node@v6
+        if: needs.resolve.outputs.adapter == 'node-npm' && needs.resolve.outputs.policy_schema == '2'
+        with:
+          node-version: ${{ needs.resolve.outputs.node_version }}
           cache: npm
       - name: Install dependencies
         run: python control/tools/game-exp/project_policy.py --policy control/.game-exp/project-policy.json run install --cwd .
