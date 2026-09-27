@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.16.0")
+        self.assertEqual(manifest["version"], "0.16.1")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -38,6 +38,8 @@ class GameExpSkillContractTests(unittest.TestCase):
             '"plugins/game-exp/skills/game-exp/assets/icon.svg"',
             bootstrap,
         )
+        self.assertIn('"install_harnesses.py"', bootstrap)
+        self.assertTrue((ROOT / "tools" / "game-exp" / "install_harnesses.py").is_file())
 
     def test_repo_marketplace_points_to_plugin(self):
         market = json.loads(
@@ -118,6 +120,8 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertIn("Keep game-exp orchestration self-contained", content)
         self.assertIn(".ai/HANDOFF.md", content)
         self.assertIn("without `experiment_id`", content)
+        self.assertIn("global MCP registration must not hard-code one repository", content)
+        self.assertIn("Pass that `repo` explicitly", content)
         self.assertIn("GitHub Bridge", content)
         self.assertIn("claim-without-result", content)
         self.assertIn("authorized GitHub connector", content)

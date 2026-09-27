@@ -34,6 +34,7 @@ PRODUCTION_TOOLS = (
     "domain_core.py",
     "integration_control.py",
     "github_bridge.py",
+    "install_harnesses.py",
     "mcp_server.py",
     "project_policy.py",
     "project_setup.py",
