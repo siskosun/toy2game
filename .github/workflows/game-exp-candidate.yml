@@ -1,4 +1,9 @@
 name: game-exp trusted candidate
+run-name: game-exp:candidate_build:${{ inputs.request_id }}
+
+concurrency:
+  group: game-exp-candidate_build-${{ inputs.request_id }}
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -7,9 +12,50 @@ on:
         description: Canonical experiment id, e.g. EXP-21
         required: true
         type: string
+      request_id:
+        description: Stable cross-interface operation id
+        required: true
+        type: string
 
 jobs:
+  dedupe:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      primary: ${{ steps.guard.outputs.primary }}
+      primary_run_id: ${{ steps.guard.outputs.primary_run_id }}
+    steps:
+      - name: Checkout request-id guard
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control-guard
+          sparse-checkout: |
+            tools/game-exp/workflow_guard.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Select the first run for this request id
+        id: guard
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python control-guard/tools/game-exp/workflow_guard.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "game-exp-candidate.yml" \
+            --action "candidate_build" \
+            --request-id "${{ inputs.request_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --github-output "$GITHUB_OUTPUT"
+
   resolve:
+    needs: dedupe
+    if: needs.dedupe.outputs.primary == 'true'
     permissions:
       contents: read
     runs-on: ubuntu-latest
