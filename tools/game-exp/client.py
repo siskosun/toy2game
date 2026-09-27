@@ -746,6 +746,52 @@ class GameExpClient:
             "can_create_experiment": bool(access.get("can_write")),
         }
 
+    def capabilities(self) -> dict[str, Any]:
+        access = self.transport.repository_access()
+        return {
+            "status": "PASS" if access.get("can_read") else access.get("status", "UNKNOWN"),
+            "repo": self.transport.repo,
+            "contract": contract_descriptor(),
+            "features": {
+                "board": True,
+                "request_recovery": True,
+                "async_execution_claims": True,
+                "notifications": True,
+                "notification_cursors": True,
+                "dependency_review_hints": True,
+                "godot_handoff": True,
+                "archive_recovery": True,
+            },
+            "queries": [
+                "status",
+                "access_check",
+                "capabilities",
+                "board",
+                "experiment_get",
+                "subject_panel",
+                "experiment_panel",
+                "operation_get",
+                "notifications",
+                "prototype_handoff",
+            ],
+            "commands": [
+                "experiment.bind",
+                "execution.claim",
+                "review.record",
+                "experiment.decision",
+                "archive.abort",
+                *list(ASYNC_EXECUTION_ACTIONS),
+            ],
+            "recovery": {
+                "operation_get": True,
+                "resume_execution": True,
+                "cross_interface": True,
+            },
+            "access_snapshot": access,
+            "access_snapshot_authoritative_for_execution": False,
+            "note_zh": "权限快照仅用于提示；每次写操作仍由可信执行边界重新验证身份和权限。",
+        }
+
     def _contributors_for_item(self, item: dict[str, Any]) -> dict[str, Any]:
         resolver = getattr(self.transport, "branch_contributors", None)
         if not callable(resolver):
@@ -2373,184 +2419,469 @@ class GameExpClient:
             return "TERMINAL_NEW_EXPERIMENT_FOR_NEW_WORK"
         return "UNKNOWN"
 
-    def candidate(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
-            }
-        try:
-            workflow_url = self.transport.dispatch_candidate(experiment_id)
-        except TransportUncertainError as exc:
-            return {
-                "status": "UNKNOWN",
-                "reason": "candidate_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": False,
-            }
+    @staticmethod
+    def _validate_execution_arguments(
+        action: str,
+        arguments: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if action not in ASYNC_EXECUTION_ACTIONS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        values = dict(arguments or {})
+        expected = {
+            "initialize": set(),
+            "candidate_build": set(),
+            "rehearse": set(),
+            "integrate": set(),
+            "integrate_finalize": {"pr_number"},
+            "archive": {"mode"},
+        }[action]
+        if set(values) != expected:
+            raise ClientError(
+                f"execution arguments mismatch for {action}: "
+                f"expected={sorted(expected)} actual={sorted(values)}"
+            )
+        if action == "integrate_finalize":
+            value = values.get("pr_number")
+            if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value):
+                raise ClientError("pr_number must be a positive integer")
+        if action == "archive" and values.get("mode") not in {
+            "ATOMIC_DELETE",
+            "RETAIN_BRANCH",
+        }:
+            raise ClientError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
+        return values
+
+    @staticmethod
+    def _execution_claim_from_record(
+        record: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = record.get("payload")
+        if (
+            not isinstance(payload, dict)
+            or payload.get("kind") != "operation_request"
+            or payload.get("operation") != "execution.claim"
+        ):
+            return None
+        value = payload.get("input")
+        return value if isinstance(value, dict) else None
+
+    def _execution_claim_matches(
+        self,
+        record: dict[str, Any],
+        *,
+        action: str,
+        experiment_id: str,
+        arguments: dict[str, Any],
+    ) -> bool:
+        claim = self._execution_claim_from_record(record)
+        return bool(
+            isinstance(claim, dict)
+            and claim.get("action") == action
+            and claim.get("experiment_id") == experiment_id
+            and claim.get("arguments") == arguments
+        )
+
+    def _wait_for_request_commit(
+        self,
+        request_id: str,
+        initial: dict[str, Any],
+        *,
+        attempts: int = 20,
+        interval: float = 1.0,
+    ) -> dict[str, Any]:
+        result = initial
+        if result.get("status") in {"COMMITTED", "CONFLICT", "REJECTED"}:
+            return result
+        for _ in range(attempts):
+            time.sleep(interval)
+            result = self.reconcile(request_id)
+            if result.get("status") in {"COMMITTED", "CONFLICT", "REJECTED"}:
+                return result
+        return result
+
+    def _execution_projection_summary(self, experiment_id: str) -> dict[str, Any] | None:
+        projection = self.experiment_get(experiment_id)
+        if projection.get("status") != "PASS":
+            return None
+        state = projection.get("state")
+        if not isinstance(state, dict):
+            return None
         return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
+            "lifecycle": state.get("lifecycle"),
+            "sequence": state.get("sequence"),
+            "last_decision_id": state.get("last_decision_id"),
+            "current_candidate_id": state.get("current_candidate_id"),
+            "current_review_id": state.get("current_review_id"),
+            "current_rehearsal_id": state.get("current_rehearsal_id"),
+            "current_integration_id": state.get("current_integration_id"),
+            "current_archive_id": state.get("current_archive_id"),
         }
 
-    def initialize(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+    def _execution_run_result(
+        self,
+        *,
+        request_id: str,
+        claim_record: dict[str, Any],
+        run: dict[str, Any],
+    ) -> dict[str, Any]:
+        claim = self._execution_claim_from_record(claim_record) or {}
+        experiment_id = claim.get("experiment_id")
+        action = claim.get("action")
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        base = {
+            "request_id": request_id,
+            "repo": self.transport.repo,
+            "action": action,
+            "experiment_id": experiment_id,
+            "arguments": claim.get("arguments") or {},
+            "claim_status": "COMMITTED",
+            "workflow": run,
+        }
+        if status != "completed":
             return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
+                "status": "ACCEPTED",
+                "operation_status": "RUNNING",
+                **base,
             }
-        try:
-            workflow_url = self.transport.dispatch_initializer(experiment_id)
-        except TransportUncertainError as exc:
+        if conclusion == "success":
+            return {
+                "status": "PASS",
+                "operation_status": "SUCCEEDED",
+                **base,
+                "result_projection": (
+                    self._execution_projection_summary(experiment_id)
+                    if isinstance(experiment_id, str)
+                    else None
+                ),
+            }
+        if conclusion in {"cancelled", "skipped", "neutral"}:
             return {
                 "status": "UNKNOWN",
-                "reason": "initializer_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
+                "operation_status": "NOT_COMPLETED",
+                **base,
             }
         return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
+            "status": "REJECTED",
+            "operation_status": "FAILED",
+            **base,
         }
 
-    def rehearse(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+    def operation_get(self, request_id: str) -> dict[str, Any]:
+        rid = validate_request_id(request_id)
+        record = self.transport.ledger_record(rid)
+        if record is None:
+            return self.reconcile(rid)
+        claim = self._execution_claim_from_record(record)
+        if claim is None:
+            return self.reconcile(rid)
+        action = claim.get("action")
+        experiment_id = claim.get("experiment_id")
+        if (
+            not isinstance(action, str)
+            or action not in ASYNC_EXECUTION_ACTIONS
+            or not isinstance(experiment_id, str)
+        ):
             return {
                 "status": "REJECTED",
+                "operation_status": "INVALID_CLAIM",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
             }
-        try:
-            workflow_url = self.transport.dispatch_rehearsal(experiment_id)
-        except TransportUncertainError as exc:
+        run = self.transport.find_execution_run(action=action, request_id=rid)
+        if run is not None:
+            return self._execution_run_result(
+                request_id=rid,
+                claim_record=record,
+                run=run,
+            )
+        return {
+            "status": "ACCEPTED",
+            "operation_status": "CLAIMED",
+            "request_id": rid,
+            "repo": self.transport.repo,
+            "action": action,
+            "experiment_id": experiment_id,
+            "arguments": claim.get("arguments") or {},
+            "claim_status": "COMMITTED",
+            "safe_to_resume": True,
+        }
+
+    def resume_execution(self, request_id: str) -> dict[str, Any]:
+        rid = validate_request_id(request_id)
+        record = self.transport.ledger_record(rid)
+        if record is None:
             return {
                 "status": "UNKNOWN",
-                "reason": "rehearsal_dispatch_outcome_uncertain",
+                "operation_status": "CLAIM_NOT_FOUND",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
+                "reason": "execution_claim_not_committed",
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
-        }
-
-    def integrate(self, experiment_id: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+        claim = self._execution_claim_from_record(record)
+        if claim is None:
             return {
                 "status": "REJECTED",
+                "operation_status": "NOT_ASYNC_EXECUTION",
+                "request_id": rid,
                 "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
             }
-        try:
-            workflow_url = self.transport.dispatch_integration(experiment_id)
-        except TransportUncertainError as exc:
+        action = claim.get("action")
+        experiment_id = claim.get("experiment_id")
+        arguments = claim.get("arguments")
+        state_digest = claim.get("state_digest")
+        if (
+            not isinstance(action, str)
+            or action not in ASYNC_EXECUTION_ACTIONS
+            or not isinstance(experiment_id, str)
+            or not isinstance(arguments, dict)
+            or not isinstance(state_digest, str)
+        ):
+            return {
+                "status": "REJECTED",
+                "operation_status": "INVALID_CLAIM",
+                "request_id": rid,
+                "repo": self.transport.repo,
+            }
+
+        run = self.transport.find_execution_run(action=action, request_id=rid)
+        if run is not None:
+            return self._execution_run_result(
+                request_id=rid,
+                claim_record=record,
+                run=run,
+            )
+
+        snapshot_head = self.transport.ledger_head()
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(state, dict):
             return {
                 "status": "UNKNOWN",
-                "reason": "integration_dispatch_outcome_uncertain",
+                "operation_status": "PRECONDITION_UNAVAILABLE",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "error": str(exc),
-                "retry_safe": True,
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "workflow_url": workflow_url,
-        }
-
-    def integrate_finalize(self, experiment_id: str, pr_number: str) -> dict[str, Any]:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+        if digest_object(state) != state_digest:
             return {
-                "status": "REJECTED",
+                "status": "CONFLICT",
+                "conflict_type": "EXECUTION_PRECONDITION_CHANGED",
+                "operation_status": "STALE",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "error": "experiment_id must be EXP-<positive integer>",
-            }
-        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "pr_number": str(pr_number),
-                "error": "pr_number must be a positive integer",
+                "action": action,
+                "expected_state_digest": state_digest,
+                "actual_state_digest": digest_object(state),
             }
         try:
-            workflow_url = self.transport.dispatch_integration_finalize(
-                experiment_id,
-                str(pr_number),
+            workflow_url = self.transport.dispatch_execution(
+                action=action,
+                experiment_id=experiment_id,
+                request_id=rid,
+                arguments=arguments,
             )
         except TransportUncertainError as exc:
             return {
                 "status": "UNKNOWN",
-                "reason": "integration_finalize_dispatch_outcome_uncertain",
+                "operation_status": "DISPATCH_UNCERTAIN",
+                "request_id": rid,
                 "repo": self.transport.repo,
                 "experiment_id": experiment_id,
-                "pr_number": str(pr_number),
+                "action": action,
                 "error": str(exc),
-                "retry_safe": True,
+                "recovery": "query the same request_id; do not create a new one",
             }
         return {
             "status": "ACCEPTED",
+            "operation_status": "DISPATCHED",
+            "request_id": rid,
             "repo": self.transport.repo,
             "experiment_id": experiment_id,
-            "pr_number": str(pr_number),
+            "action": action,
+            "arguments": arguments,
             "workflow_url": workflow_url,
         }
 
-    def archive(self, experiment_id: str, mode: str) -> dict[str, Any]:
+    def start_execution(
+        self,
+        *,
+        action: str,
+        experiment_id: str,
+        request_id: str | None,
+        arguments: dict[str, Any] | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        if request_id is None:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "action": action,
+                "error": "stable request_id is required for mutating async operations",
+            }
+        rid = validate_request_id(request_id)
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
             return {
                 "status": "REJECTED",
                 "repo": self.transport.repo,
+                "request_id": rid,
                 "experiment_id": experiment_id,
                 "error": "experiment_id must be EXP-<positive integer>",
             }
-        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
+        try:
+            values = self._validate_execution_arguments(action, arguments)
+        except ClientError as exc:
             return {
                 "status": "REJECTED",
                 "repo": self.transport.repo,
+                "request_id": rid,
                 "experiment_id": experiment_id,
-                "mode": mode,
-                "error": "archive mode must be ATOMIC_DELETE or RETAIN_BRANCH",
-            }
-        try:
-            workflow_url = self.transport.dispatch_archive(experiment_id, mode)
-        except TransportUncertainError as exc:
-            return {
-                "status": "UNKNOWN",
-                "reason": "archive_dispatch_outcome_uncertain",
-                "repo": self.transport.repo,
-                "experiment_id": experiment_id,
-                "mode": mode,
+                "action": action,
                 "error": str(exc),
-                "retry_safe": True,
             }
-        return {
-            "status": "ACCEPTED",
-            "repo": self.transport.repo,
-            "experiment_id": experiment_id,
-            "mode": mode,
-            "workflow_url": workflow_url,
-        }
+
+        existing = self.transport.ledger_record(rid)
+        if existing is not None:
+            if not self._execution_claim_matches(
+                existing,
+                action=action,
+                experiment_id=experiment_id,
+                arguments=values,
+            ):
+                return {
+                    "status": "CONFLICT",
+                    "conflict_type": "REQUEST_ID_CONFLICT",
+                    "request_id": rid,
+                    "repo": self.transport.repo,
+                }
+            return self.resume_execution(rid)
+
+        snapshot_head = self.transport.ledger_head()
+        state = self.transport.ledger_json(
+            f"experiments/{experiment_id}/state.json",
+            ref=snapshot_head,
+        )
+        if not isinstance(state, dict):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "request_id": rid,
+                "experiment_id": experiment_id,
+                "error": "experiment is not bound in the authoritative Ledger",
+            }
+        claim = self.submit(
+            operation="execution.claim",
+            input_value={
+                "experiment_id": experiment_id,
+                "action": action,
+                "arguments": values,
+                "state_digest": digest_object(state),
+            },
+            actor_claim=actor_claim,
+            request_id=rid,
+        )
+        claim = self._wait_for_request_commit(rid, claim)
+        if claim.get("status") != "COMMITTED":
+            return {
+                **claim,
+                "operation_status": "CLAIM_PENDING",
+                "action": action,
+                "experiment_id": experiment_id,
+                "recovery": "query the same request_id; do not create a new one",
+            }
+        return self.resume_execution(rid)
+
+    def candidate(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="candidate_build",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def initialize(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="initialize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def rehearse(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="rehearse",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def integrate(
+        self,
+        experiment_id: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="integrate",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            actor_claim=actor_claim,
+        )
+
+    def integrate_finalize(
+        self,
+        experiment_id: str,
+        pr_number: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="integrate_finalize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"pr_number": str(pr_number)},
+            actor_claim=actor_claim,
+        )
+
+    def archive(
+        self,
+        experiment_id: str,
+        mode: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_execution(
+            action="archive",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"mode": mode},
+            actor_claim=actor_claim,
+        )
 
     def archive_abort(
         self,
