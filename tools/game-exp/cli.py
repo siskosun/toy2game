@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from client import ClientError, GameExpClient, GitHubTransport
+from conformance_core import (
+    ConformanceClient,
+    aggregate as conformance_aggregate,
+    evaluate as conformance_evaluate,
+    load_session as conformance_load_session,
+    save_session as conformance_save_session,
+    start_session as conformance_start_session,
+    suite_descriptor as conformance_suite_descriptor,
+)
 from protocol_core import ProtocolError, strict_json_loads
 
 
@@ -73,11 +82,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--repo", help="GitHub repository in owner/name form")
     ap.add_argument("--json", action="store_true", help="emit JSON output")
+    ap.add_argument(
+        "--conformance-session",
+        help=(
+            "use the exact normal CLI surface against a synthetic conformance "
+            "session instead of GitHub"
+        ),
+    )
     sub = ap.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="show repository and authoritative Ledger head")
     sub.add_parser("access-check", help="show current repository access snapshot")
     sub.add_parser("capabilities", help="show public contract/features and recovery support")
+
+    sub.add_parser(
+        "conformance-suite",
+        help="show the fixed Harness/Agent behavior screening suite",
+    )
+    conformance_start = sub.add_parser(
+        "conformance-start",
+        help="create one synthetic conformance session without touching GitHub",
+    )
+    conformance_start.add_argument("scenario_id")
+    conformance_start.add_argument("--session-file", required=True)
+    conformance_start.add_argument("--session-id")
+
+    conformance_result = sub.add_parser(
+        "conformance-result",
+        help="evaluate one completed synthetic conformance session",
+    )
+    conformance_result.add_argument("--session-file", required=True)
+
+    conformance_report = sub.add_parser(
+        "conformance-report",
+        help="aggregate scenario results into real-repo test eligibility",
+    )
+    conformance_report.add_argument(
+        "--session-file",
+        action="append",
+        required=True,
+        dest="session_files",
+    )
 
     board = sub.add_parser("board", help="show one consistent experiment Board snapshot")
     board.add_argument("--query")
@@ -193,8 +238,67 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        transport = GitHubTransport(args.repo)
-        client = GameExpClient(transport)
+        if args.command == "conformance-suite":
+            result = conformance_suite_descriptor()
+            result["status"] = "PASS"
+            _print_result(result, as_json=args.json)
+            return 0
+
+        if args.command == "conformance-start":
+            session = conformance_start_session(
+                args.scenario_id,
+                session_id=args.session_id,
+            )
+            conformance_save_session(args.session_file, session)
+            result = {
+                "status": "PASS",
+                "conformance_simulation": True,
+                "session_file": str(Path(args.session_file)),
+                "session_id": session["session_id"],
+                "scenario_id": session["scenario_id"],
+                "suite_digest": session["suite_digest"],
+                "task_zh": session["task_zh"],
+                "next_zh": (
+                    "使用 --conformance-session 指向该文件，然后照常调用 game-exp "
+                    "命令；完成后运行 conformance-result。"
+                ),
+            }
+            _print_result(result, as_json=args.json)
+            return 0
+
+        if args.command == "conformance-result":
+            session = conformance_load_session(args.session_file)
+            if session.get("status") == "EVALUATED" and isinstance(
+                session.get("evaluation"), dict
+            ):
+                result = session["evaluation"]
+            else:
+                result = conformance_evaluate(session)
+                conformance_save_session(args.session_file, session)
+            _print_result(result, as_json=args.json)
+            return 0 if result.get("status") == "PASS" else 1
+
+        if args.command == "conformance-report":
+            results = []
+            for session_file in args.session_files:
+                session = conformance_load_session(session_file)
+                if session.get("status") == "EVALUATED" and isinstance(
+                    session.get("evaluation"), dict
+                ):
+                    results.append(session["evaluation"])
+                else:
+                    evaluated = conformance_evaluate(session)
+                    conformance_save_session(session_file, session)
+                    results.append(evaluated)
+            result = conformance_aggregate(results)
+            _print_result(result, as_json=args.json)
+            return 0 if result.get("status") == "PASS" else 1
+
+        if args.conformance_session:
+            client = ConformanceClient(args.conformance_session, surface="cli")
+        else:
+            transport = GitHubTransport(args.repo)
+            client = GameExpClient(transport)
 
         if args.command == "status":
             result = client.status()
@@ -205,7 +309,11 @@ def main(argv: list[str] | None = None) -> int:
             result["interface"] = {
                 "type": "cli",
                 "transport": "local-process",
-                "write_identity": "local-gh-principal",
+                "write_identity": (
+                    "synthetic-conformance"
+                    if args.conformance_session
+                    else "local-gh-principal"
+                ),
             }
         elif args.command == "board":
             result = client.board(
@@ -368,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             ap.error("unknown command")
             return 2
-    except (ProtocolError, ClientError, OSError) as exc:
+    except (ProtocolError, ClientError, OSError, ValueError, json.JSONDecodeError) as exc:
         result = {
             "status": "REJECTED",
             "error": str(exc),
