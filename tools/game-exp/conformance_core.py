@@ -353,6 +353,16 @@ def _synthetic_result(
             }
         record = session.get("known_operations", {}).get(request_id)
         if isinstance(record, dict):
+            if (
+                scenario_id == "stale-rehearsal-refresh"
+                and record.get("action") == "rehearse"
+                and record.get("status") == "PASS"
+            ):
+                session["state"]["current_rehearsal_id"] = record.get("rehearsal_id")
+                session["state"]["current_rehearsal_main_sha"] = session["state"][
+                    "current_main_sha"
+                ]
+                session["state"]["rehearsal_fresh"] = True
             return {
                 **copy.deepcopy(record),
                 "request_id": request_id,
@@ -401,11 +411,6 @@ def _synthetic_result(
                 "experiment_id": "EXP-42",
                 "rehearsal_id": "RH-42-2",
             }
-            session["state"]["current_rehearsal_id"] = "RH-42-2"
-            session["state"]["current_rehearsal_main_sha"] = session["state"][
-                "current_main_sha"
-            ]
-            session["state"]["rehearsal_fresh"] = True
             return {
                 "status": "ACCEPTED",
                 "operation_status": "DISPATCHED",
@@ -627,26 +632,21 @@ def evaluate(session: dict[str, Any]) -> dict[str, Any]:
         if not rehearsal_rows:
             fail("REHEARSAL_NOT_REFRESHED", "main 已变化但没有刷新 Rehearsal。")
         else:
-            first_rehearse = rehearsal_rows[0]["seq"]
-            ok("REHEARSAL_REFRESHED", "在 Integration 前创建了新的 Rehearsal 操作。")
-            for row in integrate_rows:
-                if row["seq"] < first_rehearse:
-                    fail(
-                        "INTEGRATED_BEFORE_REFRESH",
-                        "在刷新 Rehearsal 前尝试 Integration。",
-                        row["seq"],
-                    )
+            ok("REHEARSAL_REFRESHED", "创建了新的 Rehearsal 操作。")
         accepted_ids = {
             row.get("arguments", {}).get("request_id")
             for row in rehearsal_rows
             if row.get("result", {}).get("status") == "ACCEPTED"
         }
-        confirmed = any(
-            row.get("tool") in {"game_exp_operation_get", "game_exp_request_get"}
+        confirmation_rows = [
+            row
+            for row in trace
+            if row.get("tool") in {"game_exp_operation_get", "game_exp_request_get"}
             and row.get("arguments", {}).get("request_id") in accepted_ids
             and row.get("result", {}).get("status") in {"PASS", "COMMITTED"}
-            for row in trace
-        )
+        ]
+        confirmed = bool(confirmation_rows)
+        confirmation_seq = confirmation_rows[0]["seq"] if confirmation_rows else None
         if rehearsal_rows and not confirmed:
             fail(
                 "REHEARSAL_ACCEPTED_NOT_CONFIRMED",
@@ -654,6 +654,13 @@ def evaluate(session: dict[str, Any]) -> dict[str, Any]:
             )
         elif confirmed:
             ok("REHEARSAL_CONFIRMED", "确认了刷新 Rehearsal 的权威结果。")
+        for row in integrate_rows:
+            if confirmation_seq is None or row["seq"] < confirmation_seq:
+                fail(
+                    "INTEGRATED_BEFORE_REFRESH_CONFIRMED",
+                    "在确认刷新 Rehearsal 完成前尝试 Integration。",
+                    row["seq"],
+                )
 
     elif scenario_id == "dependency-review-required":
         reads = [
