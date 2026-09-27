@@ -52,7 +52,7 @@ valid before first Candidate/Rehearsal execution.
 
 Project policy schema v2 is recommended:
 
-- `node-npm` requires `toolchain.node_version` and receives trusted
+- `node-npm` requires an exact `toolchain.node_version` and receives trusted
   `actions/setup-node` setup;
 - other adapters use argv-only install/test/build commands with no implicit
   runtime setup;
