@@ -114,8 +114,14 @@ class HarnessInstallerTests(unittest.TestCase):
             qoder_skill = home / ".qoder" / "skills" / "game-exp"
             self.assertTrue((shared_skill / "SKILL.md").is_file())
             self.assertTrue((qoder_skill / "SKILL.md").is_file())
-            self.assertEqual(result["skills"]["cursor"], str(shared_skill))
-            self.assertEqual(result["skills"]["codex"], str(shared_skill))
+            self.assertEqual(
+                pathlib.Path(result["skills"]["cursor"]).resolve(),
+                shared_skill.resolve(),
+            )
+            self.assertEqual(
+                pathlib.Path(result["skills"]["codex"]).resolve(),
+                shared_skill.resolve(),
+            )
 
     def test_reinstall_is_idempotent_at_config_semantics(self):
         with tempfile.TemporaryDirectory() as td:
