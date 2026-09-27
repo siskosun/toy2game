@@ -208,7 +208,7 @@ class GameExpSkillContractTests(unittest.TestCase):
             "game_exp_project_preflight",
             "game_exp_project_init",
             "PROJECT_READY",
-            "Shared/streamable HTTP MCP must not",
+            "Shared/streamable HTTP MCP must never perform",
         ):
             self.assertIn(phrase, skill)
         for phrase in (
