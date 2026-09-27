@@ -90,6 +90,7 @@ class GameExpSkillContractTests(unittest.TestCase):
             "game_exp_candidate_build",
             "game_exp_review_record",
             "game_exp_decision_submit",
+            "game_exp_abandon",
             "game_exp_rehearse",
             "game_exp_integrate",
             "game_exp_integrate_finalize",
@@ -251,6 +252,7 @@ class GameExpSkillContractTests(unittest.TestCase):
             "stale-rehearsal-refresh",
             "dependency-review-required",
             "human-gate-preserved",
+            "abandon-without-review",
             "not a substitute for trusted end-to-end validation",
         ):
             self.assertIn(phrase, reference)
