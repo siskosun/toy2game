@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -230,6 +233,9 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(
             names,
             {
+                "game_exp_conformance_suite",
+                "game_exp_conformance_start",
+                "game_exp_conformance_result",
                 "game_exp_status",
                 "game_exp_access_check",
                 "game_exp_capabilities",
@@ -256,6 +262,52 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_request_submit",
             },
         )
+
+    def test_conformance_mcp_uses_same_normal_tool_surface(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = str(Path(td) / "session.json")
+            with patch.dict(
+                os.environ,
+                {"GAME_EXP_CONFORMANCE_SESSION": session},
+                clear=False,
+            ):
+                started = mcp_server.game_exp_conformance_start(
+                    "lost-response-recovery",
+                    "mcp-cross-surface",
+                )
+                self.assertEqual(started["status"], "PASS")
+
+                result = mcp_server.game_exp_operation_get("req-archive-42")
+                self.assertEqual(result["status"], "COMMITTED")
+                self.assertTrue(result["conformance_simulation"])
+
+                evaluated = mcp_server.game_exp_conformance_result()
+                self.assertEqual(evaluated["status"], "PASS")
+                data = json.loads(Path(session).read_text(encoding="utf-8"))
+                self.assertEqual(data["trace"][0]["surface"], "mcp")
+                self.assertEqual(data["trace"][0]["tool"], "game_exp_operation_get")
+
+    def test_conformance_mode_bypasses_real_http_identity_gate_only_for_synthetic_session(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = str(Path(td) / "session.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "GAME_EXP_CONFORMANCE_SESSION": session,
+                    "GAME_EXP_MCP_TRANSPORT": "streamable-http",
+                },
+                clear=False,
+            ):
+                mcp_server.game_exp_conformance_start(
+                    "stale-rehearsal-refresh",
+                    "mcp-http-synthetic",
+                )
+                result = mcp_server.game_exp_rehearse(
+                    "EXP-42",
+                    "req-rh-http-synthetic",
+                )
+                self.assertEqual(result["status"], "ACCEPTED")
+                self.assertTrue(result["conformance_simulation"])
 
     def test_tool_schemas_are_explicit(self):
         tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
