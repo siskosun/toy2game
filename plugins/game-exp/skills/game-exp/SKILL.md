@@ -171,7 +171,7 @@ When a workflow tool returns only a run URL/status, poll by re-reading the exper
 
 ## Recovery behavior
 
-- Lost response: use the original operation id with `game_exp_operation_get` or `game-exp get-operation`.
+- Lost response: use the original operation id with `game_exp_operation_get` or `game-exp get-operation`. The backward-compatible MCP alias `game_exp_request_get` resolves the same operation id.
 - An async execution claim that is committed but has no worker run may be resumed with `game_exp_operation_resume` / `game-exp resume-operation`; this resumes the same id, not a new operation.
 - Duplicate request with same payload: accept the authoritative idempotent replay; do not create another request.
 - Duplicate request with different payload: hard `CONFLICT`.
