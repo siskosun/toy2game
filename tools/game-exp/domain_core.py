@@ -16,6 +16,8 @@ REHEARSAL_RE = re.compile(r"^R-([1-9][0-9]*)-([0-9]+)-([1-9][0-9]*)$")
 INTEGRATION_RE = re.compile(r"^I-([1-9][0-9]*)-PR-([1-9][0-9]*)$")
 ARCHIVE_RE = re.compile(r"^A-([1-9][0-9]*)-([1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+CURRENT_MANIFEST_SCHEMA_VERSION = 2
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {1, 2}
 REHEARSAL_REQUIRED_CHECKS = (
     "scope",
     "merge",
@@ -299,8 +301,12 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         where="manifest",
         optional={"subject", "relationships"},
     )
-    if manifest["schema_version"] != 1:
-        raise DomainError("manifest.schema_version must equal 1")
+    schema_version = manifest["schema_version"]
+    if schema_version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
+        raise DomainError(
+            "manifest.schema_version must be one of "
+            + ", ".join(str(v) for v in sorted(SUPPORTED_MANIFEST_SCHEMA_VERSIONS))
+        )
 
     exp = _mapping(manifest["experiment"], "manifest.experiment")
     _expect_keys(
@@ -417,9 +423,26 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         _require_nfc(pattern, "manifest scope pattern")
 
     runtime = _mapping(manifest["runtime"], "manifest.runtime")
-    _expect_keys(runtime, {"godot", "export_templates", "addons_lock"}, where="manifest.runtime")
-    for name in ("godot", "export_templates", "addons_lock"):
-        _string(runtime[name], f"manifest.runtime.{name}")
+    if schema_version == 1:
+        _expect_keys(
+            runtime,
+            {"godot", "export_templates", "addons_lock"},
+            where="manifest.runtime",
+        )
+        for name in ("godot", "export_templates", "addons_lock"):
+            _string(runtime[name], f"manifest.runtime.{name}")
+    else:
+        _expect_keys(
+            runtime,
+            {"adapter", "policy_path"},
+            where="manifest.runtime",
+        )
+        _string(runtime["adapter"], "manifest.runtime.adapter")
+        policy_path = _string(runtime["policy_path"], "manifest.runtime.policy_path")
+        if policy_path != ".game-exp/project-policy.json":
+            raise DomainError(
+                "manifest.runtime.policy_path must equal .game-exp/project-policy.json"
+            )
 
     review = _mapping(manifest["review"], "manifest.review")
     _expect_keys(review, {"protocol"}, where="manifest.review")
