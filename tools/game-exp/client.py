@@ -3763,7 +3763,26 @@ class GameExpClient:
             missing = sorted(required - active_names)
             add("rulesets", "PASS" if not missing else "FAIL", {"missing": missing})
         except Exception as exc:
-            add("rulesets", "UNKNOWN", str(exc))
+            detail = str(exc)
+            lowered = detail.lower()
+            if (
+                "upgrade to github pro" in lowered
+                or "make this repository public" in lowered
+            ):
+                add(
+                    "rulesets",
+                    "FAIL",
+                    {
+                        "code": "RULESETS_PLAN_UNSUPPORTED",
+                        "detail": detail,
+                        "resolution_choices": [
+                            "make_repository_public",
+                            "upgrade_github_plan",
+                        ],
+                    },
+                )
+            else:
+                add("rulesets", "UNKNOWN", detail)
 
         keys = self.transport.deploy_keys()
         if keys is None:
