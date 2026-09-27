@@ -12,6 +12,63 @@ SAFE_INT = (1 << 53) - 1
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 OPERATION_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 
+PUBLIC_CONTRACT_NAME = "game-exp"
+PUBLIC_CONTRACT_VERSION = "1.0"
+PUBLIC_CONTRACT_MAJOR = 1
+SUPPORTED_OPERATION_SCHEMA_VERSIONS = (1,)
+RESULT_STATUSES = (
+    "PASS",
+    "WARN",
+    "ACCEPTED",
+    "COMMITTED",
+    "REJECTED",
+    "CONFLICT",
+    "UNKNOWN",
+)
+ASYNC_EXECUTION_ACTIONS = (
+    "initialize",
+    "candidate_build",
+    "rehearse",
+    "integrate",
+    "integrate_finalize",
+    "archive",
+)
+
+
+def contract_descriptor() -> dict[str, Any]:
+    return {
+        "name": PUBLIC_CONTRACT_NAME,
+        "version": PUBLIC_CONTRACT_VERSION,
+        "major": PUBLIC_CONTRACT_MAJOR,
+        "operation_schema_versions": list(SUPPORTED_OPERATION_SCHEMA_VERSIONS),
+        "result_statuses": list(RESULT_STATUSES),
+        "compatibility": {
+            "mutation_unknown_fields": "REJECT",
+            "result_unknown_fields": "IGNORE",
+            "major_mismatch": "REJECT",
+        },
+        "recovery": {
+            "stable_request_id_required_for_mutations": True,
+            "same_id_same_payload": "REPLAY",
+            "same_id_different_payload": "CONFLICT",
+            "accepted_or_unknown": "QUERY_SAME_REQUEST_ID",
+            "authorization_failure": "DO_NOT_FALLBACK_RETRY",
+        },
+    }
+
+
+def validate_contract_version(value: str | None) -> str:
+    if value is None:
+        return PUBLIC_CONTRACT_VERSION
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*\.[0-9]+", value):
+        raise ProtocolError("invalid contract version")
+    major = int(value.split(".", 1)[0])
+    if major != PUBLIC_CONTRACT_MAJOR:
+        raise ProtocolError(
+            f"unsupported contract major {major}; expected {PUBLIC_CONTRACT_MAJOR}"
+        )
+    return value
+
 
 class ProtocolError(ValueError):
     pass
