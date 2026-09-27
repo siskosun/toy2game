@@ -20,6 +20,7 @@ _ALLOWED_STEP = {"argv"}
 _ALLOWED_CANDIDATE = {"include", "required_paths"}
 _ALLOWED_NODE_TOOLCHAIN = {"node_version"}
 _ADAPTER_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_NODE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class ProjectPolicyError(ValueError):
@@ -86,11 +87,10 @@ def validate_policy(policy: Any) -> dict[str, Any]:
             node_version = toolchain["node_version"]
             if (
                 not isinstance(node_version, str)
-                or not node_version
-                or node_version.strip() != node_version
+                or not _NODE_VERSION_RE.fullmatch(node_version)
             ):
                 raise ProjectPolicyError(
-                    "policy.toolchain.node_version: expected non-empty string"
+                    "policy.toolchain.node_version: expected exact Node version such as 22.21.1"
                 )
         elif toolchain:
             raise ProjectPolicyError(
