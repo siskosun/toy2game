@@ -7,11 +7,28 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from client import GameExpClient, GitHubTransport
+from conformance_core import (
+    ConformanceClient,
+    compare_reports as conformance_compare_reports,
+    evaluate as conformance_evaluate,
+    load_session as conformance_load_session,
+    save_session as conformance_save_session,
+    start_session as conformance_start_session,
+    suite_descriptor as conformance_suite_descriptor,
+)
 
 mcp = MCPServer("game-exp")
 
 
-def _client(repo: str | None = None) -> GameExpClient:
+def _conformance_session_path() -> str | None:
+    value = os.environ.get("GAME_EXP_CONFORMANCE_SESSION")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _client(repo: str | None = None) -> GameExpClient | ConformanceClient:
+    session_path = _conformance_session_path()
+    if session_path is not None:
+        return ConformanceClient(session_path, surface="mcp")
     target = repo or os.environ.get("GAME_EXP_REPO")
     return GameExpClient(GitHubTransport(target))
 
@@ -28,6 +45,8 @@ def _http_single_principal_write_enabled() -> bool:
 
 
 def _write_identity_rejection(repo: str | None) -> dict[str, Any] | None:
+    if _conformance_session_path() is not None:
+        return None
     if _mcp_transport() != "streamable-http":
         return None
     if _http_single_principal_write_enabled():
@@ -44,6 +63,67 @@ def _write_identity_rejection(repo: str | None) -> dict[str, Any] | None:
         ),
         "fallback_policy": "AUTHORIZATION_FAILURE_DO_NOT_RETRY_AS_NEW_OPERATION",
     }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def game_exp_conformance_suite() -> dict[str, Any]:
+    """Return the fixed synthetic behavior screening suite. Never touches GitHub."""
+    result = conformance_suite_descriptor()
+    return {"status": "PASS", "conformance_simulation": True, **result}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def game_exp_conformance_start(
+    scenario_id: str,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Reset the configured synthetic session file to one conformance scenario."""
+    path = _conformance_session_path()
+    if path is None:
+        return {
+            "status": "REJECTED",
+            "code": "CONFORMANCE_SESSION_PATH_REQUIRED",
+            "error": "set GAME_EXP_CONFORMANCE_SESSION before starting simulator mode",
+        }
+    session = conformance_start_session(scenario_id, session_id=session_id)
+    conformance_save_session(path, session)
+    return {
+        "status": "PASS",
+        "conformance_simulation": True,
+        "session_id": session["session_id"],
+        "scenario_id": session["scenario_id"],
+        "suite_digest": session["suite_digest"],
+        "task_zh": session["task_zh"],
+    }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def game_exp_conformance_compare(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare two screening reports only when their suite digest is identical."""
+    return conformance_compare_reports(baseline, candidate)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def game_exp_conformance_result() -> dict[str, Any]:
+    """Evaluate the configured synthetic session against the standing suite."""
+    path = _conformance_session_path()
+    if path is None:
+        return {
+            "status": "REJECTED",
+            "code": "CONFORMANCE_SESSION_PATH_REQUIRED",
+            "error": "set GAME_EXP_CONFORMANCE_SESSION before evaluating simulator mode",
+        }
+    session = conformance_load_session(path)
+    if session.get("status") == "EVALUATED" and isinstance(
+        session.get("evaluation"), dict
+    ):
+        return session["evaluation"]
+    result = conformance_evaluate(session)
+    conformance_save_session(path, session)
+    return result
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
@@ -66,7 +146,9 @@ def game_exp_capabilities(repo: str | None = None) -> dict[str, Any]:
         "type": "mcp",
         "transport": transport,
         "write_identity": (
-            "local-gh-principal"
+            "synthetic-conformance"
+            if _conformance_session_path() is not None
+            else "local-gh-principal"
             if transport == "stdio"
             else "trusted-single-principal"
             if _http_single_principal_write_enabled()

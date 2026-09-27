@@ -28,6 +28,7 @@ PRODUCTION_TOOLS = (
     "bootstrap.py",
     "cli.py",
     "client.py",
+    "conformance_core.py",
     "domain_core.py",
     "integration_control.py",
     "github_bridge.py",
@@ -55,6 +56,7 @@ PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/references/prototype-handoff.md",
     "plugins/game-exp/skills/game-exp/references/exploration-thread.md",
     "plugins/game-exp/skills/game-exp/references/public-contract.md",
+    "plugins/game-exp/skills/game-exp/references/conformance.md",
 )
 
 NODE_NPM_POLICY = {

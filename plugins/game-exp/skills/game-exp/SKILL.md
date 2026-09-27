@@ -91,6 +91,19 @@ For the GitHub Bridge:
 - The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission.
 - Human-owned gates remain human-owned. The bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
 
+## Harness conformance screening
+
+When changing game-exp routing, recovery, transport identity, human-gate handling, or other cross-interface semantics, use the Conformance Simulator described in `references/conformance.md` before real-repository validation.
+
+- Use `game_exp_conformance_suite` to inspect the fixed standing suite.
+- Use `game_exp_conformance_start` only in an explicitly configured synthetic conformance session.
+- Exercise the normal `game_exp_*` tools against that session; do not invent simulator-only lifecycle commands.
+- Use `game_exp_conformance_result` to evaluate one scenario.
+- Use `game_exp_conformance_compare` only when baseline and candidate reports share the exact same `suite_digest`.
+- A conformance PASS means only `eligible_for_real_repo_test=true`. It is never Candidate, Review, Rehearsal, Integration, Archive, or release evidence.
+- If the standing evaluator changes, rerun incumbent and candidate under the new suite. Never compare reports from different suite digests.
+- Keep simulator mode isolated from production. A synthetic session must never contact or mutate GitHub.
+
 ## Collaboration notifications
 
 When the user asks what changed, who started a new experiment, or wants collaborator notifications, use `game_exp_notifications` and follow `references/notifications.md`.
