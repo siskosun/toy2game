@@ -44,6 +44,19 @@ When the user opens one prototype/subject group, prefer `game_exp_subject_panel`
 
 For multi-user work, keep `发起人` and `代码贡献者` distinct. The initiator comes from the Trusted Writer-verified binding actor. Contributors come from GitHub commit attribution and are display-only collaboration metadata; never use contributor status as authority.
 
+## Complete project setup
+
+When the user asks game-exp to create, bootstrap, prepare, or initialize a new repository/project, follow `references/project-setup.md` before first-experiment onboarding.
+
+- Installing files is not project completion.
+- After the repository and source exist, install game-exp files, commit/push them to `main`, then run `game_exp_project_preflight` or CLI `project-preflight`.
+- If preflight reports `BLOCKED_PLAN`, `BLOCKED_PERMISSION`, or `BLOCKED_SOURCE`, stop and surface the material blocker. Do not create a degraded trust mode or call the project ready.
+- Run `game_exp_project_init` only through local stdio MCP, or CLI `project-init`, with the repository administrator's GitHub identity.
+- Shared/streamable HTTP MCP must never perform complete project initialization because setup generates a private Deploy Key and repository secret.
+- A project is ready only when project-init returns `status=PASS`, `complete=true`, the Trusted Writer self-test passed, and final repo-level Doctor is PASS.
+- If GitHub plan support is insufficient for a private repository, never change repository visibility automatically. The user must explicitly choose public visibility or a plan that supports private-repository rulesets.
+- Only after `PROJECT_READY` may first-experiment onboarding begin.
+
 ## First-use onboarding
 
 When the protected Ledger is empty, or the user explicitly says this is their first use, follow `references/onboarding.md`. Start with `game_exp_access_check` before repo-level Doctor so missing write access is explained before any Bind attempt. Keep onboarding in plain Chinese and translate natural-language intent into the existing trusted workflow. Do not require the user to know Manifest fields, request ids, lifecycle enums, MCP tool names, or protected refs.
