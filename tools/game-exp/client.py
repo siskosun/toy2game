@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 from protocol_core import (
+    ASYNC_EXECUTION_ACTIONS,
     build_operation_payload,
+    contract_descriptor,
     digest_object,
     encode_payload_b64,
     new_request_id,
@@ -16,6 +19,15 @@ from protocol_core import (
 
 RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:$|[/?#])")
 EXPERIMENT_ID_RE = re.compile(r"^EXP-[1-9][0-9]*$")
+
+WORKFLOW_EXECUTION_SPECS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "initialize": ("game-exp-source-initializer.yml", ()),
+    "candidate_build": ("game-exp-candidate.yml", ()),
+    "rehearse": ("game-exp-rehearsal.yml", ()),
+    "integrate": ("game-exp-integration.yml", ()),
+    "integrate_finalize": ("game-exp-integration-finalize.yml", ("pr_number",)),
+    "archive": ("game-exp-archive.yml", ("mode",)),
+}
 
 
 class ClientError(RuntimeError):
@@ -169,6 +181,99 @@ class GitHubTransport:
                 "workflow dispatch returned no run URL; outcome is uncertain"
             )
         return url
+
+    def dispatch_execution(
+        self,
+        *,
+        action: str,
+        experiment_id: str,
+        request_id: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
+        if action not in WORKFLOW_EXECUTION_SPECS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            raise ClientError("experiment_id must be EXP-<positive integer>")
+        validate_request_id(request_id)
+        workflow, argument_names = WORKFLOW_EXECUTION_SPECS[action]
+        values = arguments or {}
+        if set(values) != set(argument_names):
+            raise ClientError(
+                f"execution arguments mismatch for {action}: "
+                f"expected={sorted(argument_names)} actual={sorted(values)}"
+            )
+        command = [
+            "gh",
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            self.repo,
+            "--ref",
+            "main",
+            "-f",
+            f"experiment_id={experiment_id}",
+            "-f",
+            f"request_id={request_id}",
+        ]
+        for name in argument_names:
+            command.extend(["-f", f"{name}={values[name]}"])
+        proc = _run(command, check=False, timeout=30)
+        if proc.returncode != 0:
+            raise TransportUncertainError(
+                f"{action} workflow dispatch did not produce a provable result"
+            )
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not RUN_URL_RE.search(url):
+            raise TransportUncertainError(
+                f"{action} workflow dispatch returned no run URL; outcome is uncertain"
+            )
+        return url
+
+    def find_execution_run(
+        self,
+        *,
+        action: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        if action not in WORKFLOW_EXECUTION_SPECS:
+            raise ClientError(f"unsupported async execution action: {action}")
+        validate_request_id(request_id)
+        workflow, _ = WORKFLOW_EXECUTION_SPECS[action]
+        proc = _run(
+            [
+                "gh",
+                "run",
+                "list",
+                "--repo",
+                self.repo,
+                "--workflow",
+                workflow,
+                "--limit",
+                "100",
+                "--json",
+                "databaseId,displayTitle,status,conclusion,url,createdAt",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        rows = _json_output(proc)
+        if not isinstance(rows, list):
+            return None
+        expected_title = f"game-exp:{action}:{request_id}"
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict) and row.get("displayTitle") == expected_title
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda row: int(row.get("databaseId") or 0),
+        )
+        return matches[0]
 
     def dispatch_initializer(self, experiment_id: str) -> str:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
