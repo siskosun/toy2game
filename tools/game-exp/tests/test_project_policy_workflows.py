@@ -43,6 +43,16 @@ class ProjectPolicyWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("grep -q '^dist/", text)
         self.assertIn("policy_digest(policy)", text)
 
+    def test_node_toolchain_is_policy_driven_in_candidate_and_rehearsal(self):
+        for name in ("candidate", "rehearsal"):
+            text = WORKFLOWS[name].read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn("policy_schema", text)
+                self.assertIn("node_version", text)
+                self.assertIn("node-version:", text)
+                self.assertIn("node-version-file: .node-version", text)
+                self.assertIn("outputs.adapter == 'node-npm'", text)
+
     def test_trusted_writer_workflow_freezes_request_payload_and_head(self):
         path = ROOT / ".github/workflows/game-exp-trusted-writer.yml"
         text = path.read_text(encoding="utf-8")
