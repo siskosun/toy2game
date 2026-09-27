@@ -254,6 +254,18 @@ class CLIRoutingTests(unittest.TestCase):
                 ("review-bound-to-candidate", ["experiment", "EXP-42"], 0),
                 ("dependency-review-required", ["experiment", "EXP-86"], 0),
                 ("human-gate-preserved", ["experiment", "EXP-42"], 0),
+                (
+                    "abandon-without-review",
+                    [
+                        "abandon",
+                        "EXP-42",
+                        "--reason",
+                        "resource priority changed",
+                        "--request-id",
+                        "req-abandon-cli",
+                    ],
+                    0,
+                ),
             ]
             for scenario_id, command, expected_code in scenarios:
                 path = Path(td) / f"{scenario_id}.json"
