@@ -228,6 +228,50 @@ def _marker(request_id: str, phase: str) -> str:
     return f"<!-- game-exp-bridge:{request_id}:{phase} -->"
 
 
+def _command_digest_line(command_digest: str) -> str:
+    return f"game-exp-command-digest: {command_digest}"
+
+
+def _comment_command_digest(row: dict[str, Any]) -> str | None:
+    body = row.get("body")
+    if not isinstance(body, str):
+        return None
+    match = re.search(
+        r"(?m)^game-exp-command-digest: (sha256:[0-9a-f]{64})$",
+        body,
+    )
+    return match.group(1) if match else None
+
+
+def _marker_replay_status(
+    row: dict[str, Any],
+    *,
+    request_id: str,
+    command_digest: str,
+    phase: str,
+) -> dict[str, Any] | None:
+    stored = _comment_command_digest(row)
+    if stored is None:
+        return {
+            "status": "UNKNOWN",
+            "request_id": request_id,
+            "reason": "legacy_marker_without_command_digest",
+            f"{phase}_comment_id": row.get("id"),
+            f"{phase}_comment_url": row.get("html_url"),
+        }
+    if stored != command_digest:
+        return {
+            "status": "CONFLICT",
+            "conflict_type": "REQUEST_ID_CONFLICT",
+            "request_id": request_id,
+            "expected_command_digest": stored,
+            "new_command_digest": command_digest,
+            f"{phase}_comment_id": row.get("id"),
+            f"{phase}_comment_url": row.get("html_url"),
+        }
+    return None
+
+
 def find_marker_comment(
     repo: str,
     issue_number: str,
@@ -518,6 +562,7 @@ def _reply_body(
     result: dict[str, Any],
     *,
     phase: str = "result",
+    command_digest: str | None = None,
 ) -> str:
     payload = json.dumps(result, ensure_ascii=False, sort_keys=True)
     if len(payload) > 6000:
@@ -526,6 +571,11 @@ def _reply_body(
         [
             _marker(request_id, phase),
             f"game-exp bridge {phase} for {request_id}",
+            *(
+                [_command_digest_line(command_digest)]
+                if command_digest is not None
+                else []
+            ),
             "",
             "~~~json",
             payload,
@@ -553,6 +603,7 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
 
     command = parse_command(body)
     request_id = command["request_id"]
+    command_digest = digest_object(command)
     validate_issue_binding(command, issue_number)
     permission = verify_actor(args.repo, actor_login)
 
@@ -560,20 +611,38 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         args.repo, issue_number, request_id, "result"
     )
     if previous is not None:
+        marker_status = _marker_replay_status(
+            previous,
+            request_id=request_id,
+            command_digest=command_digest,
+            phase="result",
+        )
+        if marker_status is not None:
+            return marker_status
         return {
             "status": "REPLAYED",
             "request_id": request_id,
             "permission": permission,
+            "command_digest": command_digest,
             "result_comment_id": previous.get("id"),
             "result_comment_url": previous.get("html_url"),
         }
 
     claim = find_marker_comment(args.repo, issue_number, request_id, "claim")
     if claim is not None:
+        marker_status = _marker_replay_status(
+            claim,
+            request_id=request_id,
+            command_digest=command_digest,
+            phase="claim",
+        )
+        if marker_status is not None:
+            return marker_status
         return {
             "status": "UNKNOWN",
             "request_id": request_id,
             "reason": "existing_claim_without_result",
+            "command_digest": command_digest,
             "claim_comment_id": claim.get("id"),
             "claim_comment_url": claim.get("html_url"),
         }
@@ -582,6 +651,7 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         [
             _marker(request_id, "claim"),
             f"game-exp bridge claim for {request_id}",
+            _command_digest_line(command_digest),
             f"Bridge run: https://github.com/{args.repo}/actions/runs/{args.run_id}",
         ]
     )
@@ -607,7 +677,11 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
             "claim_comment_id": claim_row.get("id"),
             "recovery": "query/resume this same request_id; do not submit a new logical operation",
         }
-        post_comment(args.repo, issue_number, _reply_body(request_id, error))
+        post_comment(
+            args.repo,
+            issue_number,
+            _reply_body(request_id, error, command_digest=command_digest),
+        )
         return error
     except Exception as exc:
         error = {
@@ -616,7 +690,11 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
             "error": str(exc),
             "claim_comment_id": claim_row.get("id"),
         }
-        post_comment(args.repo, issue_number, _reply_body(request_id, error))
+        post_comment(
+            args.repo,
+            issue_number,
+            _reply_body(request_id, error, command_digest=command_digest),
+        )
         raise
 
     result = {
@@ -626,7 +704,12 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
         "bridge_permission": permission,
         "claim_comment_id": claim_row.get("id"),
     }
-    post_comment(args.repo, issue_number, _reply_body(request_id, result))
+    result["bridge_command_digest"] = command_digest
+    post_comment(
+        args.repo,
+        issue_number,
+        _reply_body(request_id, result, command_digest=command_digest),
+    )
     return result
 
 
