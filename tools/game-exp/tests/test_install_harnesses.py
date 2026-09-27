@@ -63,13 +63,13 @@ class HarnessInstallerTests(unittest.TestCase):
                 result = HarnessInstaller(ROOT, home).install()
 
             self.assertEqual(result["status"], "PASS")
-            self.assertEqual(result["version"], "0.16.3")
+            self.assertEqual(result["version"], "0.17.0")
             self.assertEqual(result["repo_binding"], "dynamic")
 
             runtime = home / ".agents" / "tools" / "game-exp"
             self.assertEqual(
                 (runtime / "VERSION.txt").read_text(encoding="utf-8").strip(),
-                "0.16.3",
+                "0.17.0",
             )
             self.assertTrue(
                 (runtime / "tools" / "game-exp" / "mcp_server.py").is_file()
@@ -148,7 +148,7 @@ class HarnessInstallerTests(unittest.TestCase):
                 (home / ".agents" / "tools" / "game-exp" / "VERSION.txt")
                 .read_text(encoding="utf-8")
                 .strip(),
-                "0.16.3",
+                "0.17.0",
             )
             self.assertTrue(
                 (
@@ -201,7 +201,7 @@ class HarnessInstallerTests(unittest.TestCase):
                 (home / ".agents" / "tools" / "game-exp" / "VERSION.txt")
                 .read_text(encoding="utf-8")
                 .strip(),
-                "0.16.3",
+                "0.17.0",
             )
             self.assertEqual(
                 locked_path.read_bytes(),
