@@ -1001,6 +1001,7 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
         return None
     if payload.get("operation") not in {
         "experiment.bind",
+        "execution.claim",
         "experiment.decision",
         "review.record",
         "archive.prepare",
@@ -1033,7 +1034,7 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
     if (
-        payload.get("operation") == "experiment.bind"
+        payload.get("operation") in {"experiment.bind", "execution.claim"}
         and permission not in {"admin", "maintain", "write"}
     ):
         raise DomainError(
@@ -1259,6 +1260,17 @@ def main() -> int:
             "domain_status": domain_plan.status,
             "domain_experiment_id": domain_plan.experiment_id,
             "domain_paths": domain_plan.paths,
+            **(
+                {
+                    "trusted_actor": {
+                        "login": trusted_actor.login,
+                        "user_id": trusted_actor.user_id,
+                        "permission": trusted_actor.permission,
+                    }
+                }
+                if trusted_actor is not None
+                else {}
+            ),
         }
         path = repo_dir / target
         path.parent.mkdir(parents=True, exist_ok=True)
