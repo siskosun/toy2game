@@ -86,7 +86,7 @@ Schema v1 remains compatible for legacy `node-npm` repositories. Schema v2 is re
 - Candidate paths to package;
 - Candidate paths that must exist in the trusted archive.
 
-For `node-npm`, schema v2 requires `toolchain.node_version`. Candidate and Rehearsal use that value with `actions/setup-node`, so the build no longer depends on a separate `.node-version` file. Other schema-v2 adapters receive no implicit runtime installation; their argv commands must be self-contained on the trusted Ubuntu runner.
+For `node-npm`, schema v2 requires an exact `toolchain.node_version`. Candidate and Rehearsal use that value with `actions/setup-node`, so the build no longer depends on a separate `.node-version` file. Other schema-v2 adapters receive no implicit runtime installation; their argv commands must be self-contained on the trusted Ubuntu runner.
 
 The trusted workflows load this policy from the immutable `github.workflow_sha`. Experiment branches cannot alter the policy used to validate themselves. The Candidate receipt records the policy digest, so changing project validation rules changes Candidate identity evidence.
 
