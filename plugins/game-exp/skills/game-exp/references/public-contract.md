@@ -58,7 +58,7 @@ Project validation policy is repository-local and independent from Manifest sche
 
 - Project policy schema v1 remains compatible and is limited to the legacy `node-npm` shape.
 - Project policy schema v2 is recommended. It keeps install/test/build as argv arrays and makes the adapter generic.
-- For `node-npm`, schema v2 requires `toolchain.node_version`. Trusted Candidate/Rehearsal workflows use that value with `actions/setup-node`; they no longer require a repository `.node-version` file.
+- For `node-npm`, schema v2 requires an exact `toolchain.node_version`. Trusted Candidate/Rehearsal workflows use that value with `actions/setup-node`; they no longer require a repository `.node-version` file.
 - For adapters other than `node-npm`, `toolchain` is currently empty and game-exp performs no implicit runtime installation. The declared install/test/build argv commands must therefore be self-contained on the trusted `ubuntu-latest` runner.
 
 Example Node/npm policy:
@@ -67,7 +67,7 @@ Example Node/npm policy:
 {
   "schema_version": 2,
   "adapter": "node-npm",
-  "toolchain": {"node_version": "22"},
+  "toolchain": {"node_version": "22.21.1"},
   "install": {"argv": ["npm", "ci"]},
   "test": {"argv": ["npm", "test"]},
   "build": {"argv": ["npm", "run", "build"]},
