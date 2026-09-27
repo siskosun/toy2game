@@ -145,6 +145,21 @@ This is valid because the operation identity is unchanged.
 - `REJECTED`: validated failure; do not retry unchanged.
 - `UNKNOWN`: outcome cannot yet be proved; recover by the same operation id.
 
+## Abandonment vs Review failure
+
+`ABANDONED` is a first-class terminal lifecycle decision for explicitly stopping an experiment without claiming that the Candidate failed its declared human Review protocol.
+
+- Valid decision transitions: `ACTIVE / REVIEW / PROMISING / SELECTED -> ABANDONED`.
+- Use MCP `game_exp_abandon`, CLI `abandon`, or Bridge `decision_submit` with `to_state=ABANDONED`.
+- The decision requires a trusted write-capable GitHub actor and a human-supplied reason.
+- No Candidate or Review is required.
+- `ABANDONED` does not close the canonical Issue, archive/delete the experiment branch, delete source, or delete immutable Candidate Releases.
+- A later Archive is a separate operation and retains the normal `ATOMIC_DELETE` / `RETAIN_BRANCH` human choice.
+- Closing the canonical Issue alone does not change Ledger lifecycle.
+- A `FAIL` Review must describe an actual human Review outcome. It must never be fabricated as a mechanical path to stop an experiment.
+
+When a user refers to a prototype/subject rather than one experiment, resolve the subject first. If multiple non-terminal experiments exist, the affected experiment set is a material scope choice and must be confirmed before applying multiple terminal decisions.
+
 ## Cancellation
 
 There is no generic `cancel-operation` in public contract v1.0. A claimed/running async operation is recovered or allowed to complete; arbitrary cancellation could leave external effects ambiguous.
@@ -175,6 +190,8 @@ A local CLI executable being modifiable does not grant Ledger write authority.
 Human Review and lifecycle decisions remain tied to concrete evidence.
 
 A Review must identify the Candidate and its artifact digest. Promotion and selection re-check the current Candidate, Review, retention and/or Rehearsal. A human approval for an earlier Candidate does not silently apply to a later Candidate.
+
+Abandonment is different evidence: it records an explicit human decision to stop work for a stated reason and intentionally requires no PASS/FAIL Review evidence.
 
 Never convert a generic `approved=true` flag into authoritative human evidence.
 
