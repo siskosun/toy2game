@@ -1038,7 +1038,7 @@ def resolve_trusted_actor(repo: str, payload: dict) -> TrustedActorContext | Non
         and permission not in {"admin", "maintain", "write"}
     ):
         raise DomainError(
-            f"actor {login!r} lacks write permission for experiment binding",
+            f"actor {login!r} lacks write permission for trusted operation {payload.get('operation')!r}",
             code="DOMAIN_AUTHORIZATION_FAILED",
         )
     return TrustedActorContext(
