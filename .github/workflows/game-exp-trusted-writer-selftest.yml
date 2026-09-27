@@ -1,6 +1,7 @@
 name: game-exp trusted writer selftest
 
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["game-exp cross-platform probe"]
     types: [completed]
@@ -11,7 +12,7 @@ permissions:
 
 jobs:
   trusted-writer-selftest:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
