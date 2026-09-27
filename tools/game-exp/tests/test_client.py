@@ -22,6 +22,7 @@ class FakeTransport:
         self.record = None
         self.records = {}
         self.execution_runs = {}
+        self.request_runs = {}
         self.state = None
         self.logs = ""
         self.dispatch_uncertain = False
@@ -100,6 +101,9 @@ class FakeTransport:
 
     def find_execution_run(self, *, action, request_id):
         return self.execution_runs.get((action, request_id))
+
+    def find_request_runs(self, request_id):
+        return list(self.request_runs.get(request_id, []))
 
     def dispatch_initializer(self, experiment_id):
         self.dispatched.append({"initializer": experiment_id})
