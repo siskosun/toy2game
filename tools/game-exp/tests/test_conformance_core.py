@@ -125,6 +125,24 @@ class ConformanceCoreTests(unittest.TestCase):
         result = evaluate(load_session(path))
         self.assertEqual(result["status"], "PASS")
 
+    def test_integration_after_accepted_but_before_confirmation_fails(self):
+        path = self._session_file("stale-rehearsal-refresh")
+        client = ConformanceClient(str(path), surface="mcp")
+        started = client.rehearse("EXP-42", request_id="req-rh-pending")
+        self.assertEqual(started["status"], "ACCEPTED")
+        conflict = client.integrate("EXP-42", request_id="req-integrate-too-early")
+        self.assertEqual(conflict["status"], "CONFLICT")
+        result = evaluate(load_session(path))
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn(
+            "REHEARSAL_ACCEPTED_NOT_CONFIRMED",
+            {row["code"] for row in result["findings"]},
+        )
+        self.assertIn(
+            "INTEGRATED_BEFORE_REFRESH_CONFIRMED",
+            {row["code"] for row in result["findings"]},
+        )
+
     def test_integration_before_rehearsal_refresh_fails(self):
         path = self._session_file("stale-rehearsal-refresh")
         client = ConformanceClient(str(path), surface="mcp")
@@ -133,7 +151,7 @@ class ConformanceCoreTests(unittest.TestCase):
         result = evaluate(load_session(path))
         self.assertEqual(result["status"], "FAIL")
         self.assertIn(
-            "INTEGRATED_BEFORE_REFRESH",
+            "INTEGRATED_BEFORE_REFRESH_CONFIRMED",
             {row["code"] for row in result["findings"]},
         )
 
