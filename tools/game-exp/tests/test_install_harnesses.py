@@ -172,6 +172,10 @@ class HarnessInstallerTests(unittest.TestCase):
             locked_path = installer.runtime_dir / "tools" / "game-exp" / "project_setup.py"
             state = {"raised": False}
 
+            with mock.patch("install_harnesses.shutil.which", return_value="uv"):
+                installer.install()
+            self.assertTrue(locked_path.exists())
+
             def locked_directory(source, target):
                 if target == installer.runtime_dir:
                     raise PermissionError("simulated live runtime directory lock")
