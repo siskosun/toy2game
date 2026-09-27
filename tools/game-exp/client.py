@@ -3210,7 +3210,6 @@ class GameExpClient:
                 "arguments": values,
                 "state_digest": digest_object(state),
             },
-            actor_claim=actor_claim,
             request_id=rid,
         )
         claim = self._wait_for_request_commit(rid, claim)
