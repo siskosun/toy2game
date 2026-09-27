@@ -114,7 +114,7 @@ For the GitHub Bridge:
 - After posting, read Issue comments for matching `game-exp-bridge:<request_id>:claim` and `:result` markers and inspect the referenced Actions run when necessary.
 - Treat claim-without-result as `UNKNOWN`. Reconcile against the Ledger or existing run; do not resubmit blindly.
 - The bridge author is independently resolved from the GitHub Issue comment and must have repository write permission.
-- Human-owned gates remain human-owned. The bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, merge, or archive branch choice.
+- Human-owned gates remain human-owned. The bridge does not authorize PASS, PROMISING, SELECTED, REJECTED, ABANDONED, merge, or archive branch choice.
 
 ## Harness conformance screening
 
@@ -173,6 +173,18 @@ For Godot work, hand the returned brief to Godot Prototype Studio. game-exp rema
 3. Present the Candidate identity and relevant evidence to the user. Do not infer human quality from automated checks.
 4. Record Review through `game_exp_review_record` or Bridge action `review_record` only after the user explicitly supplies the human outcome (`PASS` or `FAIL`) or explicitly instructs you to record an already-made human review.
 5. A PASS Review does not automatically mean PROMISING. Submit the PROMISING decision through the active backend only after explicit user approval.
+
+## Stop / abandon semantics
+
+A user saying "废弃", "放弃", "停止这个实验", "不做这个版本了", or equivalent is not a Review result.
+
+- Prefer `game_exp_abandon` / CLI `abandon`. GitHub Bridge uses `decision_submit` with `to_state=ABANDONED`.
+- `ABANDONED` means the experiment was intentionally stopped for product, resource, priority, strategy, duplication, or similar non-evaluative reasons.
+- Do not fabricate a `FAIL` Review merely to reach a terminal state. Record `FAIL` only when the user actually made a human Review under the declared review protocol.
+- Do not close the canonical GitHub Issue as a substitute for lifecycle mutation. Issue open/closed state is a projection convenience, not Ledger authority. If the host later closes the Issue, do it only after the authoritative `ABANDONED` decision is committed.
+- Abandonment does not archive or delete the experiment branch, Candidate/Release, source files, or prototype directory. Those are separate operations. If the user also wants archive/delete behavior, follow the Archive section after the state is authoritatively `ABANDONED`.
+- If the user says "废弃这个原型" or names a subject rather than an experiment, first inspect `game_exp_subject_panel`. If exactly one non-terminal experiment belongs to that subject, abandon that experiment. If multiple non-terminal experiments exist, ask the one material scope question: abandon only one experiment or all live experiments under the prototype.
+- `ABANDONED` is terminal for lifecycle decisions. New work requires a new experiment; historical Candidate, Release and decision evidence remain auditable.
 
 ## Rehearsal, selection and Integration
 
