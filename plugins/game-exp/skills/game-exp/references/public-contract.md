@@ -53,6 +53,14 @@ Before any mutation has been submitted, prefer interfaces in this order:
 
 Interface availability is not permission.
 
+### MCP identity modes
+
+Local stdio MCP and the CLI normally execute under the local GitHub credential and therefore have one concrete local principal.
+
+Streamable HTTP is different: a shared server credential is not automatically the caller's identity. game-exp therefore treats HTTP MCP as read-only by default unless the deployment explicitly sets `GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL=1` for a genuinely single-principal endpoint. Multi-user HTTP deployments require a future per-request identity binding; until then use per-user local MCP/CLI or GitHub Bridge for writes.
+
+Supporting MCP transport does not imply equivalent authorization semantics.
+
 After a mutation returns `ACCEPTED` or `UNKNOWN`, enter recovery mode. You may use another interface to query or resume the same operation id, but you must not create a replacement logical operation.
 
 Example:
@@ -77,6 +85,13 @@ This is valid because the operation identity is unchanged.
 - `CONFLICT`: identity, state precondition, request digest, or concurrency fact differs.
 - `REJECTED`: validated failure; do not retry unchanged.
 - `UNKNOWN`: outcome cannot yet be proved; recover by the same operation id.
+
+## Cancellation
+
+There is no generic `cancel-operation` in public contract v1.0. A claimed/running async operation is recovered or allowed to complete; arbitrary cancellation could leave external effects ambiguous.
+
+Archive keeps its existing dedicated `archive_abort`, valid only while the Archive is PREPARED and has not been claimed. Once claimed, recover the same Archive instead of cancelling it.
+
 
 Transport wrappers may differ between MCP, CLI and Bridge. The business statuses and recovery semantics must not.
 
