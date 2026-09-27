@@ -80,7 +80,7 @@ def node_npm_policy(node_version: str) -> dict[str, object]:
 
 # Backward-compatible export for tests/importers. Bootstrap generation resolves
 # the repository's actual Node version instead of blindly using this default.
-NODE_NPM_POLICY = node_npm_policy("22")
+NODE_NPM_POLICY = node_npm_policy("22.21.1")
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -124,22 +124,32 @@ class Bootstrapper:
         self.repo = _validate_repo(repo)
 
     def _node_version(self) -> str | None:
+        exact_re = re.compile(
+            r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        )
+
         version_file = self.target_root / ".node-version"
         if version_file.is_file():
-            value = version_file.read_text(encoding="utf-8").strip()
-            if value:
+            value = version_file.read_text(encoding="utf-8").strip().removeprefix("v")
+            if exact_re.fullmatch(value):
                 return value
+            raise BootstrapError(
+                ".node-version must contain an exact Node version such as 22.21.1"
+            )
 
         package_path = self.target_root / "package.json"
+        node_spec = None
         if package_path.is_file():
             try:
                 package = json.loads(package_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 raise BootstrapError(f"invalid package.json: {exc}") from exc
             engines = package.get("engines") if isinstance(package, dict) else None
-            node_spec = engines.get("node") if isinstance(engines, dict) else None
-            if isinstance(node_spec, str) and node_spec.strip():
-                return node_spec.strip()
+            raw_node_spec = engines.get("node") if isinstance(engines, dict) else None
+            if isinstance(raw_node_spec, str) and raw_node_spec.strip():
+                node_spec = raw_node_spec.strip().removeprefix("v")
+                if exact_re.fullmatch(node_spec):
+                    return node_spec
 
         node = shutil.which("node")
         if node:
@@ -154,8 +164,14 @@ class Bootstrapper:
             )
             if proc.returncode == 0:
                 value = proc.stdout.strip().removeprefix("v")
-                if value:
+                if exact_re.fullmatch(value):
                     return value
+
+        if node_spec:
+            raise BootstrapError(
+                "package.json engines.node is not an exact version and local Node "
+                "could not provide one; add .node-version with an exact version"
+            )
         return None
 
     def _inferred_policy(self) -> dict[str, object]:
