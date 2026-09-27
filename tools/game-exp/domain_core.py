@@ -2127,7 +2127,7 @@ def _plan_execution_claim(
     allowed_lifecycles = {
         "initialize": {"ACTIVE"},
         "candidate_build": {"ACTIVE", "REVIEW"},
-        "rehearse": {"PROMISING"},
+        "rehearse": {"PROMISING", "SELECTED"},
         "integrate": {"SELECTED"},
         "integrate_finalize": {"SELECTED"},
         "archive": {"ACTIVE", "REVIEW", "PROMISING", "SELECTED", "INTEGRATED"},
