@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+HERE = Path(__file__).resolve()
+sys.path.insert(0, str(HERE.parents[1]))
 
 from conformance_core import (
     ConformanceClient,
