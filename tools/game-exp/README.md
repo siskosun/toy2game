@@ -282,7 +282,7 @@ The Harness-native text Board is implemented and validated. Only the graphical M
 After a valid `experiment.bind` request has produced authoritative Binding/Manifest/State records in the protected Ledger, initialize source refs with:
 
 ```powershell
-python tools/game-exp/cli.py --repo owner/repo initialize EXP-21
+python tools/game-exp/cli.py --repo owner/repo initialize EXP-21 --request-id req-init-21
 ```
 
 The client supplies only the canonical experiment ID. The trusted workflow reconstructs all other inputs from `game-exp/ledger`, verifies the original bound request digest and manifest digest, then atomically creates:
@@ -317,7 +317,7 @@ python tools/game-exp/cli.py --repo siskosun/toy2game --json integrate-finalize 
 
 The trusted finalize workflow independently verifies the merged PR, head tree, merge tree, merge ancestry in current main, workflow identity, current Candidate and current Rehearsal. Only then does the protected Ledger receive `integration.register` and lifecycle change from `SELECTED` to `INTEGRATED`.
 
-If `main` advances before the Integration PR is prepared, rerun `rehearse EXP-21` first. SELECTED experiments are allowed to refresh their Rehearsal without changing lifecycle.
+If `main` advances before the Integration PR is prepared, run a new Rehearsal with a new logical operation id, for example `rehearse EXP-21 --request-id req-rehearse-21-refresh-1`. SELECTED experiments are allowed to refresh their Rehearsal without changing lifecycle.
 
 
 ## Cross-interface operation recovery
