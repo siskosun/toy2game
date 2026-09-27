@@ -571,6 +571,18 @@ class GitHubTransport:
                 "reason": reason,
             }
         data = _json_output(proc)
+        repository_context = {
+            "visibility": data.get("visibility") if isinstance(data, dict) else None,
+            "private": data.get("private") if isinstance(data, dict) else None,
+            "default_branch": (
+                data.get("default_branch") if isinstance(data, dict) else None
+            ),
+            "owner_type": (
+                data.get("owner", {}).get("type")
+                if isinstance(data, dict) and isinstance(data.get("owner"), dict)
+                else None
+            ),
+        }
         permissions = data.get("permissions") if isinstance(data, dict) else None
         if not isinstance(permissions, dict):
             return {
@@ -580,6 +592,7 @@ class GitHubTransport:
                 "can_admin": False,
                 "admin_coverage": "UNKNOWN",
                 "reason": "permissions_not_exposed",
+                **repository_context,
             }
         can_read = bool(permissions.get("pull"))
         can_write = bool(
@@ -607,6 +620,7 @@ class GitHubTransport:
             "can_admin": can_admin,
             "admin_coverage": admin_coverage,
             "reason": None,
+            **repository_context,
         }
 
     def collaborator_permission(self, login: str) -> str | None:
@@ -679,6 +693,235 @@ class GameExpClient:
             "access": access,
             "message_zh": message_zh,
             "can_create_experiment": bool(access.get("can_write")),
+        }
+
+    def _board_project_context(
+        self,
+        *,
+        experiment_count: int,
+        attention_count: int,
+        active_count: int,
+        archived_count: int,
+        abnormal_health_count: int,
+    ) -> dict[str, Any]:
+        try:
+            access_result = self.access_check()
+        except Exception as exc:
+            access_result = {
+                "status": "UNKNOWN",
+                "access": {
+                    "status": "UNKNOWN",
+                    "can_read": True,
+                    "can_write": False,
+                    "can_admin": False,
+                    "admin_coverage": "UNKNOWN",
+                    "reason": str(exc),
+                },
+                "message_zh": "仓库权限状态未知。",
+                "can_create_experiment": False,
+            }
+        access = (
+            access_result.get("access")
+            if isinstance(access_result.get("access"), dict)
+            else {}
+        )
+
+        try:
+            doctor = self.doctor()
+        except Exception as exc:
+            doctor = {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "experiment_id": None,
+                "checks": [],
+                "error": str(exc),
+            }
+
+        doctor_status = str(doctor.get("status") or "UNKNOWN")
+        if doctor_status == "PASS":
+            readiness = "PROJECT_READY"
+            readiness_zh = "项目已就绪"
+        elif doctor_status == "FAIL":
+            readiness = "PROJECT_INCOMPLETE"
+            readiness_zh = "项目未就绪"
+        else:
+            readiness = "PROJECT_READINESS_UNKNOWN"
+            readiness_zh = "项目就绪状态待核验"
+
+        can_create = bool(access_result.get("can_create_experiment"))
+        access_status = str(access.get("status") or "UNKNOWN")
+        if readiness == "PROJECT_READY":
+            if experiment_count == 0:
+                if can_create:
+                    next_action = "CREATE_FIRST_EXPERIMENT"
+                    next_action_zh = "创建第一个实验"
+                elif access_status == "READ_ONLY":
+                    next_action = "REQUEST_WRITE_ACCESS"
+                    next_action_zh = "获得写入权限后创建第一个实验"
+                else:
+                    next_action = "VERIFY_WRITE_ACCESS"
+                    next_action_zh = "核验写入权限"
+            elif attention_count > 0:
+                next_action = "OPEN_ATTENTION"
+                next_action_zh = "处理需要你关注的实验"
+            elif active_count > 0:
+                next_action = "CONTINUE_ACTIVE_EXPERIMENTS"
+                next_action_zh = "继续当前实验"
+            elif can_create:
+                next_action = "CREATE_NEW_EXPERIMENT"
+                next_action_zh = "创建新实验"
+            else:
+                next_action = "VIEW_BOARD"
+                next_action_zh = "查看实验面板"
+        elif readiness == "PROJECT_INCOMPLETE":
+            next_action = "REPAIR_PROJECT"
+            next_action_zh = "修复仓库信任检查失败项"
+        else:
+            next_action = "VERIFY_PROJECT_HEALTH"
+            next_action_zh = "核验仓库信任状态"
+
+        visibility = access.get("visibility")
+        visibility_zh = {
+            "public": "公开",
+            "private": "私有",
+            "internal": "内部",
+        }.get(str(visibility), "未知")
+        access_zh = {
+            "ADMIN": "管理员",
+            "WRITE": "可读写",
+            "READ_ONLY": "只读",
+            "NO_ACCESS": "不可访问",
+            "UNKNOWN": "未知",
+        }.get(access_status, access_status)
+        doctor_status_zh = {
+            "PASS": "正常",
+            "FAIL": "异常",
+            "UNKNOWN": "未知",
+            "WARN": "有警告",
+        }.get(doctor_status, doctor_status)
+
+        check_labels = {
+            "ledger_ref": "Ledger",
+            "rulesets": "保护规则",
+            "trusted_writer_deploy_key": "可信写入 Deploy Key",
+            "trusted_writer_secret": "可信写入 Secret",
+            "immutable_releases": "不可变发布",
+            "archive_health": "归档健康",
+        }
+        check_status_zh = {
+            "PASS": "正常",
+            "FAIL": "异常",
+            "UNKNOWN": "未知",
+            "WARN": "有警告",
+            "SKIP": "未检查",
+        }
+        trust_checks: list[dict[str, Any]] = []
+        for raw in doctor.get("checks") or []:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "unknown")
+            status = str(raw.get("status") or "UNKNOWN")
+            trust_checks.append(
+                {
+                    "name": name,
+                    "label_zh": check_labels.get(name, name),
+                    "status": status,
+                    "status_zh": check_status_zh.get(status, status),
+                    "detail": raw.get("detail"),
+                }
+            )
+
+        if readiness == "PROJECT_READY" and experiment_count == 0 and can_create:
+            message_zh = "项目已就绪；当前暂无实验，可以直接创建第一个实验。"
+        elif readiness == "PROJECT_READY" and experiment_count == 0:
+            message_zh = "项目已就绪；当前暂无实验，但当前连接没有写入权限。"
+        elif readiness == "PROJECT_READY":
+            message_zh = f"项目已就绪；{next_action_zh}。"
+        elif readiness == "PROJECT_INCOMPLETE":
+            message_zh = "仓库信任检查未通过；先修复失败项，不要创建或推进实验。"
+        else:
+            message_zh = "当前无法完整确认仓库信任状态；先核验 Doctor 结果。"
+
+        if experiment_count == 0:
+            if readiness == "PROJECT_READY" and can_create:
+                onboarding_step = 2
+                onboarding_title = "描述第一个实验"
+                onboarding_message = (
+                    "连接检查已完成。说明要改哪个原型、想改什么，以及希望玩家体验发生什么变化。"
+                )
+                onboarding_action = "CREATE_FIRST_EXPERIMENT"
+                onboarding_action_zh = "创建第一个实验"
+            else:
+                onboarding_step = 1
+                onboarding_title = "连接检查"
+                onboarding_message = message_zh
+                onboarding_action = next_action
+                onboarding_action_zh = next_action_zh
+            onboarding = {
+                "active": True,
+                "step": onboarding_step,
+                "total_steps": 6,
+                "progress": f"{onboarding_step}/6",
+                "title_zh": onboarding_title,
+                "message_zh": onboarding_message,
+                "primary_action": onboarding_action,
+                "primary_action_zh": onboarding_action_zh,
+                "why_zh": (
+                    "先确认项目可信边界和权限，再建立真实实验；"
+                    "Doctor PASS 后不应重复建议 project-init。"
+                ),
+            }
+        else:
+            onboarding = {
+                "active": False,
+                "step": None,
+                "total_steps": 6,
+                "progress": None,
+                "title_zh": "新手引导",
+                "message_zh": "仓库已有实验；新手引导作为可选帮助入口。",
+                "primary_action": None,
+                "primary_action_zh": None,
+                "why_zh": None,
+            }
+
+        return {
+            "repository": {
+                "full_name": self.transport.repo,
+                "name": self.transport.repo.split("/", 1)[-1],
+                "visibility": visibility,
+                "visibility_zh": visibility_zh,
+                "private": access.get("private"),
+                "default_branch": access.get("default_branch"),
+                "owner_type": access.get("owner_type"),
+            },
+            "project": {
+                "readiness": readiness,
+                "readiness_zh": readiness_zh,
+                "complete": readiness == "PROJECT_READY",
+                "doctor_status": doctor_status,
+                "doctor_status_zh": doctor_status_zh,
+                "access": access_status,
+                "access_zh": access_zh,
+                "access_message_zh": access_result.get("message_zh"),
+                "admin_coverage": access.get("admin_coverage"),
+                "can_create_experiment": can_create,
+                "trust_checks": trust_checks,
+                "next_action": next_action,
+                "next_action_zh": next_action_zh,
+                "message_zh": message_zh,
+                "scope_note_zh": (
+                    "实验视图固定于当前 Ledger 快照；"
+                    "仓库信任检查、可见性与权限反映调用时的当前状态。"
+                ),
+            },
+            "onboarding": onboarding,
+            "statistics": {
+                "total": experiment_count,
+                "active": active_count,
+                "archived": archived_count,
+                "attention": attention_count,
+                "abnormal_health": abnormal_health_count,
+            },
         }
 
     def capabilities(self) -> dict[str, Any]:
@@ -2211,6 +2454,49 @@ class GameExpClient:
             ),
         }
 
+        abnormal_health_count = sum(
+            count
+            for status, count in health_counts.items()
+            if status != "PASS"
+        )
+        project_context = self._board_project_context(
+            experiment_count=len(items),
+            attention_count=len(attention_ids),
+            active_count=len(active_ids),
+            archived_count=len(archive_ids),
+            abnormal_health_count=abnormal_health_count,
+        )
+        statistics = {
+            **project_context["statistics"],
+            "counts_by_lifecycle": dict(sorted(counts.items())),
+            "counts_by_health": dict(sorted(health_counts.items())),
+            "attention_sections": [
+                {
+                    "section": section["section"],
+                    "title_zh": section["title_zh"],
+                    "count": section["count"],
+                }
+                for section in attention_sections
+            ],
+        }
+        if len(items) == 0:
+            statistics_zh = "暂无实验"
+        else:
+            statistics_zh = (
+                f"全部 {len(items)} 个实验；进行中 {len(active_ids)}；"
+                f"需要处理 {len(attention_ids)}；已归档 {len(archive_ids)}；"
+                f"异常/未知 {abnormal_health_count}"
+            )
+        display = {
+            "title_zh": f"game-exp 面板 · {self.transport.repo}（总览）",
+            "project_status_zh": project_context["project"]["message_zh"],
+            "statistics_zh": statistics_zh,
+            "next_action_zh": project_context["project"]["next_action_zh"],
+            "empty_state_zh": "暂无实验" if len(items) == 0 else None,
+            "snapshot_zh": f"Ledger 快照 {snapshot_head[:8]}",
+            "snapshot_note_zh": project_context["project"]["scope_note_zh"],
+        }
+
         return {
             "status": "PASS",
             "repo": self.transport.repo,
@@ -2220,6 +2506,11 @@ class GameExpClient:
             "attention_count": len(attention_ids),
             "counts_by_lifecycle": dict(sorted(counts.items())),
             "counts_by_health": dict(sorted(health_counts.items())),
+            "repository": project_context["repository"],
+            "project": project_context["project"],
+            "statistics": statistics,
+            "onboarding": project_context["onboarding"],
+            "display": display,
             "focus": focus,
             "experiments": items,
             "views": {
