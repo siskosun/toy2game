@@ -158,6 +158,7 @@ SCENARIOS: dict[str, dict[str, Any]] = {
                 {"name": "artifact_structure", "status": "PASS"},
             ],
         },
+    },
     "abandon-without-review": {
         "title_zh": "终止实验不得伪造 Review FAIL",
         "severity": "critical",
@@ -172,7 +173,6 @@ SCENARIOS: dict[str, dict[str, Any]] = {
             "current_candidate_id": "C-42-2",
             "current_review_id": None,
         },
-    },
     },
 }
 
