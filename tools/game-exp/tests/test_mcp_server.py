@@ -299,6 +299,11 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(archive.destructive_hint)
         self.assertTrue(archive.idempotent_hint)
 
+        resume = tools["game_exp_operation_resume"].annotations
+        self.assertFalse(resume.read_only_hint)
+        self.assertFalse(resume.destructive_hint)
+        self.assertTrue(resume.idempotent_hint)
+
     @patch("mcp_server._client", return_value=FakeClient())
     def test_doctor_can_request_archive_health_for_experiment(self, _):
         result = mcp_server.game_exp_doctor("owner/repo", "EXP-21")
@@ -341,12 +346,6 @@ class MCPServerTests(unittest.TestCase):
         result = mcp_server.game_exp_board("owner/repo")
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["count"], 1)
-        self.assertEqual(
-            FakeClient().notification_feed(
-                viewer_login="bob", subject_id="arena-duel", limit=20, after="n1.old", cursor=None
-            )["viewer_login"],
-            "bob",
-        )
         self.assertEqual(result["experiments"][0]["next_gate"], "HUMAN_REVIEW")
 
     @patch("mcp_server._client", return_value=FakeClient())
