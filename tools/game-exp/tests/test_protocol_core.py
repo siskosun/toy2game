@@ -68,6 +68,11 @@ class ProtocolCoreTests(unittest.TestCase):
             descriptor["recommended_project_policy_schema_version"],
             2,
         )
+        self.assertIn("ABANDONED", descriptor["lifecycle_states"])
+        self.assertEqual(
+            descriptor["terminal_decision_states"],
+            ["REJECTED", "ABANDONED"],
+        )
         self.assertEqual(
             descriptor["recovery"]["accepted_or_unknown"],
             "QUERY_SAME_REQUEST_ID",
