@@ -1,0 +1,37 @@
+name: package raw game-exp v0.14.0 skill
+
+on:
+  push:
+    branches:
+      - package/game-exp-v0140-skill
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build raw skill archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          root = Path("plugins/game-exp/skills/game-exp")
+          out = Path("dist/raw-skill.zip")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+              for p in sorted(root.rglob("*")):
+                  if p.is_file():
+                      zf.write(p, p.relative_to(root.parent))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-v0140-raw-skill
+          path: dist/raw-skill.zip
+          if-no-files-found: error
+          retention-days: 1
