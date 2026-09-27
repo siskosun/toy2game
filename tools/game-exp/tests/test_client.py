@@ -49,6 +49,10 @@ class FakeTransport:
             "can_admin": False,
             "admin_coverage": "PARTIAL",
             "reason": None,
+            "visibility": "public",
+            "private": False,
+            "default_branch": "main",
+            "owner_type": "User",
         }
 
     def collaborator_permission(self, login):
@@ -503,6 +507,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertTrue(result["can_create_experiment"])
         self.assertEqual(result["access"]["status"], "WRITE")
+        self.assertEqual(result["access"]["visibility"], "public")
+        self.assertEqual(result["access"]["default_branch"], "main")
         self.assertIn("读写权限", result["message_zh"])
 
         transport.repository_access = lambda: {
@@ -648,6 +654,27 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["experiments"][1]["review_outcome"], "PASS")
         self.assertEqual(result["repo"], "owner/repo")
         self.assertEqual(result["repository_name"], "repo")
+        self.assertEqual(result["repository"]["visibility"], "public")
+        self.assertEqual(result["repository"]["visibility_zh"], "公开")
+        self.assertEqual(result["repository"]["default_branch"], "main")
+        self.assertEqual(result["project"]["readiness"], "PROJECT_READY")
+        self.assertEqual(result["project"]["doctor_status"], "PASS")
+        self.assertEqual(result["project"]["access"], "WRITE")
+        self.assertTrue(result["project"]["can_create_experiment"])
+        self.assertEqual(result["project"]["next_action"], "OPEN_ATTENTION")
+        self.assertEqual(result["project"]["next_action_zh"], "处理需要你关注的实验")
+        self.assertEqual(result["statistics"]["total"], 2)
+        self.assertEqual(result["statistics"]["active"], 1)
+        self.assertEqual(result["statistics"]["archived"], 1)
+        self.assertEqual(result["statistics"]["attention"], 1)
+        self.assertEqual(result["statistics"]["abnormal_health"], 0)
+        self.assertEqual(
+            result["statistics"]["attention_sections"],
+            [{"section": "REVIEW", "title_zh": "需要你评审", "count": 1}],
+        )
+        self.assertFalse(result["onboarding"]["active"])
+        self.assertIn("项目已就绪", result["display"]["project_status_zh"])
+        self.assertEqual(result["display"]["next_action_zh"], "处理需要你关注的实验")
         self.assertEqual(result["experiments"][0]["repository"], "owner/repo")
         self.assertEqual(result["experiments"][0]["repository_name"], "repo")
         self.assertEqual(result["experiments"][0]["prototype_name"], "Arena Duel")
@@ -878,6 +905,59 @@ class ClientTests(unittest.TestCase):
         invalid_subject = GameExpClient(transport).subject_panel("   ")
         self.assertEqual(invalid_subject["status"], "REJECTED")
         self.assertEqual(invalid_subject["reason"], "invalid_subject_id")
+
+    def test_empty_board_exposes_project_ready_first_experiment_onboarding(self):
+        transport = FakeTransport()
+        result = GameExpClient(transport).board()
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["project"]["readiness"], "PROJECT_READY")
+        self.assertTrue(result["project"]["complete"])
+        self.assertEqual(result["project"]["doctor_status"], "PASS")
+        self.assertEqual(
+            result["project"]["next_action"],
+            "CREATE_FIRST_EXPERIMENT",
+        )
+        self.assertEqual(
+            result["project"]["next_action_zh"],
+            "创建第一个实验",
+        )
+        self.assertEqual(result["statistics"]["total"], 0)
+        self.assertEqual(result["statistics"]["active"], 0)
+        self.assertEqual(result["statistics"]["archived"], 0)
+        self.assertEqual(result["statistics"]["attention"], 0)
+        self.assertEqual(result["statistics"]["abnormal_health"], 0)
+        self.assertTrue(result["onboarding"]["active"])
+        self.assertEqual(result["onboarding"]["progress"], "2/6")
+        self.assertEqual(result["onboarding"]["title_zh"], "描述第一个实验")
+        self.assertEqual(
+            result["onboarding"]["primary_action"],
+            "CREATE_FIRST_EXPERIMENT",
+        )
+        self.assertEqual(result["display"]["empty_state_zh"], "暂无实验")
+        self.assertEqual(
+            result["display"]["next_action_zh"],
+            "创建第一个实验",
+        )
+        self.assertNotIn("project-init", result["project"]["message_zh"])
+
+    def test_empty_board_failed_doctor_routes_to_project_repair(self):
+        transport = FakeTransport()
+        transport._rules = []
+        result = GameExpClient(transport).board()
+
+        self.assertEqual(result["project"]["readiness"], "PROJECT_INCOMPLETE")
+        self.assertFalse(result["project"]["complete"])
+        self.assertEqual(result["project"]["doctor_status"], "FAIL")
+        self.assertEqual(result["project"]["next_action"], "REPAIR_PROJECT")
+        self.assertEqual(
+            result["project"]["next_action_zh"],
+            "修复仓库信任检查失败项",
+        )
+        self.assertTrue(result["onboarding"]["active"])
+        self.assertEqual(result["onboarding"]["progress"], "1/6")
+        self.assertEqual(result["onboarding"]["title_zh"], "连接检查")
 
     def test_board_marks_archive_lock_as_recovery_gate(self):
         transport = FakeTransport()
