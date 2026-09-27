@@ -34,6 +34,7 @@ PRODUCTION_TOOLS = (
     "mcp_server.py",
     "project_policy.py",
     "protocol_core.py",
+    "request_guard.py",
     "rehearsal_control.py",
     "requirements-mcp.txt",
     "source_initializer.py",
