@@ -262,10 +262,12 @@ $env:GAME_EXP_MCP_TRANSPORT="streamable-http"
 $env:GAME_EXP_MCP_HOST="127.0.0.1"
 $env:GAME_EXP_MCP_PORT="8765"
 $env:GAME_EXP_MCP_PATH="/mcp"
+# Write tools over HTTP are read-only by default unless this endpoint is truly single-principal:
+$env:GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL="1"
 python tools/game-exp/mcp_server.py
 ```
 
-The local MCP endpoint is then `http://127.0.0.1:8765/mcp`. ChatGPT Web cannot connect to localhost directly. Connect this local endpoint through OpenAI Secure MCP Tunnel, or deploy the same Streamable HTTP server behind a trusted HTTPS endpoint. Do not expose the unauthenticated localhost listener directly to the public internet.
+The local MCP endpoint is then `http://127.0.0.1:8765/mcp`. ChatGPT Web cannot connect to localhost directly. Do not enable `GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL=1` on an endpoint shared by multiple independent users: the current HTTP server does not bind a different GitHub principal per request. Connect this local endpoint through OpenAI Secure MCP Tunnel, or deploy the same Streamable HTTP server behind a trusted HTTPS endpoint. Do not expose the unauthenticated localhost listener directly to the public internet.
 
 The HTTP mode is stateless and uses JSON responses. The existing stdio mode remains the default, so current Codex configuration does not change.
 
