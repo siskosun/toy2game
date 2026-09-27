@@ -1118,6 +1118,38 @@ class GameExpClient:
                 "supported_schema_versions": [1, 2],
                 "recommended_schema_version": 2,
                 "schema_v1_status": "legacy-compatible",
+                "required_fields": [
+                    "schema_version",
+                    "experiment",
+                    "title",
+                    "operation_id",
+                    "parent",
+                    "hypothesis",
+                    "success_criteria",
+                    "kill_criteria",
+                    "scope",
+                    "runtime",
+                    "review",
+                    "created_at",
+                ],
+                "optional_fields": ["subject", "relationships"],
+                "subject": {
+                    "game_prototype_required_keys": [
+                        "type",
+                        "id",
+                        "name",
+                        "root_path",
+                    ],
+                    "repository_identity": {
+                        "type": "repository",
+                        "id": "repository",
+                        "root_path": ".",
+                    },
+                },
+                "relationships": {
+                    "allowed_types": ["depends_on", "blocks", "supersedes"],
+                    "target_format": "EXP-<number>",
+                },
                 "runtime_v2": {
                     "required_keys": ["adapter", "policy_path"],
                     "policy_path": POLICY_PATH,
