@@ -5,6 +5,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS_DIR))
@@ -37,7 +38,7 @@ class BootstrapTests(unittest.TestCase):
                 json.dumps(
                     {
                         "name": "test-project",
-                        "engines": {"node": "22"},
+                        "engines": {"node": "22.21.1"},
                     }
                 ),
                 encoding="utf-8",
@@ -61,7 +62,21 @@ class BootstrapTests(unittest.TestCase):
             policy = json.loads(by_rel[".game-exp/project-policy.json"])
             self.assertEqual(policy["schema_version"], 2)
             self.assertEqual(policy["adapter"], "node-npm")
-            self.assertEqual(policy["toolchain"]["node_version"], "22")
+            self.assertEqual(policy["toolchain"]["node_version"], "22.21.1")
+
+    def test_node_range_without_local_exact_version_fails_closed(self):
+        with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
+            source, target = pathlib.Path(sd), pathlib.Path(td)
+            self.make_source(source)
+            self.make_target(target)
+            package = target / "package.json"
+            package.write_text(
+                json.dumps({"name": "test-project", "engines": {"node": ">=22"}}),
+                encoding="utf-8",
+            )
+            with mock.patch("bootstrap.shutil.which", return_value=None):
+                with self.assertRaisesRegex(BootstrapError, "not an exact version"):
+                    Bootstrapper(source, target, "acme/game").plan()
 
     def test_unknown_project_type_fails_instead_of_guessing_node(self):
         with tempfile.TemporaryDirectory() as sd, tempfile.TemporaryDirectory() as td:
