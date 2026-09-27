@@ -1173,6 +1173,23 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(all(row["status"] == "PASS" for row in result["checks"]))
 
 
+    def test_doctor_classifies_private_free_ruleset_limit_as_fail(self):
+        transport = FakeTransport()
+        def blocked_rulesets():
+            raise ClientError(
+                "HTTP 403: Upgrade to GitHub Pro or make this repository public "
+                "to enable this feature."
+            )
+        transport.rulesets = blocked_rulesets
+        result = GameExpClient(transport).doctor()
+        self.assertEqual(result["status"], "FAIL")
+        rulesets = next(row for row in result["checks"] if row["name"] == "rulesets")
+        self.assertEqual(rulesets["status"], "FAIL")
+        self.assertEqual(
+            rulesets["detail"]["code"],
+            "RULESETS_PLAN_UNSUPPORTED",
+        )
+
     def _execution_claim_record(
         self,
         *,
