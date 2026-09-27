@@ -57,6 +57,7 @@ PLUGIN_FILES = (
     "plugins/game-exp/skills/game-exp/references/prototype-handoff.md",
     "plugins/game-exp/skills/game-exp/references/exploration-thread.md",
     "plugins/game-exp/skills/game-exp/references/public-contract.md",
+    "plugins/game-exp/skills/game-exp/references/project-setup.md",
     "plugins/game-exp/skills/game-exp/references/conformance.md",
 )
 
