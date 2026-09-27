@@ -13,7 +13,7 @@ from typing import Any
 
 from client import GameExpClient, GitHubTransport
 
-API_VERSION = "2026-03-10"
+API_VERSION = "2022-11-28"
 WRITER_KEY_TITLE = "game-exp trusted writer"
 WRITER_SECRET = "GAME_EXP_WRITER_KEY"
 REQUIRED_RULESET_NAMES = (
@@ -74,10 +74,13 @@ def _gh_api(
     check: bool = True,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
+    endpoint = f"repos/{repo}"
+    if suffix:
+        endpoint += f"/{suffix.lstrip('/')}"
     command = [
         "gh",
         "api",
-        f"repos/{repo}/{suffix.lstrip('/')}",
+        endpoint,
         "-H",
         "Accept: application/vnd.github+json",
         "-H",
