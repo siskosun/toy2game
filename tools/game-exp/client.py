@@ -150,6 +150,7 @@ class GitHubTransport:
         request_id: str,
         expected_head: str,
         payload_b64: str,
+        payload_digest: str,
     ) -> str:
         proc = _run(
             [
@@ -167,6 +168,8 @@ class GitHubTransport:
                 f"expected_head={expected_head}",
                 "-f",
                 f"payload_b64={payload_b64}",
+                "-f",
+                f"payload_digest={payload_digest}",
             ],
             check=False,
             timeout=30,
@@ -182,6 +185,52 @@ class GitHubTransport:
                 "workflow dispatch returned no run URL; outcome is uncertain"
             )
         return url
+
+    def find_request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        validate_request_id(request_id)
+        proc = _run(
+            [
+                "gh",
+                "run",
+                "list",
+                "--repo",
+                self.repo,
+                "--workflow",
+                "game-exp-trusted-writer.yml",
+                "--limit",
+                "100",
+                "--json",
+                "databaseId,displayTitle,status,conclusion,url,createdAt",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return []
+        rows = _json_output(proc)
+        if not isinstance(rows, list):
+            return []
+        prefix = f"game-exp:request:{request_id}:"
+        matches: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = row.get("displayTitle")
+            if not isinstance(title, str) or not title.startswith(prefix):
+                continue
+            suffix = title[len(prefix):]
+            match = re.fullmatch(r"(sha256:[0-9a-f]{64}):([0-9a-f]{40})", suffix)
+            if match is None:
+                continue
+            matches.append(
+                {
+                    **row,
+                    "payloadDigest": match.group(1),
+                    "expectedHead": match.group(2),
+                }
+            )
+        matches.sort(key=lambda row: int(row.get("databaseId") or 0))
+        return matches
 
     def dispatch_execution(
         self,
