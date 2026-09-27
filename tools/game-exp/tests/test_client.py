@@ -49,11 +49,27 @@ class FakeTransport:
             "can_admin": False,
             "admin_coverage": "PARTIAL",
             "reason": None,
+            "repository_id": "1384446218",
             "visibility": "public",
             "private": False,
             "default_branch": "main",
             "owner_type": "User",
         }
+
+    def repository_json(self, path, ref=None):
+        if path == ".game-exp/project-policy.json":
+            return {
+                "schema_version": 1,
+                "adapter": "node-npm",
+                "install": {"argv": ["npm", "ci"]},
+                "test": {"argv": ["npm", "test"]},
+                "build": {"argv": ["npm", "run", "build"]},
+                "candidate": {
+                    "include": ["dist"],
+                    "required_paths": ["dist/index.html"],
+                },
+            }
+        return None
 
     def collaborator_permission(self, login):
         return "write" if login in {"alice", "bob", "carol"} else None
@@ -524,6 +540,42 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(readonly["can_create_experiment"])
         self.assertIn("只有读取权限", readonly["message_zh"])
 
+
+    def test_experiment_template_is_self_describing_from_current_repository(self):
+        result = GameExpClient(FakeTransport()).experiment_template()
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["manifest_contract"]["current_schema_version"], 2)
+        self.assertEqual(
+            result["manifest_contract"]["supported_schema_versions"],
+            [1, 2],
+        )
+        self.assertEqual(result["project_policy"]["adapter"], "node-npm")
+        self.assertEqual(
+            result["defaults"]["runtime"],
+            {
+                "adapter": "node-npm",
+                "policy_path": ".game-exp/project-policy.json",
+            },
+        )
+        self.assertEqual(
+            result["defaults"]["review"]["protocol"],
+            "manual-playtest-v1",
+        )
+        self.assertEqual(
+            result["example_manifest"]["experiment"]["repository_id"],
+            "1384446218",
+        )
+        self.assertFalse(result["example_manifest_bindable"])
+        self.assertIn("不要搜索其他仓库", result["next_zh"])
+        self.assertNotIn("toy2game", str(result))
+
+    def test_experiment_template_reports_missing_project_policy(self):
+        transport = FakeTransport()
+        transport.repository_json = lambda path, ref=None: None
+        result = GameExpClient(transport).experiment_template()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["code"], "PROJECT_POLICY_MISSING")
 
     def test_experiment_get_projects_current_domain_objects(self):
         transport = FakeTransport()
