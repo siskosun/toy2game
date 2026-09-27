@@ -61,7 +61,7 @@ class FakeTransport:
             return {
                 "schema_version": 2,
                 "adapter": "node-npm",
-                "toolchain": {"node_version": "22"},
+                "toolchain": {"node_version": "22.21.1"},
                 "install": {"argv": ["npm", "ci"]},
                 "test": {"argv": ["npm", "test"]},
                 "build": {"argv": ["npm", "run", "build"]},
@@ -555,7 +555,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["project_policy"]["adapter"], "node-npm")
         self.assertEqual(
             result["project_policy"]["toolchain"],
-            {"node_version": "22"},
+            {"node_version": "22.21.1"},
         )
         self.assertEqual(
             result["project_policy"]["builtin_runner_setup"],
