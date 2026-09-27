@@ -157,6 +157,16 @@ class AsyncExecutionClaimTests(unittest.TestCase):
             self.plan(action="rehearse")
         self.assertEqual(ctx.exception.code, "DOMAIN_EXECUTION_CONFLICT")
 
+    def test_selected_experiment_can_claim_rehearsal_refresh(self):
+        selected = dict(self.state)
+        selected["lifecycle"] = "SELECTED"
+        root = self.root / "experiments" / self.experiment_id
+        (root / "state.json").write_text(json.dumps(selected), encoding="utf-8")
+        self.state = selected
+        plan = self.plan(action="rehearse")
+        self.assertEqual(plan.status, "REQUEST_ONLY")
+        self.assertEqual(plan.experiment_id, self.experiment_id)
+
     def test_claim_validates_action_arguments(self):
         with self.assertRaises(DomainError) as ctx:
             self.plan(action="archive", arguments={"mode": "DELETE"})
