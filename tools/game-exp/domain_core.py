@@ -2046,6 +2046,7 @@ def _plan_execution_claim(
     *,
     repo_dir: Path,
     payload: dict[str, Any],
+    request_id: str,
     trusted_actor: TrustedActorContext | None,
 ) -> DomainPlan:
     input_value = _mapping(payload.get("input"), "operation.input")
@@ -2137,10 +2138,24 @@ def _plan_execution_claim(
             f"{action} is not allowed in lifecycle {lifecycle!r}",
             code="DOMAIN_EXECUTION_CONFLICT",
         )
+    execution_record = {
+        "kind": "execution_claim",
+        "request_id": request_id,
+        "experiment_id": experiment_id,
+        "action": action,
+        "arguments": arguments,
+        "state_digest": state_digest,
+        "actor": {
+            "login": trusted_actor.login,
+            "user_id": trusted_actor.user_id,
+            "permission_at_claim": trusted_actor.permission,
+        },
+        "phase": "CLAIMED",
+    }
     return DomainPlan(
-        status="REQUEST_ONLY",
+        status="APPLIED",
         experiment_id=experiment_id,
-        writes={},
+        writes={f"executions/{request_id}.json": execution_record},
     )
 
 
@@ -2166,6 +2181,7 @@ def plan_domain_mutation(
         return _plan_execution_claim(
             repo_dir=repo_dir,
             payload=payload,
+            request_id=request_id,
             trusted_actor=trusted_actor,
         )
     if operation == "archive.prepare":
