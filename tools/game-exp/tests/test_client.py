@@ -9,7 +9,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))
 
-from client import GameExpClient, TransportUncertainError  # noqa: E402
+from client import ClientError, GameExpClient, TransportUncertainError  # noqa: E402
 from protocol_core import digest_object  # noqa: E402
 
 
