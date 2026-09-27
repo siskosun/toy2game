@@ -616,6 +616,13 @@ class ClientTests(unittest.TestCase):
             "EXP-21",
         )
         self.assertEqual(
+            result["experiments"][0]["dependency_reviews"][0]["code"],
+            "DEPENDENCY_REVIEW_REQUIRED",
+        )
+        self.assertFalse(
+            result["experiments"][0]["dependency_reviews"][0]["blocks_progress"]
+        )
+        self.assertEqual(
             result["experiments"][1]["relationships_incoming"][0]["type_zh"],
             "被依赖",
         )
@@ -668,9 +675,12 @@ class ClientTests(unittest.TestCase):
         handoff = GameExpClient(transport).prototype_handoff("EXP-7")
         self.assertEqual(handoff["status"], "PASS")
         self.assertEqual(handoff["handoff_target"], "godot-prototype-studio")
+        self.assertEqual(handoff["handoff_schema_version"], 2)
         self.assertEqual(handoff["source"]["branch_ref"], "refs/heads/exp/7")
         self.assertEqual(handoff["brief"]["hypothesis"], "roles improve readability")
         self.assertIn("source_sha", handoff["return_contract"]["required"])
+        self.assertIn("artifacts", handoff["return_contract"]["required"])
+        self.assertIn("build_identity", handoff["return_contract"]["required"])
 
         self.assertEqual(
             result["focus"],
@@ -1031,6 +1041,182 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertTrue(all(row["status"] == "PASS" for row in result["checks"]))
 
+
+    def _execution_claim_record(
+        self,
+        *,
+        action="candidate_build",
+        experiment_id="EXP-21",
+        arguments=None,
+        state=None,
+    ):
+        state = state or {
+            "experiment_id": experiment_id,
+            "lifecycle": "REVIEW",
+            "sequence": 1,
+            "last_decision_id": "req_prev",
+            "archive_lock": None,
+        }
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "execution.claim",
+            "input": {
+                "experiment_id": experiment_id,
+                "action": action,
+                "arguments": arguments or {},
+                "state_digest": digest_object(state),
+            },
+            "preconditions": {},
+        }
+        return state, {
+            "request_id": "req_exec_21",
+            "payload": payload,
+            "payload_digest": digest_object(payload),
+            "domain_status": "REQUEST_ONLY",
+            "domain_experiment_id": experiment_id,
+            "trusted_actor": {
+                "login": "alice",
+                "user_id": "1001",
+                "permission": "write",
+            },
+        }
+
+    def test_capabilities_expose_contract_without_treating_access_as_authority(self):
+        result = GameExpClient(FakeTransport()).capabilities()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["contract"]["version"], "1.0")
+        self.assertTrue(result["recovery"]["cross_interface"])
+        self.assertFalse(result["access_snapshot_authoritative_for_execution"])
+
+    def test_async_mutation_requires_stable_request_id(self):
+        result = GameExpClient(FakeTransport()).candidate("EXP-21")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("stable request_id", result["error"])
+
+    def test_operation_get_resolves_committed_execution_claim_without_resubmitting(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        result = GameExpClient(transport).operation_get("req_exec_21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "CLAIMED")
+        self.assertTrue(result["safe_to_resume"])
+        self.assertEqual(transport.dispatched, [])
+
+    def test_resume_execution_dispatches_same_claim_id_once(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        transport._ledger_json["experiments/EXP-21/state.json"] = state
+        result = GameExpClient(transport).resume_execution("req_exec_21")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "DISPATCHED")
+        self.assertEqual(
+            transport.dispatched[-1],
+            {
+                "execution": "candidate_build",
+                "experiment_id": "EXP-21",
+                "request_id": "req_exec_21",
+                "arguments": {},
+            },
+        )
+
+    def test_resume_execution_rejects_state_drift_instead_of_redispatching(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        changed = dict(state)
+        changed["sequence"] = 2
+        transport._ledger_json["experiments/EXP-21/state.json"] = changed
+        result = GameExpClient(transport).resume_execution("req_exec_21")
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(
+            result["conflict_type"],
+            "EXECUTION_PRECONDITION_CHANGED",
+        )
+        self.assertEqual(transport.dispatched, [])
+
+    def test_same_operation_id_with_different_async_claim_is_conflict(self):
+        transport = FakeTransport()
+        _state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        result = GameExpClient(transport).start_execution(
+            action="rehearse",
+            experiment_id="EXP-21",
+            request_id="req_exec_21",
+        )
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "REQUEST_ID_CONFLICT")
+
+    def test_operation_get_reports_completed_worker_result(self):
+        transport = FakeTransport()
+        state, record = self._execution_claim_record()
+        transport.records["req_exec_21"] = record
+        transport.execution_runs[("candidate_build", "req_exec_21")] = {
+            "databaseId": 900,
+            "displayTitle": "game-exp:candidate_build:req_exec_21",
+            "status": "completed",
+            "conclusion": "success",
+            "url": "https://github.com/owner/repo/actions/runs/900",
+        }
+        transport._ledger_json["experiments/EXP-21/state.json"] = state
+        result = GameExpClient(transport).operation_get("req_exec_21")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["operation_status"], "SUCCEEDED")
+
+    def test_notification_cursor_scope_and_incremental_resume(self):
+        client = GameExpClient(FakeTransport())
+        checkpoint = client._encode_notification_cursor(
+            {
+                "v": 1,
+                "kind": "checkpoint",
+                "snapshot": "a" * 40,
+                "viewer_login": "bob",
+                "subject_id": "arena-duel",
+            }
+        )
+        new_board = {"status": "PASS", "snapshot_head": "b" * 40}
+        old_board = {"status": "PASS", "snapshot_head": "a" * 40}
+        old_event = {
+            "event_id": "EXP-1:EXPERIMENT_CREATED:EXP-1",
+            "experiment_id": "EXP-1",
+            "occurred_at": "2026-09-26T00:00:00Z",
+            "_order": 0,
+        }
+        new_event = {
+            "event_id": "EXP-2:EXPERIMENT_CREATED:EXP-2",
+            "experiment_id": "EXP-2",
+            "occurred_at": "2026-09-27T00:00:00Z",
+            "_order": 0,
+        }
+        with (
+            patch.object(client, "board", side_effect=[new_board, old_board]),
+            patch.object(
+                client,
+                "_notification_rows",
+                side_effect=[[old_event, new_event], [old_event]],
+            ),
+        ):
+            result = client.notification_feed(
+                viewer_login="bob",
+                subject_id="arena-duel",
+                after=checkpoint,
+            )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(
+            [row["event_id"] for row in result["notifications"]],
+            ["EXP-2:EXPERIMENT_CREATED:EXP-2"],
+        )
+        self.assertTrue(result["checkpoint_ready"])
+        self.assertIsNotNone(result["checkpoint_cursor"])
+
+        mismatch = client.notification_feed(
+            viewer_login="bob",
+            subject_id="other",
+            after=checkpoint,
+        )
+        self.assertEqual(mismatch["code"], "CURSOR_SCOPE_MISMATCH")
 
     def test_notification_feed_rejects_invalid_limit(self):
         result = GameExpClient(FakeTransport()).notification_feed(limit=0)
