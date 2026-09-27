@@ -26,6 +26,7 @@ jobs:
     outputs:
       primary: ${{ steps.guard.outputs.primary }}
       primary_run_id: ${{ steps.guard.outputs.primary_run_id }}
+      actor_login: ${{ steps.guard.outputs.actor_login }}
     steps:
       - name: Checkout request-id guard
         uses: actions/checkout@v6
@@ -51,6 +52,7 @@ jobs:
             --action "rehearse" \
             --request-id "${{ inputs.request_id }}" \
             --run-id "${{ github.run_id }}" \
+            --experiment-id "${{ inputs.experiment_id }}" \
             --github-output "$GITHUB_OUTPUT"
 
   prepare:
