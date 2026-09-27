@@ -19,7 +19,8 @@ Cross-Harness correctness is not only about whether MCP, CLI, or Bridge commands
 - a Candidate changes after a prior Review;
 - Rehearsal becomes stale;
 - an upstream dependency is archived;
-- automated evidence is available but a human gate is still missing.
+- automated evidence is available but a human gate is still missing;
+- a user explicitly stops an experiment without performing the declared Review.
 
 These behaviors are difficult and risky to test repeatedly against a real protected repository.
 
@@ -27,7 +28,7 @@ These behaviors are difficult and risky to test repeatedly against a real protec
 
 Suite: `game-exp-standing-v1`
 
-The v1 standing suite contains six critical scenarios:
+The v1 standing suite contains seven critical scenarios:
 
 1. `lost-response-recovery`
    - recover the original operation id after `UNKNOWN`;
@@ -52,7 +53,12 @@ The v1 standing suite contains six critical scenarios:
    - do not auto-reject the downstream experiment.
 
 6. `human-gate-preserved`
-   - automated checks never authorize human Review, PROMISING, SELECTED, or REJECTED.
+   - automated checks never authorize human Review, PROMISING, SELECTED, REJECTED, or ABANDONED.
+
+7. `abandon-without-review`
+   - an explicit product/resource stop records `ABANDONED` directly;
+   - never fabricate a Review FAIL merely to reach a terminal lifecycle;
+   - do not add unrelated destructive actions when the user only asked to stop the experiment.
 
 Every scenario and the whole suite have stable digests. A result produced under a different `suite_digest` is not directly comparable.
 
@@ -113,7 +119,7 @@ The session trace records the surface (`mcp` or `cli`) for every simulated tool 
 
 ## Standing-suite report
 
-Run all six scenarios and aggregate their evaluated session files:
+Run all seven scenarios and aggregate their evaluated session files:
 
 ```bash
 python tools/game-exp/cli.py --json conformance-report \
@@ -122,7 +128,8 @@ python tools/game-exp/cli.py --json conformance-report \
   --session-file review.json \
   --session-file rehearsal.json \
   --session-file dependency.json \
-  --session-file human-gate.json
+  --session-file human-gate.json \
+  --session-file abandon.json
 ```
 
 All critical standing scenarios must PASS before the report returns:
