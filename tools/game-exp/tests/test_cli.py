@@ -20,6 +20,10 @@ class CLIRoutingTests(unittest.TestCase):
         client.status.return_value = {"status": "PASS"}
         client.capabilities.return_value = {"status": "PASS", "contract": {"version": "1.0"}}
         client.board.return_value = {"status": "PASS", "experiments": []}
+        client.experiment_template.return_value = {
+            "status": "PASS",
+            "manifest_contract": {"current_schema_version": 2},
+        }
         client.experiment_get.return_value = {"status": "PASS", "state": {"current_candidate_id": "C-21-1-1", "last_decision_id": "req_prev"}}
         client.notification_feed.return_value = {"status": "PASS", "notifications": []}
         client.prototype_handoff.return_value = {"status": "PASS"}
@@ -85,6 +89,11 @@ class CLIRoutingTests(unittest.TestCase):
         result = printer.call_args.args[0]
         self.assertEqual(result["status"], "INCOMPLETE")
         self.assertFalse(result["complete"])
+
+    def test_experiment_template_routes_to_client(self):
+        code, client = self.run_cli(["experiment-template"])
+        self.assertEqual(code, 0)
+        client.experiment_template.assert_called_once_with()
 
     def test_board_routes_to_client(self):
         code, client = self.run_cli(["board"])

@@ -133,6 +133,51 @@ class DomainBindingTests(unittest.TestCase):
         self.assertEqual(value["scope"]["allowed"], ["games/**"])
         self.assertEqual(value["scope"]["avoid"], ["infra/**"])
 
+    def test_manifest_schema_v2_accepts_project_policy_runtime(self):
+        value = manifest()
+        value["schema_version"] = 2
+        value["runtime"] = {
+            "adapter": "node-npm",
+            "policy_path": ".game-exp/project-policy.json",
+        }
+        plan = self.plan(value)
+        self.assertEqual(plan.status, "APPLIED")
+        stored = plan.writes["experiments/EXP-123/manifest.json"]
+        self.assertEqual(stored["schema_version"], 2)
+        self.assertEqual(
+            stored["runtime"],
+            {
+                "adapter": "node-npm",
+                "policy_path": ".game-exp/project-policy.json",
+            },
+        )
+
+    def test_manifest_schema_v2_rejects_legacy_godot_runtime_shape(self):
+        value = manifest()
+        value["schema_version"] = 2
+        with self.assertRaisesRegex(DomainError, "manifest.runtime"):
+            self.plan(value)
+
+    def test_manifest_schema_v2_requires_canonical_project_policy_path(self):
+        value = manifest()
+        value["schema_version"] = 2
+        value["runtime"] = {
+            "adapter": "node-npm",
+            "policy_path": "other/policy.json",
+        }
+        with self.assertRaisesRegex(
+            DomainError,
+            "manifest.runtime.policy_path must equal",
+        ):
+            self.plan(value)
+
+    def test_manifest_schema_v1_godot_runtime_remains_compatible(self):
+        plan = self.plan(manifest())
+        self.assertEqual(plan.status, "APPLIED")
+        stored = plan.writes["experiments/EXP-123/manifest.json"]
+        self.assertEqual(stored["schema_version"], 1)
+        self.assertIn("godot", stored["runtime"])
+
     def test_legacy_manifest_without_subject_remains_valid(self):
         value = manifest()
         value.pop("subject")

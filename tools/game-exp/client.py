@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from project_policy import POLICY_PATH, ProjectPolicyError, policy_digest, validate_policy
 from protocol_core import (
     ASYNC_EXECUTION_ACTIONS,
     build_operation_payload,
@@ -381,6 +382,50 @@ class GitHubTransport:
             arguments={"mode": mode},
         )
 
+    def repository_json(
+        self,
+        path: str,
+        *,
+        ref: str | None = None,
+    ) -> dict[str, Any] | None:
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+        ):
+            raise ClientError("repository JSON path must be a normalized relative path")
+        endpoint = f"repos/{self.repo}/contents/{path}"
+        if ref is not None:
+            if not isinstance(ref, str) or not ref:
+                raise ClientError("repository JSON ref must be a non-empty string")
+            endpoint += f"?ref={ref}"
+        proc = _run(
+            [
+                "gh",
+                "api",
+                "-H",
+                "Accept: application/vnd.github.raw+json",
+                endpoint,
+            ],
+            check=False,
+        )
+        if proc.returncode != 0:
+            text = (proc.stdout + "\n" + proc.stderr).lower()
+            if "404" in text or "not found" in text:
+                return None
+            raise ClientError(
+                f"failed reading repository JSON {path} ({proc.returncode}): {proc.stderr}"
+            )
+        try:
+            value = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise ClientError(f"repository JSON is invalid at {path}") from exc
+        if not isinstance(value, dict):
+            raise ClientError(f"repository JSON must be an object at {path}")
+        return value
+
     def ledger_json(
         self,
         path: str,
@@ -572,6 +617,11 @@ class GitHubTransport:
             }
         data = _json_output(proc)
         repository_context = {
+            "repository_id": (
+                str(data.get("id"))
+                if isinstance(data, dict) and data.get("id") is not None
+                else None
+            ),
             "visibility": data.get("visibility") if isinstance(data, dict) else None,
             "private": data.get("private") if isinstance(data, dict) else None,
             "default_branch": (
@@ -940,11 +990,14 @@ class GameExpClient:
                 "godot_handoff": True,
                 "archive_recovery": True,
                 "complete_project_setup": True,
+                "self_describing_manifest": True,
+                "manifest_schema_v2": True,
             },
             "queries": [
                 "status",
                 "access_check",
                 "capabilities",
+                "experiment_template",
                 "board",
                 "experiment_get",
                 "subject_panel",
@@ -971,6 +1024,166 @@ class GameExpClient:
             "access_snapshot": access,
             "access_snapshot_authoritative_for_execution": False,
             "note_zh": "权限快照仅用于提示；每次写操作仍由可信执行边界重新验证身份和权限。",
+        }
+
+    def experiment_template(self) -> dict[str, Any]:
+        try:
+            raw_policy = self.transport.repository_json(POLICY_PATH)
+        except Exception as exc:
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "code": "PROJECT_POLICY_UNAVAILABLE",
+                "error": str(exc),
+            }
+        if raw_policy is None:
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "code": "PROJECT_POLICY_MISSING",
+                "policy_path": POLICY_PATH,
+                "message_zh": "当前仓库缺少项目策略，无法生成可靠的实验 Manifest 模板。",
+            }
+        try:
+            policy = validate_policy(json.loads(json.dumps(raw_policy)))
+        except (ProjectPolicyError, ValueError, TypeError) as exc:
+            return {
+                "status": "FAIL",
+                "repo": self.transport.repo,
+                "code": "PROJECT_POLICY_INVALID",
+                "policy_path": POLICY_PATH,
+                "error": str(exc),
+                "message_zh": "当前仓库的项目策略无效；先修复项目策略，再创建实验。",
+            }
+
+        access = self.transport.repository_access()
+        adapter = str(policy.get("adapter"))
+        runtime = {
+            "adapter": adapter,
+            "policy_path": POLICY_PATH,
+        }
+        review = {"protocol": "manual-playtest-v1"}
+        required_user_input = [
+            "目标原型/主体",
+            "想改什么",
+            "希望玩家体验发生什么变化",
+        ]
+        agent_resolved_fields = [
+            "GitHub Issue id/number",
+            "repository_id",
+            "当前父提交 SHA",
+            "operation_id",
+            "created_at",
+            "scope",
+            "runtime",
+            "review.protocol",
+        ]
+        example_manifest = {
+            "schema_version": 2,
+            "experiment": {
+                "host": "github.com",
+                "repository_id": access.get("repository_id") or "<resolve:repository_id>",
+                "issue_id": "<resolve:issue_id>",
+                "issue_number": "<resolve:issue_number>",
+            },
+            "title": "<draft:experiment title>",
+            "subject": {
+                "type": "game-prototype",
+                "id": "<draft:stable-lowercase-id>",
+                "name": "<draft:prototype name>",
+                "root_path": "<resolve:prototype root path>",
+            },
+            "operation_id": "<generate:stable operation id>",
+            "parent": {
+                "experiment": None,
+                "commit": "<resolve:current parent sha>",
+            },
+            "hypothesis": "<draft:falsifiable hypothesis>",
+            "success_criteria": ["<draft:observable success criterion>"],
+            "kill_criteria": ["<draft:observable kill criterion>"],
+            "scope": {
+                "allowed": ["<resolve:allowed path glob>"],
+                "avoid": [],
+            },
+            "runtime": runtime,
+            "review": review,
+            "created_at": "<generate:RFC3339 timestamp>",
+        }
+
+        return {
+            "status": "PASS",
+            "repo": self.transport.repo,
+            "manifest_contract": {
+                "current_schema_version": 2,
+                "supported_schema_versions": [1, 2],
+                "recommended_schema_version": 2,
+                "schema_v1_status": "legacy-compatible",
+                "required_fields": [
+                    "schema_version",
+                    "experiment",
+                    "title",
+                    "operation_id",
+                    "parent",
+                    "hypothesis",
+                    "success_criteria",
+                    "kill_criteria",
+                    "scope",
+                    "runtime",
+                    "review",
+                    "created_at",
+                ],
+                "optional_fields": ["subject", "relationships"],
+                "subject": {
+                    "game_prototype_required_keys": [
+                        "type",
+                        "id",
+                        "name",
+                        "root_path",
+                    ],
+                    "repository_identity": {
+                        "type": "repository",
+                        "id": "repository",
+                        "root_path": ".",
+                    },
+                },
+                "relationships": {
+                    "allowed_types": ["depends_on", "blocks", "supersedes"],
+                    "target_format": "EXP-<number>",
+                },
+                "runtime_v2": {
+                    "required_keys": ["adapter", "policy_path"],
+                    "policy_path": POLICY_PATH,
+                    "description_zh": (
+                        "runtime 由当前仓库项目策略描述，不再要求 Node/npm 项目填写 Godot 占位字段。"
+                    ),
+                },
+                "review": {
+                    "required_keys": ["protocol"],
+                    "default_protocol": "manual-playtest-v1",
+                    "default_protocol_zh": "用户实际试玩后明确给出 PASS / FAIL",
+                },
+            },
+            "project_policy": {
+                "path": POLICY_PATH,
+                "digest": policy_digest(policy),
+                "adapter": adapter,
+                "install": policy.get("install"),
+                "test": policy.get("test"),
+                "build": policy.get("build"),
+                "candidate": policy.get("candidate"),
+                "raw": policy,
+            },
+            "defaults": {
+                "runtime": runtime,
+                "review": review,
+            },
+            "required_user_input_zh": required_user_input,
+            "agent_resolved_fields_zh": agent_resolved_fields,
+            "example_manifest": example_manifest,
+            "example_manifest_bindable": False,
+            "next_zh": (
+                "直接基于当前仓库策略生成 Manifest；不要搜索其他仓库或历史 Ledger 作为模板来源。"
+            ),
         }
 
     def _contributors_for_item(self, item: dict[str, Any]) -> dict[str, Any]:

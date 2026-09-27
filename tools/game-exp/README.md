@@ -148,6 +148,7 @@ Normal Harness use should prefer domain tools:
 
 Read / projection:
 - `game_exp_status`
+- `game_exp_experiment_template`
 - `game_exp_board`
 - `game_exp_doctor`
 - `game_exp_experiment_get`
@@ -167,6 +168,28 @@ Lifecycle / workflow:
 
 Low-level fallback:
 - `game_exp_request_submit`
+
+## Self-describing first experiment
+
+v0.15 removes the need for a new Harness to inspect toy2game or historical Ledger records before creating its first experiment.
+
+Use:
+
+```powershell
+python tools/game-exp/cli.py --json experiment-template
+```
+
+or MCP `game_exp_experiment_template`.
+
+The query reads the current repository's `.game-exp/project-policy.json` and returns the recommended Manifest schema, exact project commands/Candidate policy, runtime defaults, review default, required/optional fields, and a non-bindable example blueprint.
+
+New experiments should use Manifest schema v2. Its runtime is project-policy based:
+
+```json
+{"adapter":"node-npm","policy_path":".game-exp/project-policy.json"}
+```
+
+Schema v1 remains accepted for existing Godot-shaped Manifests.
 
 ## Board and Skill
 

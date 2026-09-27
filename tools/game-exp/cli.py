@@ -146,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     conformance_compare.add_argument("--baseline-report", required=True)
     conformance_compare.add_argument("--candidate-report", required=True)
 
+    sub.add_parser(
+        "experiment-template",
+        help="show current project policy and self-describing Manifest blueprint",
+    )
+
     board = sub.add_parser("board", help="show one consistent experiment Board snapshot")
     board.add_argument("--query")
     board.add_argument("--subject-id")
@@ -381,6 +386,15 @@ def main(argv: list[str] | None = None) -> int:
                     else "local-gh-principal"
                 ),
             }
+        elif args.command == "experiment-template":
+            if args.conformance_session:
+                result = {
+                    "status": "REJECTED",
+                    "code": "EXPERIMENT_TEMPLATE_NOT_AVAILABLE_IN_CONFORMANCE",
+                    "error": "experiment-template requires a real repository project policy",
+                }
+            else:
+                result = client.experiment_template()
         elif args.command == "board":
             result = client.board(
                 query=args.query,

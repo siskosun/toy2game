@@ -41,7 +41,11 @@ Do not repeatedly force onboarding after the repository already has experiments.
    - do not ask the user to write a Manifest.
 
 3. `生成实验定义`
-   - draft hypothesis, success criteria, kill criteria, scope, subject, runtime, and review protocol;
+   - call `game_exp_experiment_template` or CLI `experiment-template`; if neither exists but GitHub read access is available, read this repository's `.game-exp/project-policy.json` plus its checked-in `references/public-contract.md`;
+   - use the current repository's project policy and recommended Manifest schema returned or documented there;
+   - do not search toy2game, another repository, or historical Ledger experiments merely to discover runtime fields or copy a Manifest shape;
+   - draft hypothesis, success criteria, kill criteria, scope and subject from the user's goal;
+   - use the returned schema-v2 runtime default `{adapter, policy_path}` and review default unless the user has a real reason to choose another review protocol;
    - ask only when a missing user-owned choice would materially change the experiment;
    - otherwise present the drafted definition in plain Chinese.
 
