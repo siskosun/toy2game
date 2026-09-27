@@ -42,6 +42,14 @@ class FakeClient:
             "can_create_experiment": True,
         }
 
+    def capabilities(self):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "contract": {"version": "1.0"},
+            "recovery": {"operation_get": True, "resume_execution": True},
+        }
+
     def board(self, **kwargs):
         return {
             "focus_args": kwargs,
@@ -115,6 +123,12 @@ class FakeClient:
     def reconcile(self, request_id):
         return {"status": "COMMITTED", "request_id": request_id, "repo": "owner/repo"}
 
+    def operation_get(self, request_id):
+        return {"status": "COMMITTED", "request_id": request_id, "repo": "owner/repo"}
+
+    def resume_execution(self, request_id):
+        return {"status": "ACCEPTED", "request_id": request_id, "operation_status": "DISPATCHED"}
+
     def experiment_get(self, experiment_id):
         return {
             "status": "PASS",
@@ -127,30 +141,58 @@ class FakeClient:
             },
         }
 
-    def initialize(self, experiment_id):
-        return {"status": "ACCEPTED", "experiment_id": experiment_id}
+    def initialize(self, experiment_id, *, request_id=None, actor_claim=None):
+        return {
+            "status": "ACCEPTED",
+            "experiment_id": experiment_id,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
+        }
 
-    def candidate(self, experiment_id):
-        return {"status": "ACCEPTED", "experiment_id": experiment_id}
+    def candidate(self, experiment_id, *, request_id=None, actor_claim=None):
+        return {
+            "status": "ACCEPTED",
+            "experiment_id": experiment_id,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
+        }
 
-    def rehearse(self, experiment_id):
-        return {"status": "ACCEPTED", "experiment_id": experiment_id}
+    def rehearse(self, experiment_id, *, request_id=None, actor_claim=None):
+        return {
+            "status": "ACCEPTED",
+            "experiment_id": experiment_id,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
+        }
 
-    def integrate(self, experiment_id):
-        return {"status": "ACCEPTED", "experiment_id": experiment_id}
+    def integrate(self, experiment_id, *, request_id=None, actor_claim=None):
+        return {
+            "status": "ACCEPTED",
+            "experiment_id": experiment_id,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
+        }
 
-    def integrate_finalize(self, experiment_id, pr_number):
+    def integrate_finalize(
+        self, experiment_id, pr_number, *, request_id=None, actor_claim=None
+    ):
         return {
             "status": "ACCEPTED",
             "experiment_id": experiment_id,
             "pr_number": str(pr_number),
+            "request_id": request_id,
+            "actor_claim": actor_claim,
         }
 
-    def archive(self, experiment_id, mode):
+    def archive(
+        self, experiment_id, mode, *, request_id=None, actor_claim=None
+    ):
         return {
             "status": "ACCEPTED",
             "experiment_id": experiment_id,
             "mode": mode,
+            "request_id": request_id,
+            "actor_claim": actor_claim,
         }
 
     def archive_abort(
@@ -190,6 +232,7 @@ class MCPServerTests(unittest.TestCase):
             {
                 "game_exp_status",
                 "game_exp_access_check",
+                "game_exp_capabilities",
                 "game_exp_doctor",
                 "game_exp_experiment_get",
                 "game_exp_board",
@@ -207,7 +250,9 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_integrate_finalize",
                 "game_exp_archive",
                 "game_exp_archive_abort",
+                "game_exp_operation_get",
                 "game_exp_request_get",
+                "game_exp_operation_resume",
                 "game_exp_request_submit",
             },
         )
@@ -219,12 +264,14 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("input", submit["properties"])
         self.assertIn("operation", submit["required"])
         self.assertIn("input", submit["required"])
+        self.assertIn("request_id", submit["required"])
 
     def test_tool_annotations_distinguish_reads_from_submit(self):
         tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
         for name in (
             "game_exp_status",
             "game_exp_access_check",
+            "game_exp_capabilities",
             "game_exp_doctor",
             "game_exp_experiment_get",
             "game_exp_board",
@@ -232,6 +279,7 @@ class MCPServerTests(unittest.TestCase):
             "game_exp_subject_panel",
             "game_exp_prototype_handoff",
             "game_exp_notifications",
+            "game_exp_operation_get",
             "game_exp_request_get",
         ):
             ann = tools[name].annotations
@@ -243,7 +291,7 @@ class MCPServerTests(unittest.TestCase):
         submit = tools["game_exp_request_submit"].annotations
         self.assertFalse(submit.read_only_hint)
         self.assertFalse(submit.destructive_hint)
-        self.assertFalse(submit.idempotent_hint)
+        self.assertTrue(submit.idempotent_hint)
         self.assertTrue(submit.open_world_hint)
 
         archive = tools["game_exp_archive"].annotations
@@ -260,13 +308,17 @@ class MCPServerTests(unittest.TestCase):
     def test_read_tools_delegate_to_shared_client(self, _):
         status = mcp_server.game_exp_status("owner/repo")
         access = mcp_server.game_exp_access_check("owner/repo")
+        capabilities = mcp_server.game_exp_capabilities("owner/repo")
         doctor = mcp_server.game_exp_doctor("owner/repo")
         request = mcp_server.game_exp_request_get("req_123", "owner/repo")
+        operation = mcp_server.game_exp_operation_get("req_123", "owner/repo")
         self.assertEqual(status["ledger_head"], "a" * 40)
         self.assertTrue(access["can_create_experiment"])
         self.assertEqual(access["access"]["status"], "WRITE")
+        self.assertEqual(capabilities["contract"]["version"], "1.0")
         self.assertEqual(doctor["status"], "PASS")
         self.assertEqual(request["status"], "COMMITTED")
+        self.assertEqual(operation["status"], "COMMITTED")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_experiment_projection_delegates_to_client(self, _):
@@ -278,6 +330,12 @@ class MCPServerTests(unittest.TestCase):
         result = mcp_server.game_exp_board("owner/repo")
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            FakeClient().notification_feed(
+                viewer_login="bob", subject_id="arena-duel", limit=20, after="n1.old", cursor=None
+            )["viewer_login"],
+            "bob",
+        )
         self.assertEqual(result["experiments"][0]["next_gate"], "HUMAN_REVIEW")
 
     @patch("mcp_server._client", return_value=FakeClient())
@@ -307,6 +365,8 @@ class MCPServerTests(unittest.TestCase):
             viewer_login="bob",
             subject_id="arena-duel",
             limit=20,
+            after="n1.old",
+            cursor=None,
         )
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["viewer_login"], "bob")
@@ -338,6 +398,7 @@ class MCPServerTests(unittest.TestCase):
             experiment_id="EXP-21",
             outcome="PASS",
             notes="human playtest",
+            request_id="req_review_21",
             repo="owner/repo",
         )
         self.assertEqual(result["status"], "ACCEPTED")
@@ -349,6 +410,7 @@ class MCPServerTests(unittest.TestCase):
             experiment_id="EXP-21",
             to_state="PROMISING",
             reason="passed current review",
+            request_id="req_decision_21",
             repo="owner/repo",
         )
         self.assertEqual(result["status"], "ACCEPTED")
@@ -357,26 +419,41 @@ class MCPServerTests(unittest.TestCase):
     @patch("mcp_server._client", return_value=FakeClient())
     def test_workflow_domain_tools_delegate_to_shared_client(self, _):
         self.assertEqual(
-            mcp_server.game_exp_initialize("EXP-21", "owner/repo")["status"],
+            mcp_server.game_exp_initialize(
+                "EXP-21", "req_init_21", repo="owner/repo"
+            )["status"],
             "ACCEPTED",
         )
         self.assertEqual(
-            mcp_server.game_exp_candidate_build("EXP-21", "owner/repo")["status"],
+            mcp_server.game_exp_candidate_build(
+                "EXP-21", "req_candidate_21", repo="owner/repo"
+            )["status"],
             "ACCEPTED",
         )
         self.assertEqual(
-            mcp_server.game_exp_rehearse("EXP-21", "owner/repo")["status"],
+            mcp_server.game_exp_rehearse(
+                "EXP-21", "req_rehearse_21", repo="owner/repo"
+            )["status"],
             "ACCEPTED",
         )
         self.assertEqual(
-            mcp_server.game_exp_integrate("EXP-21", "owner/repo")["status"],
+            mcp_server.game_exp_integrate(
+                "EXP-21", "req_integrate_21", repo="owner/repo"
+            )["status"],
             "ACCEPTED",
         )
         self.assertEqual(
-            mcp_server.game_exp_integrate_finalize("EXP-21", "35", "owner/repo")["status"],
+            mcp_server.game_exp_integrate_finalize(
+                "EXP-21", "35", "req_finalize_21", repo="owner/repo"
+            )["status"],
             "ACCEPTED",
         )
-        archive = mcp_server.game_exp_archive("EXP-21", "ATOMIC_DELETE", "owner/repo")
+        archive = mcp_server.game_exp_archive(
+            "EXP-21",
+            "req_archive_21",
+            mode="ATOMIC_DELETE",
+            repo="owner/repo",
+        )
         self.assertEqual(archive["status"], "ACCEPTED")
 
     @patch("mcp_server._client", return_value=FakeClient())
