@@ -16,6 +16,8 @@ PUBLIC_CONTRACT_NAME = "game-exp"
 PUBLIC_CONTRACT_VERSION = "1.0"
 PUBLIC_CONTRACT_MAJOR = 1
 SUPPORTED_OPERATION_SCHEMA_VERSIONS = (1,)
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = (1, 2)
+RECOMMENDED_MANIFEST_SCHEMA_VERSION = 2
 RESULT_STATUSES = (
     "PASS",
     "WARN",
@@ -41,6 +43,8 @@ def contract_descriptor() -> dict[str, Any]:
         "version": PUBLIC_CONTRACT_VERSION,
         "major": PUBLIC_CONTRACT_MAJOR,
         "operation_schema_versions": list(SUPPORTED_OPERATION_SCHEMA_VERSIONS),
+        "manifest_schema_versions": list(SUPPORTED_MANIFEST_SCHEMA_VERSIONS),
+        "recommended_manifest_schema_version": RECOMMENDED_MANIFEST_SCHEMA_VERSION,
         "result_statuses": list(RESULT_STATUSES),
         "compatibility": {
             "mutation_unknown_fields": "REJECT",
