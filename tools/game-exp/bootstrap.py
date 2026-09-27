@@ -34,6 +34,7 @@ PRODUCTION_TOOLS = (
     "github_bridge.py",
     "mcp_server.py",
     "project_policy.py",
+    "project_setup.py",
     "protocol_core.py",
     "request_guard.py",
     "rehearsal_control.py",
