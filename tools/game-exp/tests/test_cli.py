@@ -32,6 +32,7 @@ class CLIRoutingTests(unittest.TestCase):
         client.integrate.return_value = {"status": "ACCEPTED"}
         client.integrate_finalize.return_value = {"status": "ACCEPTED"}
         client.archive.return_value = {"status": "ACCEPTED"}
+        client.abandon.return_value = {"status": "ACCEPTED"}
         client.archive_abort.return_value = {"status": "ACCEPTED"}
         with (
             patch("cli.GitHubTransport", return_value=transport),
@@ -103,6 +104,25 @@ class CLIRoutingTests(unittest.TestCase):
             subject_id=None,
             lifecycle=None,
             attention_only=False,
+        )
+
+    def test_abandon_routes_to_client(self):
+        code, client = self.run_cli(
+            [
+                "abandon",
+                "EXP-21",
+                "--reason",
+                "stop this experiment",
+                "--request-id",
+                "req_abandon_21",
+            ]
+        )
+        self.assertEqual(code, 0)
+        client.abandon.assert_called_once_with(
+            "EXP-21",
+            "stop this experiment",
+            request_id="req_abandon_21",
+            actor_claim=None,
         )
 
     def test_integrate_routes_to_client(self):
