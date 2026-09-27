@@ -34,7 +34,7 @@ def valid_policy_v2(adapter="node-npm"):
     return {
         "schema_version": 2,
         "adapter": adapter,
-        "toolchain": {"node_version": "22"} if adapter == "node-npm" else {},
+        "toolchain": {"node_version": "22.21.1"} if adapter == "node-npm" else {},
         "install": {"argv": ["npm", "ci"]} if adapter == "node-npm" else {"argv": ["python", "-m", "pip", "install", "-r", "requirements.txt"]},
         "test": {"argv": ["npm", "test"]} if adapter == "node-npm" else {"argv": ["python", "-m", "pytest"]},
         "build": {"argv": ["npm", "run", "build"]} if adapter == "node-npm" else {"argv": ["python", "build.py"]},
@@ -51,7 +51,7 @@ class ProjectPolicyTests(unittest.TestCase):
 
     def test_schema_v2_node_policy_is_valid(self):
         policy = valid_policy_v2()
-        self.assertEqual(validate_policy(policy)["toolchain"]["node_version"], "22")
+        self.assertEqual(validate_policy(policy)["toolchain"]["node_version"], "22.21.1")
 
     def test_schema_v2_generic_command_adapter_is_valid(self):
         policy = valid_policy_v2("command")
@@ -70,9 +70,15 @@ class ProjectPolicyTests(unittest.TestCase):
         with self.assertRaises(ProjectPolicyError):
             validate_policy(policy)
 
+    def test_schema_v2_node_rejects_unpinned_version_range(self):
+        policy = valid_policy_v2()
+        policy["toolchain"]["node_version"] = ">=22"
+        with self.assertRaises(ProjectPolicyError):
+            validate_policy(policy)
+
     def test_schema_v2_generic_adapter_rejects_unused_toolchain(self):
         policy = valid_policy_v2("command")
-        policy["toolchain"] = {"node_version": "22"}
+        policy["toolchain"] = {"node_version": "22.21.1"}
         with self.assertRaises(ProjectPolicyError):
             validate_policy(policy)
 
