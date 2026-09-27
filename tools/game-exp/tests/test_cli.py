@@ -84,6 +84,10 @@ class CLIRoutingTests(unittest.TestCase):
         code, client = self.run_cli(["capabilities"])
         self.assertEqual(code, 0)
         client.capabilities.assert_called_once_with()
+        self.assertEqual(
+            client.capabilities.return_value["interface"]["write_identity"],
+            "local-gh-principal",
+        )
 
     def test_get_and_resume_operation_route_without_resubmit(self):
         code, client = self.run_cli(["get-operation", "req_shared_1"])
