@@ -152,37 +152,44 @@ def game_exp_experiment_bind(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_initialize(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Initialize canonical experiment source refs from the authoritative binding."""
-    return _client(repo).initialize(experiment_id)
+    """Initialize canonical source refs under a stable cross-interface operation id."""
+    return _client(repo).initialize(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_candidate_build(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Build, attest, retain, and register a new trusted Candidate for an experiment."""
-    return _client(repo).candidate(experiment_id)
+    """Build/register a trusted Candidate under a stable cross-interface operation id."""
+    return _client(repo).candidate(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_review_record(
     experiment_id: str,
     outcome: str,
     notes: str,
+    request_id: str,
     candidate_id: str | None = None,
-    request_id: str | None = None,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Record a human PASS/FAIL Review bound to the current Candidate.
-
-    The MCP caller does not establish reviewer authority. The Trusted Writer
-    independently resolves the authenticated GitHub actor and repository
-    permission before accepting the Review.
-    """
+    """Record human PASS/FAIL for one concrete Candidate using a stable request id."""
     client = _client(repo)
     if candidate_id is None:
         projection = client.experiment_get(experiment_id)
@@ -194,6 +201,7 @@ def game_exp_review_record(
                 "status": "REJECTED",
                 "repo": client.transport.repo,
                 "experiment_id": experiment_id,
+                "request_id": request_id,
                 "error": "experiment has no current Candidate",
             }
     return client.submit(
@@ -209,22 +217,17 @@ def game_exp_review_record(
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_decision_submit(
     experiment_id: str,
     to_state: str,
     reason: str,
+    request_id: str,
     previous_decision_id: str | None = None,
-    request_id: str | None = None,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Submit one trusted lifecycle Decision.
-
-    If previous_decision_id is omitted, the tool reads the current protected
-    Ledger state and binds the request to its last Decision id. GitHub actor
-    identity and permission are still verified by the Trusted Writer.
-    """
+    """Submit one lifecycle Decision bound to protected state and a stable request id."""
     client = _client(repo)
     if previous_decision_id is None:
         projection = client.experiment_get(experiment_id)
@@ -244,48 +247,68 @@ def game_exp_decision_submit(
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_rehearse(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Run a trusted scope-filtered latest-main Rehearsal for the current Candidate."""
-    return _client(repo).rehearse(experiment_id)
+    """Run latest-main trusted Rehearsal under a stable cross-interface operation id."""
+    return _client(repo).rehearse(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_integrate(
     experiment_id: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Create or reuse the trusted Integration PR for the current Rehearsal."""
-    return _client(repo).integrate(experiment_id)
+    """Create/reuse the Integration PR under a stable cross-interface operation id."""
+    return _client(repo).integrate(
+        experiment_id,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_integrate_finalize(
     experiment_id: str,
     pr_number: str,
+    request_id: str,
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Verify a merged Integration PR and register the experiment as INTEGRATED."""
-    return _client(repo).integrate_finalize(experiment_id, pr_number)
+    """Finalize an actually merged Integration PR under the same operation contract."""
+    return _client(repo).integrate_finalize(
+        experiment_id,
+        pr_number,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True))
 def game_exp_archive(
     experiment_id: str,
+    request_id: str,
     mode: str = "ATOMIC_DELETE",
+    actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Run the recoverable trusted Archive workflow.
-
-    ATOMIC_DELETE creates the immutable final tag and atomically deletes the
-    active experiment branch. RETAIN_BRANCH creates the same official final
-    snapshot but retains the branch. The Trusted Archive state machine remains
-    authoritative.
-    """
-    return _client(repo).archive(experiment_id, mode)
+    """Run recoverable Archive under a stable cross-interface operation id."""
+    return _client(repo).archive(
+        experiment_id,
+        mode,
+        request_id=request_id,
+        actor_claim=actor_claim,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
