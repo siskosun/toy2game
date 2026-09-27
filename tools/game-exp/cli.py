@@ -18,6 +18,7 @@ from conformance_core import (
     suite_descriptor as conformance_suite_descriptor,
 )
 from protocol_core import ProtocolError, strict_json_loads
+from project_setup import preflight as project_preflight, provision as project_provision
 
 
 def _load_object(value: str | None, path: str | None, *, label: str) -> dict[str, Any]:
@@ -95,6 +96,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show repository and authoritative Ledger head")
     sub.add_parser("access-check", help="show current repository access snapshot")
     sub.add_parser("capabilities", help="show public contract/features and recovery support")
+    sub.add_parser(
+        "project-preflight",
+        help="verify a repository can support a complete trusted game-exp setup",
+    )
+    project_init = sub.add_parser(
+        "project-init",
+        help="provision all trusted repository controls and require Doctor PASS",
+    )
+    project_init.add_argument(
+        "--skip-selftest",
+        action="store_true",
+        help="diagnostic only; a skipped self-test can never count as complete setup",
+    )
 
     sub.add_parser(
         "conformance-suite",
@@ -322,6 +336,29 @@ def main(argv: list[str] | None = None) -> int:
             result = conformance_compare_reports(baseline, candidate)
             _print_result(result, as_json=args.json)
             return 0 if result.get("status") == "PASS" else 1
+
+        if args.command in {"project-preflight", "project-init"}:
+            if args.conformance_session:
+                result = {
+                    "status": "REJECTED",
+                    "complete": False,
+                    "error": "project setup cannot run in conformance simulation mode",
+                }
+            else:
+                repo = GitHubTransport(args.repo).repo
+                if args.command == "project-preflight":
+                    result = project_preflight(repo)
+                else:
+                    result = project_provision(
+                        repo,
+                        run_selftest=not args.skip_selftest,
+                    )
+                    if args.skip_selftest and result.get("status") == "PASS":
+                        result["status"] = "INCOMPLETE"
+                        result["complete"] = False
+                        result["reason"] = "Trusted Writer self-test was skipped"
+            _print_result(result, as_json=args.json)
+            return 0 if result.get("status") == "PASS" and result.get("complete", True) else 1
 
         if args.conformance_session:
             client = ConformanceClient(args.conformance_session, surface="cli")
