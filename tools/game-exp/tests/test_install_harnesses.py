@@ -95,7 +95,10 @@ class HarnessInstallerTests(unittest.TestCase):
             game_exp = codex_data["mcp_servers"]["game-exp"]
             self.assertEqual(game_exp["command"], "uv")
             self.assertTrue(game_exp["enabled"])
-            self.assertIn(str(runtime / "tools" / "game-exp" / "mcp_server.py"), game_exp["args"])
+            self.assertEqual(
+                pathlib.Path(game_exp["args"][-1]).resolve(),
+                (runtime / "tools" / "game-exp" / "mcp_server.py").resolve(),
+            )
             self.assertNotIn("GAME_EXP_REPO", codex.read_text(encoding="utf-8"))
 
             qoder_data = json.loads(qoder.read_text(encoding="utf-8"))
