@@ -21,6 +21,10 @@ class BridgeError(RuntimeError):
     pass
 
 
+class BridgeUncertainError(BridgeError):
+    """The async worker may have been dispatched, but the Bridge cannot prove it."""
+
+
 WRITE_PERMISSIONS = {"admin", "maintain", "write", "push"}
 BOT_LOGIN = "github-actions[bot]"
 COMMAND_PREFIX = "/game-exp"
@@ -304,19 +308,29 @@ def _dispatch_workflow(
         command.extend(["-f", f"{key}={value}"])
     env = os.environ.copy()
     env["GH_TOKEN"] = _token()
-    proc = subprocess.run(
-        command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        timeout=30,
-    )
+    try:
+        proc = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise BridgeUncertainError(
+            "workflow dispatch timed out; recover the same request_id"
+        ) from exc
     if proc.returncode != 0:
-        raise BridgeError(
-            f"workflow dispatch failed ({proc.returncode}): {proc.stderr[-1200:]}"
+        raise BridgeUncertainError(
+            f"workflow dispatch outcome is uncertain ({proc.returncode}): "
+            f"{proc.stderr[-1200:]}"
         )
     url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    if not url:
+        raise BridgeUncertainError(
+            "workflow dispatch returned no run URL; recover the same request_id"
+        )
     return {
         "status": "ACCEPTED",
         "workflow": workflow,
@@ -370,11 +384,6 @@ def _claim_async_execution(
         run_attempt=run_attempt,
         workflow_source_sha=workflow_source_sha,
     )
-    if result.get("status") != "COMMITTED":
-        raise BridgeError(
-            "async execution claim did not commit: "
-            + json.dumps(result, ensure_ascii=False, sort_keys=True)
-        )
     return result
 
 
@@ -398,7 +407,7 @@ def execute_action(
     actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
 
     if action in WORKFLOW_ACTIONS:
-        _claim_async_execution(
+        claim_result = _claim_async_execution(
             command,
             repo=repo,
             actor_login=actor_login,
@@ -408,6 +417,12 @@ def execute_action(
             run_attempt=run_attempt,
             workflow_source_sha=workflow_source_sha,
         )
+        if claim_result.get("status") != "COMMITTED":
+            return {
+                **claim_result,
+                "operation_status": "CLAIM_NOT_COMMITTED",
+                "recovery": "resolve the same request_id; do not create a replacement operation",
+            }
         workflow, field_names = WORKFLOW_ACTIONS[action]
         fields = {name: str(command[name]) for name in field_names}
         return _dispatch_workflow(
@@ -583,6 +598,17 @@ def run_event(args: argparse.Namespace) -> dict[str, Any]:
             run_attempt=args.run_attempt,
             workflow_source_sha=args.workflow_source_sha,
         )
+    except BridgeUncertainError as exc:
+        error = {
+            "status": "UNKNOWN",
+            "request_id": request_id,
+            "reason": "worker_dispatch_outcome_uncertain",
+            "error": str(exc),
+            "claim_comment_id": claim_row.get("id"),
+            "recovery": "query/resume this same request_id; do not submit a new logical operation",
+        }
+        post_comment(args.repo, issue_number, _reply_body(request_id, error))
+        return error
     except Exception as exc:
         error = {
             "status": "REJECTED",
