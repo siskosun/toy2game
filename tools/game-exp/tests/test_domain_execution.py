@@ -167,6 +167,21 @@ class AsyncExecutionClaimTests(unittest.TestCase):
         self.assertEqual(plan.status, "REQUEST_ONLY")
         self.assertEqual(plan.experiment_id, self.experiment_id)
 
+    def test_rejected_and_abandoned_experiments_can_claim_archive(self):
+        root = self.root / "experiments" / self.experiment_id
+        for lifecycle in ("REJECTED", "ABANDONED"):
+            with self.subTest(lifecycle=lifecycle):
+                state = dict(self.state)
+                state["lifecycle"] = lifecycle
+                (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+                self.state = state
+                plan = self.plan(
+                    action="archive",
+                    arguments={"mode": "RETAIN_BRANCH"},
+                )
+                self.assertEqual(plan.status, "REQUEST_ONLY")
+                self.assertEqual(plan.experiment_id, self.experiment_id)
+
     def test_claim_validates_action_arguments(self):
         with self.assertRaises(DomainError) as ctx:
             self.plan(action="archive", arguments={"mode": "DELETE"})
