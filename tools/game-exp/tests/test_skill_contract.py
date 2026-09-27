@@ -16,7 +16,7 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.13.1")
+        self.assertEqual(manifest["version"], "0.14.0")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -66,6 +66,8 @@ class GameExpSkillContractTests(unittest.TestCase):
         content = SKILL.read_text(encoding="utf-8")
         self.assertRegex(content, r"(?s)^---\nname: game-exp\ndescription: .+?\n---")
         required_tools = {
+            "game_exp_project_preflight",
+            "game_exp_project_init",
             "game_exp_conformance_suite",
             "game_exp_conformance_start",
             "game_exp_conformance_result",
@@ -194,6 +196,30 @@ class GameExpSkillContractTests(unittest.TestCase):
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "notifications.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "public-contract.md").exists())
         self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "conformance.md").exists())
+        self.assertTrue((PLUGIN / "skills" / "game-exp" / "references" / "project-setup.md").exists())
+
+    def test_complete_project_setup_contract_is_fail_closed(self):
+        skill = SKILL.read_text(encoding="utf-8")
+        setup = (
+            PLUGIN / "skills" / "game-exp" / "references" / "project-setup.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "## Complete project setup",
+            "game_exp_project_preflight",
+            "game_exp_project_init",
+            "PROJECT_READY",
+            "Shared/streamable HTTP MCP must not",
+        ):
+            self.assertIn(phrase, skill)
+        for phrase in (
+            "PROJECT_READY",
+            "RULESETS_PLAN_UNSUPPORTED",
+            "Trusted Writer self-test",
+            "repo-level `game_exp_doctor` returns `PASS`",
+            "never change repository visibility without explicit user approval",
+            "There is no \"weak private Free\" compatibility mode",
+        ):
+            self.assertIn(phrase, setup)
 
     def test_conformance_contract_is_screening_only(self):
         skill = SKILL.read_text(encoding="utf-8")
