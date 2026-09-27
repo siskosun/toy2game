@@ -86,8 +86,10 @@ class GitHubBridgeTests(unittest.TestCase):
             "admin",
         )
 
+    @patch("github_bridge._claim_async_execution")
     @patch("github_bridge._dispatch_workflow")
-    def test_rehearse_routes_to_existing_trusted_workflow(self, dispatch):
+    def test_rehearse_routes_to_existing_trusted_workflow(self, dispatch, claim):
+        claim.return_value = {"status": "COMMITTED"}
         dispatch.return_value = {"status": "ACCEPTED"}
         result = github_bridge.execute_action(
             {
@@ -105,10 +107,44 @@ class GitHubBridgeTests(unittest.TestCase):
             workflow_source_sha="a" * 40,
         )
         self.assertEqual(result["status"], "ACCEPTED")
+        claim.assert_called_once()
+        self.assertEqual(claim.call_args.args[0]["request_id"], "req_bridge_rehearse_50")
         dispatch.assert_called_once_with(
             "owner/repo",
             "game-exp-rehearsal.yml",
             {"experiment_id": "EXP-50"},
+            request_id="req_bridge_rehearse_50",
+        )
+
+    @patch("github_bridge._claim_async_execution")
+    @patch("github_bridge._dispatch_workflow")
+    def test_archive_uses_same_claim_and_worker_contract(self, dispatch, claim):
+        claim.return_value = {"status": "COMMITTED"}
+        dispatch.return_value = {"status": "ACCEPTED"}
+        command = {
+            "schema_version": 1,
+            "request_id": "req_bridge_archive_50",
+            "action": "archive",
+            "experiment_id": "EXP-50",
+            "mode": "ATOMIC_DELETE",
+        }
+        result = github_bridge.execute_action(
+            command,
+            repo="owner/repo",
+            actor_login="alice",
+            comment_id="123",
+            ssh_key="/tmp/key",
+            run_id="456",
+            run_attempt="1",
+            workflow_source_sha="a" * 40,
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        claim.assert_called_once()
+        dispatch.assert_called_once_with(
+            "owner/repo",
+            "game-exp-archive.yml",
+            {"experiment_id": "EXP-50", "mode": "ATOMIC_DELETE"},
+            request_id="req_bridge_archive_50",
         )
 
     def test_marker_is_request_scoped(self):
