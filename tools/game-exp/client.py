@@ -2144,15 +2144,27 @@ class GameExpClient:
             }
         runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
         scope = manifest.get("scope") if isinstance(manifest.get("scope"), dict) else {}
+        branch_ref = row.get("branch_ref")
+        branch_head_sha = None
+        if isinstance(branch_ref, str) and branch_ref.startswith("refs/heads/"):
+            ref = self.transport.git_ref(branch_ref.removeprefix("refs/"))
+            obj = ref.get("object") if isinstance(ref, dict) else None
+            if isinstance(obj, dict) and isinstance(obj.get("sha"), str):
+                branch_head_sha = obj["sha"]
+        handoff_id = f"IMPLEMENT_EXPERIMENT:{experiment_id}:{snapshot_head}"
         return {
             "status": "PASS",
             "repo": self.transport.repo,
             "snapshot_head": snapshot_head,
             "experiment_id": experiment_id,
+            "handoff_schema_version": 2,
+            "handoff_id": handoff_id,
             "handoff_target": "godot-prototype-studio",
             "handoff_kind": "IMPLEMENT_EXPERIMENT",
             "source": {
-                "branch_ref": row.get("branch_ref"),
+                "ledger_snapshot": snapshot_head,
+                "branch_ref": branch_ref,
+                "branch_head_sha": branch_head_sha,
                 "parent_sha": row.get("parent_sha"),
                 "subject": row.get("subject"),
             },
@@ -2171,33 +2183,82 @@ class GameExpClient:
                 ),
             },
             "return_contract": {
+                "schema_version": 2,
                 "required": [
                     "source_sha",
+                    "build_identity",
                     "checks",
+                    "check_environment",
                     "playable_status",
+                    "evidence_scope",
+                    "artifacts",
                     "delivery_evidence_if_requested",
                 ],
-                "note_zh": "Godot Prototype Studio 负责实现、运行验证与所需试玩发布；game-exp 只接收结果证据并继续 Candidate/Review 生命周期。",
+                "build_identity": {
+                    "required": ["build_id", "source_sha", "producer", "created_from_handoff_id"],
+                    "created_from_handoff_id": handoff_id,
+                },
+                "checks": {
+                    "each_requires": [
+                        "name",
+                        "status",
+                        "source_sha",
+                        "environment",
+                    ]
+                },
+                "artifacts": {
+                    "each_requires": [
+                        "artifact_id",
+                        "kind",
+                        "location",
+                        "digest",
+                        "portable",
+                    ],
+                    "rule": "local-only paths must set portable=false; cross-Harness evidence should use a durable accessible location",
+                },
+                "evidence_scope": {
+                    "must_bind": [
+                        "experiment_id",
+                        "handoff_id",
+                        "source_sha",
+                        "build_id",
+                    ]
+                },
+                "note_zh": "Godot Prototype Studio 负责实现、运行验证与所需试玩发布；返回证据必须绑定源码、构建身份和可访问产物，game-exp 再继续 Candidate/Review 生命周期。",
             },
         }
 
-    def notification_feed(
-        self,
-        *,
-        viewer_login: str | None = None,
-        subject_id: str | None = None,
-        limit: int = 50,
-    ) -> dict[str, Any]:
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 200:
-            return {
-                "status": "REJECTED",
-                "repo": self.transport.repo,
-                "reason": "invalid_limit",
-            }
-        board = self.board(subject_id=subject_id)
-        if board.get("status") != "PASS":
-            return board
+    @staticmethod
+    def _encode_notification_cursor(value: dict[str, Any]) -> str:
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return "n1." + token
 
+    @staticmethod
+    def _decode_notification_cursor(token: str) -> dict[str, Any]:
+        if not isinstance(token, str) or not token.startswith("n1."):
+            raise ClientError("invalid notification cursor")
+        raw = token[3:]
+        raw += "=" * ((4 - len(raw) % 4) % 4)
+        try:
+            value = json.loads(base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8"))
+        except Exception as exc:
+            raise ClientError(f"invalid notification cursor: {exc}") from exc
+        if not isinstance(value, dict) or value.get("v") != 1:
+            raise ClientError("unsupported notification cursor")
+        return value
+
+    def _notification_rows(
+        self,
+        board: dict[str, Any],
+        *,
+        viewer_login: str | None,
+    ) -> list[dict[str, Any]]:
         items = board.get("experiments", [])
         by_subject: dict[str, list[dict[str, Any]]] = {}
         for item in items:
@@ -2205,18 +2266,18 @@ class GameExpClient:
             if isinstance(sid, str) and sid:
                 by_subject.setdefault(sid, []).append(item)
 
-        notifications: list[dict[str, Any]] = []
-        important_codes = {
-            "EXPERIMENT_CREATED",
-            "LIFECYCLE_REVIEW",
-            "CANDIDATE_READY",
-            "HUMAN_REVIEW_RECORDED",
-            "LIFECYCLE_PROMISING",
-            "LIFECYCLE_SELECTED",
-            "LIFECYCLE_REJECTED",
-            "INTEGRATED",
-            "ARCHIVED",
+        event_types = {
+            "EXPERIMENT_CREATED": "experiment.created",
+            "LIFECYCLE_REVIEW": "experiment.review_entered",
+            "CANDIDATE_READY": "candidate.ready",
+            "HUMAN_REVIEW_RECORDED": "review.recorded",
+            "LIFECYCLE_PROMISING": "experiment.promising",
+            "LIFECYCLE_SELECTED": "experiment.selected",
+            "LIFECYCLE_REJECTED": "experiment.rejected",
+            "INTEGRATED": "experiment.integrated",
+            "ARCHIVED": "experiment.archived",
         }
+        notifications: list[dict[str, Any]] = []
         for item in items:
             sid = item.get("subject_id")
             if not isinstance(sid, str):
@@ -2234,7 +2295,7 @@ class GameExpClient:
 
             for event in item.get("activity") or []:
                 code = event.get("code")
-                if code not in important_codes:
+                if code not in event_types:
                     continue
                 actor = event.get("actor_login")
                 targets = sorted(
@@ -2242,10 +2303,8 @@ class GameExpClient:
                     for login in participants
                     if not (isinstance(actor, str) and login == actor)
                 )
-                if isinstance(viewer_login, str) and viewer_login.strip():
-                    viewer = viewer_login.strip()
-                    if viewer not in targets:
-                        continue
+                if viewer_login is not None and viewer_login not in targets:
+                    continue
                 source_id = event.get("source_id")
                 event_id = (
                     f'{item.get("experiment_id")}:{code}:'
@@ -2254,6 +2313,8 @@ class GameExpClient:
                 notifications.append(
                     {
                         "event_id": event_id,
+                        "event_type": event_types[code],
+                        "event_version": 1,
                         "experiment_id": item.get("experiment_id"),
                         "subject_id": sid,
                         "subject_name": item.get("subject_name"),
@@ -2265,6 +2326,8 @@ class GameExpClient:
                         "actor_login": actor,
                         "initiator": item.get("initiator"),
                         "targets": targets,
+                        "source_snapshot": board.get("snapshot_head"),
+                        "_order": int(event.get("order") or 0),
                         "delivery": {
                             "mode": "external_adapter",
                             "dedupe_key": event_id,
@@ -2272,28 +2335,242 @@ class GameExpClient:
                     }
                 )
 
-        notifications.sort(
-            key=lambda row: (
-                str(row.get("occurred_at") or ""),
-                int(str(row.get("experiment_id") or "EXP-0").removeprefix("EXP-") or 0),
-                str(row.get("event_id") or ""),
-            ),
-            reverse=True,
+            for review in item.get("dependency_reviews") or []:
+                target_id = review.get("target_experiment_id")
+                event_id = (
+                    f'{item.get("experiment_id")}:DEPENDENCY_REVIEW_REQUIRED:{target_id}'
+                )
+                targets = sorted(participants)
+                if viewer_login is not None and viewer_login not in targets:
+                    continue
+                notifications.append(
+                    {
+                        "event_id": event_id,
+                        "event_type": "dependency.review_required",
+                        "event_version": 1,
+                        "experiment_id": item.get("experiment_id"),
+                        "subject_id": sid,
+                        "subject_name": item.get("subject_name"),
+                        "title": item.get("title"),
+                        "event_code": "DEPENDENCY_REVIEW_REQUIRED",
+                        "event_label_zh": "依赖需要复核",
+                        "detail_zh": review.get("reason_zh"),
+                        "occurred_at": None,
+                        "actor_login": None,
+                        "initiator": item.get("initiator"),
+                        "targets": targets,
+                        "source_snapshot": board.get("snapshot_head"),
+                        "dependency": review,
+                        "_order": 95,
+                        "delivery": {
+                            "mode": "external_adapter",
+                            "dedupe_key": event_id,
+                        },
+                    }
+                )
+        return notifications
+
+    @staticmethod
+    def _notification_sort_key(row: dict[str, Any]) -> tuple[str, int, int, str]:
+        experiment_id = str(row.get("experiment_id") or "EXP-0")
+        try:
+            experiment_number = int(experiment_id.removeprefix("EXP-"))
+        except ValueError:
+            experiment_number = 0
+        return (
+            str(row.get("occurred_at") or ""),
+            experiment_number,
+            int(row.get("_order") or 0),
+            str(row.get("event_id") or ""),
         )
-        notifications = notifications[:limit]
+
+    def notification_feed(
+        self,
+        *,
+        viewer_login: str | None = None,
+        subject_id: str | None = None,
+        limit: int = 50,
+        after: str | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 200:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "reason": "invalid_limit",
+            }
+        viewer = viewer_login.strip() if isinstance(viewer_login, str) and viewer_login.strip() else None
+        subject = subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None
+
+        if viewer is not None:
+            resolver = getattr(self.transport, "collaborator_permission", None)
+            permission = resolver(viewer) if callable(resolver) else None
+            if permission not in {"pull", "triage", "push", "write", "maintain", "admin"}:
+                return {
+                    "status": "REJECTED",
+                    "code": "NOTIFICATION_VIEWER_ACCESS_DENIED",
+                    "repo": self.transport.repo,
+                    "viewer_login": viewer,
+                }
+        else:
+            permission = None
+
+        offset = 0
+        after_snapshot = None
+        page_snapshot = None
+        if after is not None:
+            if cursor is not None:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_ARGUMENT_CONFLICT",
+                    "repo": self.transport.repo,
+                }
+            try:
+                checkpoint = self._decode_notification_cursor(after)
+            except ClientError as exc:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                    "error": str(exc),
+                }
+            if checkpoint.get("kind") != "checkpoint":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID_KIND",
+                    "repo": self.transport.repo,
+                }
+            if checkpoint.get("viewer_login") != viewer or checkpoint.get("subject_id") != subject:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_SCOPE_MISMATCH",
+                    "repo": self.transport.repo,
+                }
+            after_snapshot = checkpoint.get("snapshot")
+        elif cursor is not None:
+            try:
+                page = self._decode_notification_cursor(cursor)
+            except ClientError as exc:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                    "error": str(exc),
+                }
+            if page.get("kind") != "page":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID_KIND",
+                    "repo": self.transport.repo,
+                }
+            if page.get("viewer_login") != viewer or page.get("subject_id") != subject:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_SCOPE_MISMATCH",
+                    "repo": self.transport.repo,
+                }
+            page_snapshot = page.get("snapshot")
+            after_snapshot = page.get("after_snapshot")
+            offset = page.get("offset")
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                }
+
+        board = self.board(subject_id=subject, _snapshot_head=page_snapshot)
+        if board.get("status") != "PASS":
+            if page_snapshot is not None:
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_EXPIRED",
+                    "repo": self.transport.repo,
+                    "cursor_snapshot": page_snapshot,
+                }
+            return board
+        snapshot_head = board.get("snapshot_head")
+        rows = self._notification_rows(board, viewer_login=viewer)
+
+        if after_snapshot is not None:
+            if not isinstance(after_snapshot, str) or not re.fullmatch(r"[0-9a-f]{40}", after_snapshot):
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_INVALID",
+                    "repo": self.transport.repo,
+                }
+            old_board = self.board(subject_id=subject, _snapshot_head=after_snapshot)
+            if old_board.get("status") != "PASS":
+                return {
+                    "status": "REJECTED",
+                    "code": "CURSOR_EXPIRED",
+                    "repo": self.transport.repo,
+                    "cursor_snapshot": after_snapshot,
+                }
+            old_ids = {
+                row.get("event_id")
+                for row in self._notification_rows(old_board, viewer_login=viewer)
+            }
+            rows = [row for row in rows if row.get("event_id") not in old_ids]
+            rows.sort(key=self._notification_sort_key)
+        else:
+            rows.sort(key=self._notification_sort_key, reverse=True)
+
+        total_available = len(rows)
+        page_rows = rows[offset : offset + limit]
+        for row in page_rows:
+            row.pop("_order", None)
+
+        next_cursor = None
+        next_offset = offset + len(page_rows)
+        if next_offset < total_available:
+            next_cursor = self._encode_notification_cursor(
+                {
+                    "v": 1,
+                    "kind": "page",
+                    "snapshot": snapshot_head,
+                    "after_snapshot": after_snapshot,
+                    "offset": next_offset,
+                    "viewer_login": viewer,
+                    "subject_id": subject,
+                }
+            )
+        checkpoint_cursor = self._encode_notification_cursor(
+            {
+                "v": 1,
+                "kind": "checkpoint",
+                "snapshot": snapshot_head,
+                "viewer_login": viewer,
+                "subject_id": subject,
+            }
+        )
         return {
             "status": "PASS",
             "repo": self.transport.repo,
-            "snapshot_head": board.get("snapshot_head"),
-            "viewer_login": viewer_login.strip() if isinstance(viewer_login, str) and viewer_login.strip() else None,
-            "subject_id": subject_id.strip() if isinstance(subject_id, str) and subject_id.strip() else None,
-            "count": len(notifications),
-            "notifications": notifications,
+            "snapshot_head": snapshot_head,
+            "viewer_login": viewer,
+            "viewer_permission_snapshot": permission,
+            "viewer_permission_authoritative_for_future_delivery": False,
+            "subject_id": subject,
+            "count": len(page_rows),
+            "total_available": total_available,
+            "notifications": page_rows,
+            "next_cursor": next_cursor,
+            "checkpoint_cursor": checkpoint_cursor,
+            "checkpoint_ready": next_cursor is None,
             "delivery_contract": {
                 "source": "ledger-derived",
+                "event_schema_version": 1,
                 "dedupe_by": "event_id",
+                "pagination": "cursor",
+                "resume": "after checkpoint_cursor",
                 "game_exp_sends_messages": False,
-                "note_zh": "game-exp 生成可重放通知事件；ChatGPT、飞书、Slack、邮件等由外部适配器负责发送。",
+                "retention": {
+                    "mode": "protected-ledger-history",
+                    "expired_cursor": "CURSOR_EXPIRED",
+                },
+                "rebuild_rule": "events are deterministically rebuilt from one committed protected Ledger snapshot",
+                "note_zh": "外部适配器处理全部分页后再保存 checkpoint_cursor；下次用 after 续读。发送失败不改变实验状态。",
             },
         }
 
