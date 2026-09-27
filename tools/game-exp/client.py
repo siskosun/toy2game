@@ -2292,7 +2292,7 @@ class GameExpClient:
         if viewer is not None:
             resolver = getattr(self.transport, "collaborator_permission", None)
             permission = resolver(viewer) if callable(resolver) else None
-            if permission not in {"pull", "triage", "push", "write", "maintain", "admin"}:
+            if permission not in {"pull", "read", "triage", "push", "write", "maintain", "admin"}:
                 return {
                     "status": "REJECTED",
                     "code": "NOTIFICATION_VIEWER_ACCESS_DENIED",
