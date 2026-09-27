@@ -202,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
             result = client.access_check()
         elif args.command == "capabilities":
             result = client.capabilities()
+            result["interface"] = {
+                "type": "cli",
+                "transport": "local-process",
+                "write_identity": "local-gh-principal",
+            }
         elif args.command == "board":
             result = client.board(
                 query=args.query,
