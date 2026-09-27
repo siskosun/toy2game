@@ -316,7 +316,7 @@ def game_exp_archive_abort(
     experiment_id: str,
     archive_id: str,
     reason: str,
-    request_id: str | None = None,
+    request_id: str,
     actor_claim: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
@@ -331,28 +331,48 @@ def game_exp_archive_abort(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_operation_get(
+    request_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a trusted request or async execution using the exact same operation id."""
+    return _client(repo).operation_get(request_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_request_get(
     request_id: str,
     repo: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a request from authoritative Ledger/workflow evidence."""
-    return _client(repo).reconcile(request_id)
+    """Backward-compatible alias for game_exp_operation_get."""
+    return _client(repo).operation_get(request_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_operation_resume(
+    request_id: str,
+    repo: str | None = None,
+) -> dict[str, Any]:
+    """Resume only the already-claimed async operation with this exact operation id."""
+    return _client(repo).resume_execution(request_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_request_submit(
     operation: str,
     input: dict[str, Any],
+    request_id: str,
     preconditions: dict[str, Any] | None = None,
     actor_claim: str | None = None,
-    request_id: str | None = None,
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Submit one controlled operation request through the Trusted Writer.
 
     This tool submits an operation envelope only. It does not claim that the
     requested domain operation has been executed. Use game_exp_request_get to
-    resolve ACCEPTED/UNKNOWN requests against the authoritative Ledger.
+    resolve ACCEPTED/UNKNOWN requests against the authoritative Ledger. A stable
+    request_id is mandatory; authorization failures are not a signal to retry
+    through another interface.
     """
     return _client(repo).submit(
         operation=operation,
