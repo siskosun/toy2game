@@ -71,6 +71,14 @@ class ProtocolCoreTests(unittest.TestCase):
         )
         self.assertIn("candidate_build", ASYNC_EXECUTION_ACTIONS)
         self.assertIn("archive", ASYNC_EXECUTION_ACTIONS)
+        self.assertEqual(
+            descriptor["cancellation"]["generic_operation"],
+            "UNSUPPORTED",
+        )
+        self.assertEqual(
+            descriptor["cancellation"]["archive"],
+            "archive_abort_before_claim_only",
+        )
 
     def test_operation_envelope(self):
         payload = build_operation_payload(
