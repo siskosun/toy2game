@@ -188,7 +188,7 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.13.1`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.14.0`.
 
 ### Windows UTF-8 compatibility
 
@@ -342,6 +342,21 @@ python tools/game-exp/cli.py --repo owner/repo --json resume-operation req-123
 `resume-operation` only resumes an already committed execution claim. If the experiment state changed after the claim, it returns a conflict instead of dispatching against the new state.
 
 Authorization failure is not a transport failure and must not trigger an MCP -> CLI -> Bridge bypass attempt.
+
+## Complete project initialization
+
+v0.14 adds a hard `PROJECT_READY` gate for new repositories. Copying game-exp files is no longer considered setup completion.
+
+After bootstrap files are committed to `main`:
+
+```powershell
+python tools/game-exp/cli.py --repo owner/repo --json project-preflight
+python tools/game-exp/cli.py --repo owner/repo --json project-init
+```
+
+`project-init` completes Ledger initialization, Trusted Writer repository credentials, Immutable Releases, hardened Actions defaults, the four verified rulesets, Trusted Writer self-test, and a final repo-level Doctor. It succeeds only when Doctor is PASS.
+
+Private repositories whose GitHub plan does not support repository rulesets fail at preflight with `RULESETS_PLAN_UNSUPPORTED`; game-exp does not silently weaken the trust model or make a repository public.
 
 ## Harness conformance simulator
 
