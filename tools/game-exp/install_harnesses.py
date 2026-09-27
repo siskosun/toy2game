@@ -161,6 +161,30 @@ class HarnessInstaller:
     def mcp_script(self) -> pathlib.Path:
         return self.runtime_dir / "tools" / "game-exp" / "mcp_server.py"
 
+    def _preflight_configs(self) -> None:
+        codex = self.home / ".codex" / "config.toml"
+        if codex.exists():
+            try:
+                tomllib.loads(codex.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HarnessInstallError(f"invalid Codex TOML config {codex}: {exc}") from exc
+
+        for path in (
+            self.home / ".qoder" / "settings.json",
+            self.home / ".cursor" / "mcp.json",
+        ):
+            if not path.exists():
+                continue
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HarnessInstallError(f"invalid JSON config {path}: {exc}") from exc
+            if not isinstance(value, dict):
+                raise HarnessInstallError(f"JSON config must be an object: {path}")
+            servers = value.get("mcpServers")
+            if servers is not None and not isinstance(servers, dict):
+                raise HarnessInstallError(f"mcpServers must be an object: {path}")
+
     def _install_runtime(self) -> None:
         stage = self._stage_runtime()
         old_cwd = pathlib.Path.cwd()
@@ -253,6 +277,7 @@ class HarnessInstaller:
             raise HarnessInstallError(
                 "uv is required for the shared game-exp MCP command but was not found in PATH"
             )
+        self._preflight_configs()
 
         self._install_runtime()
         skills = self._install_skills()
