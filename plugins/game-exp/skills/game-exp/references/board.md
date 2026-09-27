@@ -203,3 +203,18 @@ The panel may show a compact `协作动态` entry backed by `game_exp_notificati
 Show only meaningful experiment events. Display subject/prototype, experiment id, trusted actor when known, event label, and title. Do not show delivery state as lifecycle state.
 
 For a new experiment under a subject where another collaborator has prior participation, surface the event prominently to that collaborator.
+
+
+## 依赖复核
+
+`depends_on` currently identifies a coarse experiment dependency; it does not state whether the downstream requires an integrated capability, an immutable source snapshot, or continued upstream development.
+
+When an active experiment depends on a REJECTED or ARCHIVED experiment:
+
+- add `DEPENDENCY_REVIEW_REQUIRED` to the downstream projection;
+- show the upstream lifecycle plus Integration id/final tag when available;
+- place it in `依赖需复核` only when no higher-priority blocker/human gate already owns the attention slot;
+- never auto-reject or auto-archive the downstream experiment;
+- keep `blocks_progress=false` until a more specific dependency predicate exists.
+
+An ARCHIVED upstream may be perfectly valid if its integrated capability or immutable final snapshot satisfies the downstream dependency. Lifecycle alone is insufficient to decide.
