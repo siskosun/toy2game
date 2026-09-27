@@ -53,6 +53,14 @@ class FakeClient:
             "recovery": {"operation_get": True, "resume_execution": True},
         }
 
+    def experiment_template(self):
+        return {
+            "status": "PASS",
+            "repo": "owner/repo",
+            "manifest_contract": {"current_schema_version": 2},
+            "project_policy": {"adapter": "node-npm"},
+        }
+
     def board(self, **kwargs):
         return {
             "focus_args": kwargs,
@@ -242,6 +250,7 @@ class MCPServerTests(unittest.TestCase):
                 "game_exp_status",
                 "game_exp_access_check",
                 "game_exp_capabilities",
+                "game_exp_experiment_template",
                 "game_exp_doctor",
                 "game_exp_experiment_get",
                 "game_exp_board",
@@ -455,6 +464,13 @@ class MCPServerTests(unittest.TestCase):
     def test_experiment_projection_delegates_to_client(self, _):
         result = mcp_server.game_exp_experiment_get("EXP-21", "owner/repo")
         self.assertEqual(result["state"]["lifecycle"], "REVIEW")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_experiment_template_delegates_to_current_repository(self, _):
+        result = mcp_server.game_exp_experiment_template("owner/repo")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["manifest_contract"]["current_schema_version"], 2)
+        self.assertEqual(result["project_policy"]["adapter"], "node-npm")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_board_projection_delegates_to_client(self, _):
