@@ -1,0 +1,219 @@
+name: package game-exp v0.13.0 delivery
+
+on:
+  push:
+    branches:
+      - package/game-exp-v0130
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build delivery bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="dist/game-exp-v0.13.0-team-install"
+          rm -rf dist
+          mkdir -p "$ROOT"
+
+          mkdir -p "$ROOT/.github/workflows"
+          cp .github/workflows/game-exp-*.yml "$ROOT/.github/workflows/"
+
+          mkdir -p "$ROOT/tools"
+          cp -R tools/game-exp "$ROOT/tools/"
+
+          mkdir -p "$ROOT/plugins"
+          cp -R plugins/game-exp "$ROOT/plugins/"
+
+          mkdir -p "$ROOT/.agents/plugins"
+          cp .agents/plugins/marketplace.json "$ROOT/.agents/plugins/marketplace.json"
+
+          mkdir -p "$ROOT/.codex"
+          cp .codex/config.toml "$ROOT/.codex/config.toml"
+
+          mkdir -p "$ROOT/.game-exp"
+          cp .game-exp/project-policy.json "$ROOT/.game-exp/project-policy.json"
+
+          cat > "$ROOT/VERSION.txt" <<'EOF'
+          game-exp 0.13.0
+          source_repository=siskosun/toy2game
+          source_commit=9c247e9e5601ed1a037965633ac59137b411fa42
+          EOF
+
+          cat > "$ROOT/README-安装说明.md" <<'EOF'
+          # game-exp v0.13.0 同事安装包
+
+          此包固定对应：
+          - 版本：0.13.0
+          - 仓库：siskosun/toy2game
+          - 提交：9c247e9e5601ed1a037965633ac59137b411fa42
+
+          ## 包里有什么
+
+          - tools/game-exp：CLI、MCP、Trusted Writer 客户端、Conformance Simulator、bootstrap
+          - .github/workflows/game-exp-*.yml：可信生命周期工作流
+          - plugins/game-exp：game-exp 插件与 Skill
+          - .agents/plugins/marketplace.json：本地插件市场配置
+          - .codex/config.toml：toy2game 当前 Codex/MCP 配置
+          - .game-exp/project-policy.json：当前项目验证策略
+          - INSTALL-WINDOWS.ps1：安装到另一个 Git 仓库的辅助脚本
+          - VERIFY-WINDOWS.ps1：安装后检查脚本
+
+          ## 场景 A：同事直接参与 siskosun/toy2game
+
+          推荐直接 clone/pull 仓库 main，而不是手工覆盖文件：
+
+          1. git clone 仓库，或在已有仓库执行 git pull。
+          2. 确认当前 main 至少包含上面的 source_commit。
+          3. 确认 GitHub 登录身份对仓库有需要的权限。
+          4. 在仓库根目录执行：
+
+             python tools/game-exp/cli.py --repo siskosun/toy2game --json access-check
+             python tools/game-exp/cli.py --repo siskosun/toy2game --json doctor
+
+          5. Codex 项目配置已在 .codex/config.toml；如宿主支持项目配置，进入仓库后即可加载。
+          6. 若需要手动启动 MCP：
+
+             uv run --with "mcp>=2,<3" python tools/game-exp/mcp_server.py
+
+          ## 场景 B：安装到另一个仓库
+
+          将本安装包解压到目标仓库之外，然后运行：
+
+          powershell -ExecutionPolicy Bypass -File .\INSTALL-WINDOWS.ps1 -TargetRepo "D:\path\to\target" -Repo "owner/name"
+
+          脚本内部调用：
+
+          python tools/game-exp/bootstrap.py plan ...
+          python tools/game-exp/bootstrap.py install ...
+
+          bootstrap 只复制/生成 game-exp 所需文件，不会创建 Trusted Writer 私钥、GitHub Secret、Ruleset 或仓库权限。
+
+          ## 必须由仓库管理员完成的部分
+
+          对需要“写入 protected Ledger / 完整生命周期”的新仓库，仍需管理员配置：
+
+          - Trusted Writer 使用的 GitHub 凭证/Deploy Key
+          - 对应 repository secret
+          - game-exp/ledger 与相关 protected refs 的 Ruleset / branch protection
+          - GitHub Actions 所需权限
+
+          普通成员不能靠本安装包绕过这些权限。
+
+          ## ChatGPT Skill
+
+          随消息另附 skill.zip。它只包含 Skill 指令层，不包含完整 CLI/MCP/Workflow 运行时。
+          需要完整 game-exp 时，请同时保留本安装包。
+
+          ## 验证
+
+          Windows：
+
+          powershell -ExecutionPolicy Bypass -File .\VERIFY-WINDOWS.ps1 -TargetRepo "D:\path\to\target" -Repo "owner/name"
+
+          或在目标仓库内手工执行：
+
+          python tools/game-exp/cli.py --repo owner/name --json capabilities
+          python tools/game-exp/cli.py --repo owner/name --json doctor
+
+          ## 安全说明
+
+          本包不包含：
+          - API Key
+          - GitHub Token
+          - Deploy Key 私钥
+          - 用户账号密码
+          - 飞书/Slack/邮箱凭证
+
+          game-exp 的权限仍以目标仓库的 GitHub 身份和 Trusted Writer 边界为准。
+          EOF
+
+          cat > "$ROOT/INSTALL-WINDOWS.ps1" <<'EOF'
+          param(
+            [Parameter(Mandatory=$true)][string]$TargetRepo,
+            [Parameter(Mandatory=$true)][string]$Repo
+          )
+
+          $ErrorActionPreference = "Stop"
+          $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+          $Bootstrap = Join-Path $Here "tools\game-exp\bootstrap.py"
+
+          if (-not (Test-Path $Bootstrap)) {
+            throw "bootstrap.py not found: $Bootstrap"
+          }
+          if (-not (Test-Path (Join-Path $TargetRepo ".git"))) {
+            throw "TargetRepo must be an existing Git working tree: $TargetRepo"
+          }
+
+          Write-Host "[1/3] Plan installation"
+          python $Bootstrap plan --target $TargetRepo --repo $Repo
+
+          Write-Host "[2/3] Install files"
+          python $Bootstrap install --target $TargetRepo --repo $Repo
+
+          Write-Host "[3/3] Local validation"
+          Push-Location $TargetRepo
+          try {
+            python tools/game-exp/cli.py --repo $Repo --json capabilities
+          } finally {
+            Pop-Location
+          }
+
+          Write-Host ""
+          Write-Host "Files installed."
+          Write-Host "Admin trust controls are NOT created by this script."
+          Write-Host "After repo secrets/rulesets are configured, run:"
+          Write-Host "  python tools/game-exp/cli.py --repo $Repo --json doctor"
+          EOF
+
+          cat > "$ROOT/VERIFY-WINDOWS.ps1" <<'EOF'
+          param(
+            [Parameter(Mandatory=$true)][string]$TargetRepo,
+            [Parameter(Mandatory=$true)][string]$Repo
+          )
+
+          $ErrorActionPreference = "Stop"
+          Push-Location $TargetRepo
+          try {
+            Write-Host "[1/3] Public contract"
+            python tools/game-exp/cli.py --repo $Repo --json capabilities
+
+            Write-Host "[2/3] Repository access"
+            python tools/game-exp/cli.py --repo $Repo --json access-check
+
+            Write-Host "[3/3] Trusted prerequisites"
+            python tools/game-exp/cli.py --repo $Repo --json doctor
+          } finally {
+            Pop-Location
+          }
+          EOF
+
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          root = Path("dist/game-exp-v0.13.0-team-install")
+          out = Path("dist/game-exp-v0.13.0-team-install.zip")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+              for p in sorted(root.rglob("*")):
+                  if p.is_file():
+                      zf.write(p, p.relative_to(root.parent))
+          PY
+
+          sha256sum dist/game-exp-v0.13.0-team-install.zip > dist/SHA256SUMS.txt
+
+      - name: Upload delivery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-exp-v0.13.0-delivery
+          path: |
+            dist/game-exp-v0.13.0-team-install.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
