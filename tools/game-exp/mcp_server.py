@@ -230,6 +230,22 @@ def game_exp_experiment_get(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+def game_exp_experiment_template(repo: str | None = None) -> dict[str, Any]:
+    """Return the current repository project policy and self-describing Manifest v2 blueprint.
+
+    Use this before creating the first experiment instead of searching another
+    repository or historical Ledger records for an example.
+    """
+    if _conformance_session_path() is not None:
+        return {
+            "status": "REJECTED",
+            "code": "EXPERIMENT_TEMPLATE_NOT_AVAILABLE_IN_CONFORMANCE",
+            "error": "experiment-template requires a real repository project policy",
+        }
+    return _client(repo).experiment_template()
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_board(
     repo: str | None = None,
     query: str | None = None,
