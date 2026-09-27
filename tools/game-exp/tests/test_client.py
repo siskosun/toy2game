@@ -226,6 +226,101 @@ class ClientTests(unittest.TestCase):
         }
         return request_id
 
+    def test_cross_machine_reconcile_discovers_writer_run_without_local_journal(self):
+        transport = FakeTransport()
+        transport.request_runs["req_cross_machine"] = [
+            {
+                "databaseId": 700,
+                "displayTitle": "game-exp:request:req_cross_machine:ignored",
+                "status": "in_progress",
+                "conclusion": None,
+                "url": "https://github.com/owner/repo/actions/runs/700",
+                "payloadDigest": "sha256:" + "1" * 64,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).reconcile("req_cross_machine")
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["operation_status"], "WRITER_RUNNING")
+        self.assertEqual(result["payload_digest"], "sha256:" + "1" * 64)
+
+    def test_same_cross_machine_request_does_not_dispatch_second_writer(self):
+        transport = FakeTransport()
+        payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.create",
+            "input": {"hypothesis": "same"},
+            "preconditions": {},
+        }
+        digest = digest_object(payload)
+        transport.request_runs["req_cross_same"] = [
+            {
+                "databaseId": 701,
+                "displayTitle": "game-exp request",
+                "status": "in_progress",
+                "conclusion": None,
+                "url": "https://github.com/owner/repo/actions/runs/701",
+                "payloadDigest": digest,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "same"},
+            request_id="req_cross_same",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_cross_machine_same_id_different_payload_conflicts_before_redispatch(self):
+        transport = FakeTransport()
+        first_payload = {
+            "kind": "operation_request",
+            "schema_version": 1,
+            "operation": "experiment.create",
+            "input": {"hypothesis": "first"},
+            "preconditions": {},
+        }
+        transport.request_runs["req_cross_conflict"] = [
+            {
+                "databaseId": 702,
+                "displayTitle": "game-exp request",
+                "status": "completed",
+                "conclusion": "failure",
+                "url": "https://github.com/owner/repo/actions/runs/702",
+                "payloadDigest": digest_object(first_payload),
+                "expectedHead": "a" * 40,
+            }
+        ]
+        result = GameExpClient(transport).submit(
+            operation="experiment.create",
+            input_value={"hypothesis": "different"},
+            request_id="req_cross_conflict",
+        )
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "REQUEST_ID_CONFLICT")
+        self.assertEqual(transport.dispatched, [])
+
+    def test_cross_machine_writer_run_preserves_original_head_conflict(self):
+        transport = FakeTransport()
+        transport.request_runs["req_cross_head"] = [
+            {
+                "databaseId": 703,
+                "displayTitle": "game-exp request",
+                "status": "completed",
+                "conclusion": "failure",
+                "url": "https://github.com/owner/repo/actions/runs/703",
+                "payloadDigest": "sha256:" + "2" * 64,
+                "expectedHead": "a" * 40,
+            }
+        ]
+        transport.logs = '{"status":"HEAD_CONFLICT"}'
+        result = GameExpClient(transport).reconcile("req_cross_head")
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["conflict_type"], "HEAD_CONFLICT")
+        self.assertEqual(result["expected_head"], "a" * 40)
+
     def test_submit_then_reconcile_committed(self):
         transport = FakeTransport()
         client = GameExpClient(transport)
