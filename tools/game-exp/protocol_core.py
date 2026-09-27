@@ -54,6 +54,10 @@ def contract_descriptor() -> dict[str, Any]:
             "accepted_or_unknown": "QUERY_SAME_REQUEST_ID",
             "authorization_failure": "DO_NOT_FALLBACK_RETRY",
         },
+        "cancellation": {
+            "generic_operation": "UNSUPPORTED",
+            "archive": "archive_abort_before_claim_only",
+        },
     }
 
 
