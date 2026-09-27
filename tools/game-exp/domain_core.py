@@ -2138,24 +2138,10 @@ def _plan_execution_claim(
             f"{action} is not allowed in lifecycle {lifecycle!r}",
             code="DOMAIN_EXECUTION_CONFLICT",
         )
-    execution_record = {
-        "kind": "execution_claim",
-        "request_id": request_id,
-        "experiment_id": experiment_id,
-        "action": action,
-        "arguments": arguments,
-        "state_digest": state_digest,
-        "actor": {
-            "login": trusted_actor.login,
-            "user_id": trusted_actor.user_id,
-            "permission_at_claim": trusted_actor.permission,
-        },
-        "phase": "CLAIMED",
-    }
     return DomainPlan(
-        status="APPLIED",
+        status="REQUEST_ONLY",
         experiment_id=experiment_id,
-        writes={f"executions/{request_id}.json": execution_record},
+        writes={},
     )
 
 
