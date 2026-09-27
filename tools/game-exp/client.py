@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import subprocess
@@ -690,6 +691,23 @@ class GitHubTransport:
             "admin_coverage": admin_coverage,
             "reason": None,
         }
+
+    def collaborator_permission(self, login: str) -> str | None:
+        if not isinstance(login, str) or not login.strip():
+            return None
+        proc = _run(
+            [
+                "gh",
+                "api",
+                f"repos/{self.repo}/collaborators/{login.strip()}/permission",
+            ],
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        value = _json_output(proc)
+        permission = value.get("permission") if isinstance(value, dict) else None
+        return permission if isinstance(permission, str) else None
 
     def branch_contributors(self, ref: str) -> dict[str, Any]:
         proc = _run(
@@ -1546,10 +1564,16 @@ class GameExpClient:
         subject_id: str | None = None,
         lifecycle: str | None = None,
         attention_only: bool = False,
+        _snapshot_head: str | None = None,
     ) -> dict[str, Any]:
         requested_lifecycle = lifecycle
         try:
-            snapshot_head = self.transport.ledger_head()
+            if _snapshot_head is not None:
+                if not re.fullmatch(r"[0-9a-f]{40}", _snapshot_head):
+                    raise ClientError("Board snapshot head must be a 40-character SHA")
+                snapshot_head = _snapshot_head
+            else:
+                snapshot_head = self.transport.ledger_head()
             paths = self.transport.ledger_paths(snapshot_head)
         except ClientError as exc:
             return {
@@ -1764,6 +1788,57 @@ class GameExpClient:
                         }
                     )
             item["relationships_outgoing"] = normalized_outgoing
+
+        for item in items:
+            dependency_reviews: list[dict[str, Any]] = []
+            if item.get("lifecycle") not in {"ARCHIVED", "REJECTED"}:
+                for edge in item.get("relationships_outgoing") or []:
+                    if edge.get("type") != "depends_on":
+                        continue
+                    target = by_id.get(edge.get("target_experiment_id"))
+                    if not isinstance(target, dict):
+                        continue
+                    target_lifecycle = target.get("lifecycle")
+                    if target_lifecycle not in {"REJECTED", "ARCHIVED"}:
+                        continue
+                    reason = (
+                        "UPSTREAM_REJECTED"
+                        if target_lifecycle == "REJECTED"
+                        else "UPSTREAM_ARCHIVED"
+                    )
+                    dependency_reviews.append(
+                        {
+                            "code": "DEPENDENCY_REVIEW_REQUIRED",
+                            "reason": reason,
+                            "target_experiment_id": target.get("experiment_id"),
+                            "target_title": target.get("title"),
+                            "target_lifecycle": target_lifecycle,
+                            "target_lifecycle_zh": target.get("display", {}).get("lifecycle"),
+                            "target_integration_id": target.get("integration_id"),
+                            "target_final_tag_ref": target.get("final_tag_ref"),
+                            "blocks_progress": False,
+                            "reason_zh": (
+                                "依赖实验已拒绝，需要确认当前实验是否仍成立"
+                                if target_lifecycle == "REJECTED"
+                                else "依赖实验已归档，需要确认依赖的是已集成能力、不可变快照还是持续开发"
+                            ),
+                        }
+                    )
+            item["dependency_reviews"] = dependency_reviews
+            if dependency_reviews and not item.get("attention", {}).get("required"):
+                item["attention"] = {
+                    "required": True,
+                    "priority": 6,
+                    "reason": "DEPENDENCY_REVIEW_REQUIRED",
+                    "reason_zh": "实验依赖需要复核",
+                    "section": "DEPENDENCY_REVIEW",
+                    "section_zh": "依赖需复核",
+                    "action_zh": "确认依赖语义后继续；不会自动淘汰当前实验",
+                }
+                item["display"]["attention_section"] = "依赖需复核"
+                item["display"]["attention_reason"] = "实验依赖需要复核"
+                item["display"]["attention_action"] = "确认依赖语义后继续；不会自动淘汰当前实验"
+
         attention_ids = [
             item["experiment_id"]
             for item in sorted(
@@ -1785,6 +1860,7 @@ class GameExpClient:
             ("REVIEW", "需要你评审"),
             ("DECISION", "需要你决策"),
             ("ARCHIVE_CHOICE", "需要选择归档方式"),
+            ("DEPENDENCY_REVIEW", "依赖需复核"),
         ]
         attention_sections: list[dict[str, Any]] = []
         for section_code, section_zh in attention_section_order:
