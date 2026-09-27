@@ -35,6 +35,7 @@ jobs:
     outputs:
       primary: ${{ steps.guard.outputs.primary }}
       primary_run_id: ${{ steps.guard.outputs.primary_run_id }}
+      actor_login: ${{ steps.guard.outputs.actor_login }}
     steps:
       - name: Checkout request-id guard
         uses: actions/checkout@v6
@@ -60,6 +61,8 @@ jobs:
             --action "integrate_finalize" \
             --request-id "${{ inputs.request_id }}" \
             --run-id "${{ github.run_id }}" \
+            --experiment-id "${{ inputs.experiment_id }}" \
+            --argument "pr_number=${{ inputs.pr_number }}" \
             --github-output "$GITHUB_OUTPUT"
 
   finalize:
