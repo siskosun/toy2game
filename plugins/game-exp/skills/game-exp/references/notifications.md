@@ -26,7 +26,7 @@ Contributor identity remains collaboration metadata only and never grants lifecy
 
 ## Access
 
-When `viewer_login` is supplied, game-exp checks that viewer currently has repository collaboration access before returning the personalized feed. This is a read-time access check, not durable future authority.
+When `viewer_login` is supplied, game-exp checks that viewer currently has repository collaboration access before returning the personalized feed. Independently, every generated target is filtered against current repository collaborator permission, including aggregate feeds without a viewer. This is a read-time access check, not durable future authority.
 
 External adapters must also enforce the destination system's own authorization. A stale cached permission must not be treated as permission to deliver forever.
 
