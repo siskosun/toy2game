@@ -276,193 +276,59 @@ class GitHubTransport:
         )
         return matches[0]
 
-    def dispatch_initializer(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-source-initializer.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_initializer(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="initialize",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "source initializer dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "source initializer dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_candidate(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-candidate.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_candidate(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="candidate_build",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "candidate dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "candidate dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_rehearsal(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-rehearsal.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_rehearsal(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="rehearse",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "rehearsal dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "rehearsal dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_integration(self, experiment_id: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-integration.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_integration(self, experiment_id: str, request_id: str) -> str:
+        return self.dispatch_execution(
+            action="integrate",
+            experiment_id=experiment_id,
+            request_id=request_id,
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "integration proposal dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "integration proposal dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_integration_finalize(self, experiment_id: str, pr_number: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        if not re.fullmatch(r"[1-9][0-9]*", str(pr_number)):
-            raise ClientError("pr_number must be a positive integer")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-integration-finalize.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-                "-f",
-                f"pr_number={pr_number}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_integration_finalize(
+        self,
+        experiment_id: str,
+        pr_number: str,
+        request_id: str,
+    ) -> str:
+        return self.dispatch_execution(
+            action="integrate_finalize",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"pr_number": str(pr_number)},
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "integration finalize dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "integration finalize dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
-    def dispatch_archive(self, experiment_id: str, mode: str) -> str:
-        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
-            raise ClientError("experiment_id must be EXP-<positive integer>")
-        if mode not in {"ATOMIC_DELETE", "RETAIN_BRANCH"}:
-            raise ClientError("archive mode must be ATOMIC_DELETE or RETAIN_BRANCH")
-        proc = _run(
-            [
-                "gh",
-                "workflow",
-                "run",
-                "game-exp-archive.yml",
-                "--repo",
-                self.repo,
-                "--ref",
-                "main",
-                "-f",
-                f"experiment_id={experiment_id}",
-                "-f",
-                f"mode={mode}",
-            ],
-            check=False,
-            timeout=30,
+    def dispatch_archive(
+        self,
+        experiment_id: str,
+        mode: str,
+        request_id: str,
+    ) -> str:
+        return self.dispatch_execution(
+            action="archive",
+            experiment_id=experiment_id,
+            request_id=request_id,
+            arguments={"mode": mode},
         )
-        if proc.returncode != 0:
-            raise TransportUncertainError(
-                "archive dispatch did not produce a provable result"
-            )
-        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-        if not RUN_URL_RE.search(url):
-            raise TransportUncertainError(
-                "archive dispatch returned no run URL; outcome is uncertain"
-            )
-        return url
 
     def ledger_json(
         self,
