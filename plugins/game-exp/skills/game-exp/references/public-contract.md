@@ -23,6 +23,35 @@ A client may tolerate new result fields within the same major version. Mutating 
 
 Use `game_exp_capabilities` or `game-exp capabilities` to inspect business features and contract version. Repository access returned there is only a current snapshot for UX; every write is re-authorized at the trusted boundary.
 
+## Self-describing Manifest contract
+
+A new Harness must be able to create the first experiment without reading another repository or historical Ledger examples.
+
+Use `game_exp_experiment_template` or CLI `experiment-template` to read:
+
+- the current repository's `.game-exp/project-policy.json`;
+- the recommended Manifest schema version;
+- the runtime shape derived from that project policy;
+- the default human review protocol;
+- which fields are user-owned versus resolved by the Agent.
+
+Manifest schema v2 is recommended. Its runtime block is generic and repository-policy based:
+
+```json
+{
+  "runtime": {
+    "adapter": "node-npm",
+    "policy_path": ".game-exp/project-policy.json"
+  }
+}
+```
+
+The adapter value comes from the current repository project policy. Future project-policy adapters can reuse the same Manifest v2 runtime shape.
+
+Manifest schema v1 remains accepted for existing experiments and uses the legacy Godot-specific runtime object. New experiments should not emit Godot placeholder fields for non-Godot repositories.
+
+The example Manifest returned by `experiment-template` contains unresolved placeholders and is explicitly non-bindable. The Agent must resolve the real Issue identity, parent SHA, stable operation id, scope, subject and timestamp before Bind.
+
 ## Stable operation identity
 
 Every logical mutation has one stable `request_id` / operation id.
