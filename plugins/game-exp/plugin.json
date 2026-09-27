@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.13.1",
-  "description": "Harness-neutral trusted game experiment workflow with cross-interface recovery, conformance simulation, resumable collaboration notifications, portable Godot handoff evidence, and protected human gates.",
+  "version": "0.14.0",
+  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",
@@ -16,8 +16,8 @@
     "com.openai": {
       "interface": {
         "displayName": "game-exp",
-        "shortDescription": "跨Harness恢复 + 行为仿真 + 多人通知",
-        "longDescription": "Manage protected-Ledger game experiments through a versioned MCP/CLI/GitHub-Bridge contract with stable operation ids, trusted execution claims, Harness conformance screening, human gates, resumable notifications, portable implementation handoffs, Rehearsal, Integration, and recoverable Archive.",
+        "shortDescription": "完整项目初始化 + 跨Harness恢复 + 行为仿真",
+        "longDescription": "Create PROJECT_READY repositories with Ledger initialization, Trusted Writer configuration, Immutable Releases, verified Rulesets, self-test and Doctor PASS, then manage experiments through the versioned MCP/CLI/GitHub-Bridge contract.",
         "developerName": "toy2game",
         "category": "Productivity",
         "capabilities": [
@@ -25,9 +25,9 @@
           "Write"
         ],
         "defaultPrompt": [
+          "用 game-exp 建立一个完整可用的新项目。",
           "打开 game-exp 面板，优先显示需要我处理的实验。",
-          "运行 game-exp Harness 行为一致性测试。",
-          "打开当前实验详情，显示中文活动时间线和实验关系。"
+          "运行 game-exp Harness 行为一致性测试。"
         ]
       }
     }
