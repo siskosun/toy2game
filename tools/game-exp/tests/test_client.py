@@ -1366,6 +1366,11 @@ class ClientTests(unittest.TestCase):
         result = GameExpClient(FakeTransport()).capabilities()
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["contract"]["version"], "1.0")
+        self.assertEqual(result["contract"]["manifest_schema_versions"], [1, 2])
+        self.assertEqual(result["contract"]["recommended_manifest_schema_version"], 2)
+        self.assertTrue(result["features"]["self_describing_manifest"])
+        self.assertTrue(result["features"]["manifest_schema_v2"])
+        self.assertIn("experiment_template", result["queries"])
         self.assertTrue(result["recovery"]["cross_interface"])
         self.assertFalse(result["access_snapshot_authoritative_for_execution"])
 
