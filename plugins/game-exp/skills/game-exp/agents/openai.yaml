@@ -1,3 +1,5 @@
 interface:
   display_name: "game-exp"
   short_description: "跨 Harness 操作恢复、行为仿真、多人通知与 Godot 交接"
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
