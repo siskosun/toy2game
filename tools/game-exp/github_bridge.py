@@ -408,7 +408,6 @@ def _claim_async_execution(
         for key in ("pr_number", "mode")
         if key in command
     }
-    actor_claim = f"github-issue-comment:{actor_login}:{comment_id}"
     payload = build_operation_payload(
         "execution.claim",
         {
@@ -417,7 +416,6 @@ def _claim_async_execution(
             "arguments": arguments,
             "state_digest": digest_object(state),
         },
-        actor_claim=actor_claim,
     )
     result = submit_writer(
         repo,
