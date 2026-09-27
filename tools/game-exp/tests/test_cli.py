@@ -167,13 +167,17 @@ class CLIRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             files = []
             scenarios = [
-                ("lost-response-recovery", ["get-operation", "req-archive-42"]),
-                ("authorization-no-fallback", ["get-operation", "req-promote-42"]),
-                ("review-bound-to-candidate", ["experiment", "EXP-42"]),
-                ("dependency-review-required", ["experiment", "EXP-86"]),
-                ("human-gate-preserved", ["experiment", "EXP-42"]),
+                ("lost-response-recovery", ["get-operation", "req-archive-42"], 0),
+                (
+                    "authorization-no-fallback",
+                    ["get-operation", "req-promote-42"],
+                    1,
+                ),
+                ("review-bound-to-candidate", ["experiment", "EXP-42"], 0),
+                ("dependency-review-required", ["experiment", "EXP-86"], 0),
+                ("human-gate-preserved", ["experiment", "EXP-42"], 0),
             ]
-            for scenario_id, command in scenarios:
+            for scenario_id, command, expected_code in scenarios:
                 path = Path(td) / f"{scenario_id}.json"
                 files.append(path)
                 with patch("cli._print_result"):
@@ -196,7 +200,7 @@ class CLIRoutingTests(unittest.TestCase):
                                 *command,
                             ]
                         ),
-                        0,
+                        expected_code,
                     )
 
             stale = Path(td) / "stale.json"
