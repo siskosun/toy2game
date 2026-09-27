@@ -3848,6 +3848,51 @@ class GameExpClient:
             }
         return self.resume_execution(rid)
 
+    def abandon(
+        self,
+        experiment_id: str,
+        reason: str,
+        *,
+        request_id: str | None = None,
+        actor_claim: str | None = None,
+    ) -> dict[str, Any]:
+        if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "experiment_id must be EXP-<positive integer>",
+            }
+        if not isinstance(reason, str) or not reason.strip():
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "abandon reason is required",
+            }
+        projection = self.experiment_get(experiment_id)
+        if projection.get("status") != "PASS":
+            return projection
+        state = projection.get("state")
+        if not isinstance(state, dict):
+            return {
+                "status": "UNKNOWN",
+                "repo": self.transport.repo,
+                "experiment_id": experiment_id,
+                "error": "authoritative experiment state is unavailable",
+            }
+        return self.submit(
+            operation="experiment.decision",
+            input_value={
+                "experiment_id": experiment_id,
+                "to_state": "ABANDONED",
+                "previous_decision_id": state.get("last_decision_id"),
+                "reason": reason.strip(),
+            },
+            actor_claim=actor_claim,
+            request_id=request_id,
+        )
+
     def candidate(
         self,
         experiment_id: str,
