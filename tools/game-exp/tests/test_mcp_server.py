@@ -316,9 +316,20 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(access["can_create_experiment"])
         self.assertEqual(access["access"]["status"], "WRITE")
         self.assertEqual(capabilities["contract"]["version"], "1.0")
+        self.assertEqual(capabilities["interface"]["transport"], "stdio")
+        self.assertEqual(capabilities["interface"]["write_identity"], "local-gh-principal")
         self.assertEqual(doctor["status"], "PASS")
         self.assertEqual(request["status"], "COMMITTED")
         self.assertEqual(operation["status"], "COMMITTED")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_operation_resume_delegates_same_id(self, _):
+        result = mcp_server.game_exp_operation_resume(
+            "req_exec_21",
+            repo="owner/repo",
+        )
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["request_id"], "req_exec_21")
 
     @patch("mcp_server._client", return_value=FakeClient())
     def test_experiment_projection_delegates_to_client(self, _):
@@ -495,6 +506,37 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "ACCEPTED")
         self.assertEqual(result["operation"], "experiment.create")
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_streamable_http_writes_fail_closed_without_bound_identity(self, _):
+        env = {"GAME_EXP_MCP_TRANSPORT": "streamable-http"}
+        with patch.dict(mcp_server.os.environ, env, clear=True):
+            result = mcp_server.game_exp_candidate_build(
+                "EXP-21",
+                "req_candidate_http",
+                repo="owner/repo",
+            )
+            capabilities = mcp_server.game_exp_capabilities("owner/repo")
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["code"], "MCP_HTTP_WRITE_IDENTITY_UNBOUND")
+        self.assertEqual(
+            capabilities["interface"]["write_identity"],
+            "unbound-read-only",
+        )
+
+    @patch("mcp_server._client", return_value=FakeClient())
+    def test_streamable_http_single_principal_can_use_trusted_write_path(self, _):
+        env = {
+            "GAME_EXP_MCP_TRANSPORT": "streamable-http",
+            "GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL": "1",
+        }
+        with patch.dict(mcp_server.os.environ, env, clear=True):
+            result = mcp_server.game_exp_candidate_build(
+                "EXP-21",
+                "req_candidate_http",
+                repo="owner/repo",
+            )
+        self.assertEqual(result["status"], "ACCEPTED")
 
     def test_server_run_defaults_to_stdio(self):
         with patch.dict(mcp_server.os.environ, {}, clear=True):
