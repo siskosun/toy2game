@@ -22,6 +22,7 @@ Additional paths:
 |---|---|---|
 | Inspect repo/Ledger | `game_exp_status` | Read-only |
 | Inspect public contract/features | `game_exp_capabilities` | Read-only; access snapshot is not execution authority |
+| Build repository-local Manifest blueprint | `game_exp_experiment_template` | Read-only; use before first Bind instead of copying another repository's Manifest |
 | Open experiment Board / panel | `game_exp_board` | Read-only consistent Ledger snapshot |
 | Collaboration notification feed | `game_exp_notifications` | Read-only, replayable, external delivery adapters dedupe by event_id |
 | Build implementation brief | `game_exp_prototype_handoff` | Read-only handoff to Godot Prototype Studio; no lifecycle mutation |
