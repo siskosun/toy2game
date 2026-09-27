@@ -10,6 +10,7 @@ from client import ClientError, GameExpClient, GitHubTransport
 from conformance_core import (
     ConformanceClient,
     aggregate as conformance_aggregate,
+    compare_reports as conformance_compare_reports,
     evaluate as conformance_evaluate,
     load_session as conformance_load_session,
     save_session as conformance_save_session,
@@ -123,6 +124,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         dest="session_files",
     )
+
+    conformance_compare = sub.add_parser(
+        "conformance-compare",
+        help="compare candidate screening against an incumbent report",
+    )
+    conformance_compare.add_argument("--baseline-report", required=True)
+    conformance_compare.add_argument("--candidate-report", required=True)
 
     board = sub.add_parser("board", help="show one consistent experiment Board snapshot")
     board.add_argument("--query")
@@ -291,6 +299,17 @@ def main(argv: list[str] | None = None) -> int:
                     conformance_save_session(session_file, session)
                     results.append(evaluated)
             result = conformance_aggregate(results)
+            _print_result(result, as_json=args.json)
+            return 0 if result.get("status") == "PASS" else 1
+
+        if args.command == "conformance-compare":
+            baseline = json.loads(
+                Path(args.baseline_report).read_text(encoding="utf-8")
+            )
+            candidate = json.loads(
+                Path(args.candidate_report).read_text(encoding="utf-8")
+            )
+            result = conformance_compare_reports(baseline, candidate)
             _print_result(result, as_json=args.json)
             return 0 if result.get("status") == "PASS" else 1
 
