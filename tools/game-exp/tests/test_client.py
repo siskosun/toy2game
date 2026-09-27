@@ -728,6 +728,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["statistics"]["total"], 2)
         self.assertEqual(result["statistics"]["active"], 1)
         self.assertEqual(result["statistics"]["archived"], 1)
+        self.assertEqual(result["statistics"]["abandoned"], 0)
         self.assertEqual(result["statistics"]["attention"], 1)
         self.assertEqual(result["statistics"]["abnormal_health"], 0)
         self.assertEqual(
@@ -756,6 +757,7 @@ class ClientTests(unittest.TestCase):
             {
                 "attention_ids": ["EXP-7"],
                 "active_ids": ["EXP-7"],
+                "abandoned_ids": [],
                 "archived_count": 1,
             },
         )
@@ -1084,6 +1086,88 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(row["attention"]["reason"], "HEALTH_FAIL")
         self.assertEqual(result["views"]["attention"]["experiment_ids"], ["EXP-19"])
         self.assertEqual(result["counts_by_health"], {"FAIL": 1})
+
+    def test_abandon_submits_direct_terminal_decision_without_review(self):
+        transport = FakeTransport()
+        client = GameExpClient(transport)
+        with (
+            patch.object(
+                client,
+                "experiment_get",
+                return_value={
+                    "status": "PASS",
+                    "state": {"lifecycle": "ACTIVE", "last_decision_id": "req_prev"},
+                },
+            ),
+            patch.object(
+                client,
+                "submit",
+                return_value={"status": "ACCEPTED"},
+            ) as submit,
+        ):
+            result = client.abandon(
+                "EXP-21",
+                "product priority changed",
+                request_id="req_abandon_21",
+                actor_claim="alice",
+            )
+        self.assertEqual(result["status"], "ACCEPTED")
+        submit.assert_called_once_with(
+            operation="experiment.decision",
+            input_value={
+                "experiment_id": "EXP-21",
+                "to_state": "ABANDONED",
+                "previous_decision_id": "req_prev",
+                "reason": "product priority changed",
+            },
+            actor_claim="alice",
+            request_id="req_abandon_21",
+        )
+
+    def test_board_excludes_abandoned_from_active_and_marks_archive_next(self):
+        transport = FakeTransport()
+        manifest = {
+            "title": "Stopped prototype",
+            "subject": {
+                "type": "game-prototype",
+                "id": "stopped-proto",
+                "name": "Stopped Proto",
+                "root_path": "games/stopped",
+            },
+            "hypothesis": "test",
+            "success_criteria": ["works"],
+            "kill_criteria": ["fails"],
+            "experiment": {"issue_number": "31"},
+            "scope": {"allowed": ["games/stopped/**"]},
+            "created_at": "2026-09-27T00:00:00Z",
+        }
+        transport._ledger_paths = [
+            "experiments/EXP-31/state.json",
+            "experiments/EXP-31/manifest.json",
+            "experiments/EXP-31/binding.json",
+        ]
+        transport._ledger_json["experiments/EXP-31/state.json"] = {
+            "experiment_id": "EXP-31",
+            "lifecycle": "ABANDONED",
+            "archive_lock": None,
+            "last_decision_id": "req_abandon_31",
+        }
+        transport._ledger_json["experiments/EXP-31/manifest.json"] = manifest
+        self._add_valid_board_binding(transport, "EXP-31", manifest)
+
+        result = client = GameExpClient(transport).board()
+        self.assertEqual(result["status"], "PASS")
+        row = result["experiments"][0]
+        self.assertEqual(row["lifecycle"], "ABANDONED")
+        self.assertEqual(row["display"]["lifecycle"], "已终止")
+        self.assertEqual(row["next_gate"], "ARCHIVE")
+        self.assertEqual(result["views"]["overview"]["active_ids"], [])
+        self.assertEqual(result["views"]["overview"]["abandoned_ids"], ["EXP-31"])
+        self.assertEqual(result["statistics"]["abandoned"], 1)
+        self.assertEqual(
+            result["views"]["prototypes"]["groups"][0]["abandoned_count"],
+            1,
+        )
 
     def test_async_wrappers_route_through_stable_execution_contract(self):
         client = GameExpClient(FakeTransport())
