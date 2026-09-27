@@ -1008,6 +1008,91 @@ class GameExpClient:
         self._write_journal(result)
         return result
 
+    def bind(
+        self,
+        manifest: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        manifest_request_id = manifest.get("operation_id")
+        if not isinstance(manifest_request_id, str) or not manifest_request_id:
+            return {
+                "status": "REJECTED",
+                "repo": self.transport.repo,
+                "error": "manifest.operation_id is required",
+            }
+        if request_id is not None and request_id != manifest_request_id:
+            return {
+                "status": "CONFLICT",
+                "conflict_type": "REQUEST_ID_MANIFEST_MISMATCH",
+                "repo": self.transport.repo,
+                "request_id": request_id,
+                "manifest_operation_id": manifest_request_id,
+            }
+        return self.submit(
+            operation="experiment.bind",
+            input_value={"manifest": manifest},
+            request_id=manifest_request_id,
+        )
+
+    def review_record(
+        self,
+        experiment_id: str,
+        *,
+        outcome: str,
+        notes: str,
+        request_id: str,
+        candidate_id: str | None = None,
+    ) -> dict[str, Any]:
+        if candidate_id is None:
+            projection = self.experiment_get(experiment_id)
+            if projection.get("status") != "PASS":
+                return projection
+            candidate_id = projection.get("state", {}).get("current_candidate_id")
+            if not isinstance(candidate_id, str) or not candidate_id:
+                return {
+                    "status": "REJECTED",
+                    "repo": self.transport.repo,
+                    "experiment_id": experiment_id,
+                    "request_id": request_id,
+                    "error": "experiment has no current Candidate",
+                }
+        return self.submit(
+            operation="review.record",
+            input_value={
+                "experiment_id": experiment_id,
+                "candidate_id": candidate_id,
+                "outcome": outcome,
+                "notes": notes,
+            },
+            request_id=request_id,
+        )
+
+    def decision_submit(
+        self,
+        experiment_id: str,
+        *,
+        to_state: str,
+        reason: str,
+        request_id: str,
+        previous_decision_id: str | None = None,
+    ) -> dict[str, Any]:
+        if previous_decision_id is None:
+            projection = self.experiment_get(experiment_id)
+            if projection.get("status") != "PASS":
+                return projection
+            previous_decision_id = projection.get("state", {}).get("last_decision_id")
+        return self.submit(
+            operation="experiment.decision",
+            input_value={
+                "experiment_id": experiment_id,
+                "to_state": to_state,
+                "previous_decision_id": previous_decision_id,
+                "reason": reason,
+            },
+            request_id=request_id,
+        )
+
     def experiment_get(self, experiment_id: str) -> dict[str, Any]:
         if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
             return {
@@ -3350,7 +3435,6 @@ class GameExpClient:
                 "archive_id": archive_id,
                 "reason": reason,
             },
-            actor_claim=actor_claim,
             request_id=request_id,
         )
 
