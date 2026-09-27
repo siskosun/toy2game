@@ -16,6 +16,36 @@ def _client(repo: str | None = None) -> GameExpClient:
     return GameExpClient(GitHubTransport(target))
 
 
+def _mcp_transport() -> str:
+    return os.environ.get("GAME_EXP_MCP_TRANSPORT", "stdio").strip().lower() or "stdio"
+
+
+def _http_single_principal_write_enabled() -> bool:
+    return os.environ.get(
+        "GAME_EXP_MCP_TRUSTED_SINGLE_PRINCIPAL",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
+def _write_identity_rejection(repo: str | None) -> dict[str, Any] | None:
+    if _mcp_transport() != "streamable-http":
+        return None
+    if _http_single_principal_write_enabled():
+        return None
+    client = _client(repo)
+    return {
+        "status": "REJECTED",
+        "code": "MCP_HTTP_WRITE_IDENTITY_UNBOUND",
+        "repo": client.transport.repo,
+        "error": (
+            "Streamable HTTP write identity is not bound per caller. "
+            "Use a per-user local stdio/CLI identity, GitHub Bridge, or explicitly "
+            "configure a trusted single-principal HTTP endpoint."
+        ),
+        "fallback_policy": "AUTHORIZATION_FAILURE_DO_NOT_RETRY_AS_NEW_OPERATION",
+    }
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_status(repo: str | None = None) -> dict[str, Any]:
     """Return the target repository and authoritative game-exp Ledger head."""
@@ -29,8 +59,25 @@ def game_exp_access_check(repo: str | None = None) -> dict[str, Any]:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 def game_exp_capabilities(repo: str | None = None) -> dict[str, Any]:
-    """Return versioned game-exp business capabilities plus a non-authoritative access snapshot."""
-    return _client(repo).capabilities()
+    """Return versioned business capabilities and the active MCP identity boundary."""
+    result = _client(repo).capabilities()
+    transport = _mcp_transport()
+    result["interface"] = {
+        "type": "mcp",
+        "transport": transport,
+        "write_identity": (
+            "local-gh-principal"
+            if transport == "stdio"
+            else "trusted-single-principal"
+            if _http_single_principal_write_enabled()
+            else "unbound-read-only"
+        ),
+        "shared_http_writes_allowed": (
+            transport != "streamable-http"
+            or _http_single_principal_write_enabled()
+        ),
+    }
+    return result
 
 
 
@@ -125,6 +172,9 @@ def game_exp_experiment_bind(
     The protocol binds Manifest operation_id to the request id. If request_id is
     omitted, manifest.operation_id is used as the idempotency key.
     """
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     manifest_request_id = manifest.get("operation_id")
     if not isinstance(manifest_request_id, str) or not manifest_request_id:
@@ -157,6 +207,9 @@ def game_exp_initialize(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Initialize canonical source refs under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).initialize(
         experiment_id,
         request_id=request_id,
@@ -172,6 +225,9 @@ def game_exp_candidate_build(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Build/register a trusted Candidate under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).candidate(
         experiment_id,
         request_id=request_id,
@@ -190,6 +246,9 @@ def game_exp_review_record(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Record human PASS/FAIL for one concrete Candidate using a stable request id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     if candidate_id is None:
         projection = client.experiment_get(experiment_id)
@@ -228,6 +287,9 @@ def game_exp_decision_submit(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Submit one lifecycle Decision bound to protected state and a stable request id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     client = _client(repo)
     if previous_decision_id is None:
         projection = client.experiment_get(experiment_id)
@@ -255,6 +317,9 @@ def game_exp_rehearse(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Run latest-main trusted Rehearsal under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).rehearse(
         experiment_id,
         request_id=request_id,
@@ -270,6 +335,9 @@ def game_exp_integrate(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Create/reuse the Integration PR under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).integrate(
         experiment_id,
         request_id=request_id,
@@ -286,6 +354,9 @@ def game_exp_integrate_finalize(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Finalize an actually merged Integration PR under the same operation contract."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).integrate_finalize(
         experiment_id,
         pr_number,
@@ -303,6 +374,9 @@ def game_exp_archive(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Run recoverable Archive under a stable cross-interface operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).archive(
         experiment_id,
         mode,
@@ -321,6 +395,9 @@ def game_exp_archive_abort(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Abort an Archive only while it is PREPARED and has not been claimed."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).archive_abort(
         experiment_id,
         archive_id,
@@ -354,6 +431,9 @@ def game_exp_operation_resume(
     repo: str | None = None,
 ) -> dict[str, Any]:
     """Resume only the already-claimed async operation with this exact operation id."""
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).resume_execution(request_id)
 
 
@@ -374,6 +454,9 @@ def game_exp_request_submit(
     request_id is mandatory; authorization failures are not a signal to retry
     through another interface.
     """
+    blocked = _write_identity_rejection(repo)
+    if blocked is not None:
+        return blocked
     return _client(repo).submit(
         operation=operation,
         input_value=input,
