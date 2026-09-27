@@ -29,10 +29,12 @@ When the user asks to open the game-exp panel, Board, dashboard, experiment list
 3. Render Chinese by default.
 4. Default to `总览`; support `待处理` / `原型` / `分支图` / `归档` as named views.
 5. Follow `references/board.md` for information hierarchy, ordering, labels, focus filters, and empty-state behavior.
-6. When the user asks to narrow the Board, pass read-only focus filters to `game_exp_board`: `query`, `subject_id`, `lifecycle`, and/or `attention_only`. Treat `focus.experiment_ids` as a presentation subset only; the full pinned snapshot remains authoritative.
-7. Keep all system-generated panel entries in Chinese. Preserve raw machine enums only for diagnostics; never make English enum names the primary UI text.
-8. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
-9. Do not derive authority from Issue labels, branch names, workflow UI, focus results, or the rendered Board.
+6. Render the Board's structured `repository`, `project`, `statistics`, `onboarding`, and `display` blocks before inventing host-specific summaries. These fields exist so different Harnesses show the same project readiness, visibility, access, trust checks, counts, and next action.
+7. When `project.readiness=PROJECT_READY`, never suggest `project-init`, Ruleset setup, changing repository visibility, or other repository bootstrap work. On an empty ready repository, the primary action is `CREATE_FIRST_EXPERIMENT`.
+8. When the user asks to narrow the Board, pass read-only focus filters to `game_exp_board`: `query`, `subject_id`, `lifecycle`, and/or `attention_only`. Treat `focus.experiment_ids` as a presentation subset only; the full pinned snapshot remains authoritative.
+9. Keep all system-generated panel entries in Chinese. Preserve raw machine enums only for diagnostics; never make English enum names the primary UI text.
+10. Treat `health=FAIL` as blocked and never recommend normal lifecycle work for it.
+11. Do not derive authority from Issue labels, branch names, workflow UI, focus results, old chat context, cached preflight results, or the rendered Board.
 
 Treat the Board as a structured read-only projection. The host may render it as text or richer UI; neither representation is authoritative.
 
@@ -59,7 +61,7 @@ When the user asks game-exp to create, bootstrap, prepare, or initialize a new r
 
 ## First-use onboarding
 
-When the protected Ledger is empty, or the user explicitly says this is their first use, follow `references/onboarding.md`. Start with `game_exp_access_check` before repo-level Doctor so missing write access is explained before any Bind attempt. Keep onboarding in plain Chinese and translate natural-language intent into the existing trusted workflow. Do not require the user to know Manifest fields, request ids, lifecycle enums, MCP tool names, or protected refs.
+When the protected Ledger is empty, or the user explicitly says this is their first use, follow `references/onboarding.md`. Prefer the `project` and `onboarding` blocks already returned by `game_exp_board`; they combine current access and repo-level Doctor into one consistent next-step projection. If those fields are unavailable on an older client, fall back to `game_exp_access_check` plus repo-level Doctor. A repo-level Doctor PASS means `PROJECT_READY`; do not rerun or recommend `project-init` merely because the Ledger has zero experiments. Keep onboarding in plain Chinese and translate natural-language intent into the existing trusted workflow. Do not require the user to know Manifest fields, request ids, lifecycle enums, MCP tool names, or protected refs.
 
 Onboarding completes only after the first experiment is authoritatively bound and initialized. An `ACCEPTED` dispatch alone is not completion.
 
