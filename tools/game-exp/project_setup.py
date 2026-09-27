@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -13,7 +14,7 @@ from typing import Any
 
 from client import GameExpClient, GitHubTransport
 
-API_VERSION = "2026-03-10"
+API_VERSION = "2022-11-28"
 WRITER_KEY_TITLE = "game-exp trusted writer"
 WRITER_SECRET = "GAME_EXP_WRITER_KEY"
 REQUIRED_RULESET_NAMES = (
@@ -33,19 +34,37 @@ def _run(
     *,
     check: bool = True,
     input_text: str | None = None,
+    input_bytes: bytes | None = None,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
+    if input_text is not None and input_bytes is not None:
+        raise ProjectSetupError("provide only one of input_text or input_bytes")
     try:
-        proc = subprocess.run(
-            args,
-            input=input_text,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-        )
+        if input_bytes is not None:
+            raw = subprocess.run(
+                args,
+                input=input_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            proc = subprocess.CompletedProcess(
+                raw.args,
+                raw.returncode,
+                raw.stdout.decode("utf-8", errors="strict"),
+                raw.stderr.decode("utf-8", errors="strict"),
+            )
+        else:
+            proc = subprocess.run(
+                args,
+                input=input_text,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
     except FileNotFoundError as exc:
         raise ProjectSetupError(f"required command not found: {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -74,10 +93,13 @@ def _gh_api(
     check: bool = True,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
+    endpoint = f"repos/{repo}"
+    if suffix:
+        endpoint += f"/{suffix.lstrip('/')}"
     command = [
         "gh",
         "api",
-        f"repos/{repo}/{suffix.lstrip('/')}",
+        endpoint,
         "-H",
         "Accept: application/vnd.github+json",
         "-H",
@@ -315,27 +337,76 @@ def _delete_deploy_key(repo: str, key_id: int) -> None:
     _gh_api(repo, f"keys/{key_id}", method="DELETE")
 
 
+def _ssh_keygen_candidates() -> list[str]:
+    candidates: list[str] = []
+    system = shutil.which("ssh-keygen")
+    if system:
+        candidates.append(system)
+
+    if os.name == "nt":
+        git = shutil.which("git")
+        if git:
+            git_ssh = Path(git).resolve().parents[1] / "usr" / "bin" / "ssh-keygen.exe"
+            if git_ssh.is_file():
+                candidates.append(str(git_ssh))
+
+        program_files = os.environ.get("ProgramFiles")
+        if program_files:
+            git_ssh = Path(program_files) / "Git" / "usr" / "bin" / "ssh-keygen.exe"
+            if git_ssh.is_file():
+                candidates.append(str(git_ssh))
+
+    return list(dict.fromkeys(candidates))
+
+
 def _generate_writer_keypair() -> tuple[str, str]:
+    candidates = _ssh_keygen_candidates()
+    if not candidates:
+        raise ProjectSetupError(
+            "ssh-keygen was not found; install OpenSSH or Git for Windows before project-init"
+        )
+
+    failures: list[str] = []
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "writer"
-        _run(
-            [
-                "ssh-keygen",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-C",
-                "game-exp-trusted-writer",
-                "-f",
-                str(path),
-            ]
-        )
-        private = path.read_text(encoding="utf-8")
-        public = path.with_suffix(".pub").read_text(encoding="utf-8").strip()
-    if "BEGIN OPENSSH PRIVATE KEY" not in private or not public.startswith("ssh-ed25519 "):
-        raise ProjectSetupError("generated Trusted Writer keypair is invalid")
-    return private, public
+        for executable in candidates:
+            path.unlink(missing_ok=True)
+            path.with_suffix(".pub").unlink(missing_ok=True)
+            proc = _run(
+                [
+                    executable,
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "game-exp-trusted-writer",
+                    "-f",
+                    str(path),
+                ],
+                check=False,
+            )
+            if proc.returncode != 0:
+                failures.append(f"{executable}: exit {proc.returncode}")
+                continue
+            if not path.is_file() or not path.with_suffix(".pub").is_file():
+                failures.append(f"{executable}: key files were not created")
+                continue
+
+            private = path.read_text(encoding="utf-8")
+            public = path.with_suffix(".pub").read_text(encoding="utf-8").strip()
+            if (
+                "BEGIN OPENSSH PRIVATE KEY" in private
+                and public.startswith("ssh-ed25519 ")
+            ):
+                return private, public
+            failures.append(f"{executable}: generated key format was invalid")
+
+    raise ProjectSetupError(
+        "failed to generate Trusted Writer ed25519 keypair; "
+        + "; ".join(failures)
+    )
 
 
 def _ensure_writer_credentials(repo: str) -> dict[str, Any]:
@@ -388,7 +459,7 @@ def _ensure_writer_credentials(repo: str) -> dict[str, Any]:
     secret_proc = _run(
         ["gh", "secret", "set", WRITER_SECRET, "--repo", repo],
         check=False,
-        input_text=private,
+        input_bytes=private.encode("utf-8"),
         timeout=60,
     )
     if secret_proc.returncode != 0:
@@ -512,16 +583,25 @@ RULESET_TEMPLATES: tuple[dict[str, Any], ...] = (
 
 
 def _ruleset_semantics(value: dict[str, Any]) -> dict[str, Any]:
+    rules: list[Any] = []
+    for raw_rule in value.get("rules") or []:
+        if not isinstance(raw_rule, dict):
+            rules.append(raw_rule)
+            continue
+        rule = dict(raw_rule)
+        if rule.get("type") == "update":
+            parameters = dict(rule.get("parameters") or {})
+            parameters.setdefault("update_allows_fetch_and_merge", False)
+            rule["parameters"] = parameters
+        rules.append(rule)
+
     return {
-        key: value.get(key)
-        for key in (
-            "name",
-            "target",
-            "enforcement",
-            "bypass_actors",
-            "conditions",
-            "rules",
-        )
+        "name": value.get("name"),
+        "target": value.get("target"),
+        "enforcement": value.get("enforcement"),
+        "bypass_actors": value.get("bypass_actors"),
+        "conditions": value.get("conditions"),
+        "rules": rules,
     }
 
 

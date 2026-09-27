@@ -37,13 +37,24 @@ When onboarding or when repository capability is uncertain, render the result of
 
 ## Repository view
 
-Provide five tabs:
+Use the rich repository-level Board blocks before the five tabs:
+
+1. `display.title_zh`
+2. project status strip: `project.readiness_zh`, `repository.visibility_zh`, `project.access_zh`, `project.doctor_status_zh`
+3. `statistics`: total / active / attention / archived / abnormal-health
+4. primary next action: `project.next_action_zh`
+5. compact trust checks from `project.trust_checks` with expandable details
+6. pinned Ledger snapshot from `snapshot_head`
+
+Then provide five tabs:
 
 - 总览
 - 待处理
 - 原型
 - 分支图
 - 归档
+
+When the repository has zero experiments, render the `onboarding` block prominently. If `project.readiness=PROJECT_READY`, show `2/6 · 描述第一个实验` and `创建第一个实验`; do not show repository setup actions.
 
 At minimum support local filtering by:
 
@@ -104,7 +115,7 @@ For actions such as Review, PROMISING, SELECTED, Integration, or Archive, the UI
 
 ## Empty and failure states
 
-For a zero-experiment repository, prefer the first-use onboarding card from `onboarding.md` over a bare empty state. The card may show `暂无实验` as context, but its primary action is `创建第一个实验`.
+For a zero-experiment repository, prefer the Board response's `onboarding` block and the first-use rules from `onboarding.md` over a bare empty state. The card may show `暂无实验` as context. When `project.readiness=PROJECT_READY`, its primary action is `创建第一个实验` and repository bootstrap actions must not be offered.
 
 - zero repository experiments: `暂无实验`
 - zero filtered experiments: `没有符合当前筛选条件的实验`

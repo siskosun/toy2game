@@ -17,6 +17,98 @@ def completed(args=None, returncode=0, stdout="", stderr=""):
 
 
 class ProjectSetupTests(unittest.TestCase):
+
+    def test_gh_api_repo_root_has_no_trailing_slash(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="{}")
+            project_setup._gh_api("owner/repo", "")
+        self.assertEqual(run.call_args.args[0][2], "repos/owner/repo")
+
+    def test_gh_api_nested_endpoint_is_joined_once(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="[]")
+            project_setup._gh_api(
+                "owner/repo",
+                "/rulesets?per_page=100",
+                check=False,
+            )
+        self.assertEqual(
+            run.call_args.args[0][2],
+            "repos/owner/repo/rulesets?per_page=100",
+        )
+
+    def test_gh_api_uses_supported_api_version(self):
+        with patch("project_setup._run") as run:
+            run.return_value = completed(stdout="{}")
+            project_setup._gh_api("owner/repo", "")
+        self.assertIn(
+            "X-GitHub-Api-Version: 2022-11-28",
+            run.call_args.args[0],
+        )
+
+    def test_generate_writer_keypair_falls_back_to_second_candidate(self):
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args[0])
+            if args[0] == "system-ssh-keygen":
+                return completed(args=args, returncode=255)
+            key_path = Path(args[args.index("-f") + 1])
+            key_path.write_text(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+                encoding="utf-8",
+            )
+            key_path.with_suffix(".pub").write_text(
+                "ssh-ed25519 AAAATEST game-exp-trusted-writer\n",
+                encoding="utf-8",
+            )
+            return completed(args=args)
+
+        with (
+            patch(
+                "project_setup._ssh_keygen_candidates",
+                return_value=["system-ssh-keygen", "git-ssh-keygen"],
+            ),
+            patch("project_setup._run", side_effect=fake_run),
+        ):
+            private, public = project_setup._generate_writer_keypair()
+
+        self.assertEqual(calls, ["system-ssh-keygen", "git-ssh-keygen"])
+        self.assertIn("BEGIN OPENSSH PRIVATE KEY", private)
+        self.assertTrue(public.startswith("ssh-ed25519 "))
+
+    def test_run_binary_stdin_preserves_lf_bytes(self):
+        payload = b"line1\nline2\n"
+        raw = subprocess.CompletedProcess(["gh"], 0, b"{}", b"")
+        with patch("project_setup.subprocess.run", return_value=raw) as run:
+            result = project_setup._run(["gh"], input_bytes=payload)
+        self.assertEqual(run.call_args.kwargs["input"], payload)
+        self.assertNotIn("text", run.call_args.kwargs)
+        self.assertEqual(result.stdout, "{}")
+
+    def test_ruleset_semantics_normalizes_omitted_false_update_parameter(self):
+        base = {
+            "name": "game-exp ledger",
+            "target": "branch",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {"ref_name": {"include": ["refs/heads/game-exp/ledger"], "exclude": []}},
+        }
+        actual = {**base, "rules": [{"type": "update"}]}
+        expected = {
+            **base,
+            "rules": [
+                {
+                    "type": "update",
+                    "parameters": {"update_allows_fetch_and_merge": False},
+                }
+            ],
+        }
+        self.assertEqual(
+            project_setup._ruleset_semantics(actual),
+            project_setup._ruleset_semantics(expected),
+        )
+
     def test_preflight_blocks_private_free_ruleset_gap_before_provision(self):
         metadata = {
             "private": True,

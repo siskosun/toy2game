@@ -16,11 +16,24 @@ Use one pinned protected Ledger snapshot for every view in the same response.
 
 ## Shared header
 
+Prefer the structured fields already returned by `game_exp_board`. They are the cross-Harness display contract and should be rendered before a host invents its own summary.
+
 Show:
 
-- `仓库`: full `owner/repo`.
-- `Ledger 快照`: pinned commit SHA.
-- `实验统计`: total experiments, active count, archived count, attention count, abnormal-health count.
+- `仓库`: `repository.full_name`.
+- `可见性`: `repository.visibility_zh` and `repository.default_branch` when available.
+- `项目状态`: `project.readiness_zh` and `project.doctor_status_zh`.
+- `我的权限`: `project.access_zh`; use `project.can_create_experiment` for the create-action affordance.
+- `Ledger 快照`: pinned `snapshot_head`.
+- `实验统计`: `statistics.total / active / archived / attention / abnormal_health`.
+- `下一步`: `project.next_action_zh`.
+- `仓库信任检查`: render `project.trust_checks` compactly or behind an expandable detail area.
+
+Use `display.title_zh`, `display.project_status_zh`, `display.statistics_zh`, `display.next_action_zh`, and `display.snapshot_note_zh` when the host needs ready-to-render Chinese copy.
+
+The experiment views are pinned to `snapshot_head`. Repository visibility, access and trust checks are current repository state at call time; do not present them as Ledger history.
+
+If `project.readiness=PROJECT_READY`, the repository bootstrap is complete. Never infer an older private-repository Ruleset blocker from chat history, cached preflight output, or a previous Board. Never recommend `project-init` in that state.
 
 ## 聚焦筛选
 
@@ -183,7 +196,18 @@ Keep raw non-PASS health codes visible for diagnosis.
 
 ## Empty repository
 
-If the protected Ledger contains zero experiments, show the repository header and first-use onboarding entry from `onboarding.md`. Display `暂无实验` as context and make `创建第一个实验` the primary next action. Do not fabricate a placeholder experiment row.
+If the protected Ledger contains zero experiments, render `onboarding` from the Board response.
+
+When `project.readiness=PROJECT_READY` and `project.can_create_experiment=true`:
+
+- show `暂无实验`;
+- show onboarding progress `2/6 · 描述第一个实验`;
+- make `创建第一个实验` the primary action;
+- do not suggest `project-init`, Ruleset setup, Deploy Key setup, Secret setup, Immutable Releases setup, or changing repository visibility.
+
+When the project is not ready, use `project.next_action_zh` and the failed/unknown `project.trust_checks` instead of guessing the blocker.
+
+Do not fabricate a placeholder experiment row.
 
 ## 作者与贡献者
 

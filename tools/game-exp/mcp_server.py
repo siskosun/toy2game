@@ -237,7 +237,9 @@ def game_exp_board(
     lifecycle: str | None = None,
     attention_only: bool = False,
 ) -> dict[str, Any]:
-    """Return one consistent Board snapshot plus an optional read-only focus set."""
+    """Return a Chinese-ready Board with project readiness, repository/access/trust
+    context, experiment statistics, onboarding/next-action guidance, and an optional
+    read-only focus set from one pinned Ledger snapshot."""
     return _client(repo).board(
         query=query,
         subject_id=subject_id,
