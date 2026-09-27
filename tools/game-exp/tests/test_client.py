@@ -946,6 +946,7 @@ class ClientTests(unittest.TestCase):
             {
                 "count": 1,
                 "active_count": 1,
+                "abandoned_count": 0,
                 "archived_count": 0,
                 "attention_count": 1,
                 "relationship_count": 1,
