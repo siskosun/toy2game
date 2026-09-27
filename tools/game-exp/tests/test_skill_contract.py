@@ -16,12 +16,28 @@ class GameExpSkillContractTests(unittest.TestCase):
     def test_portable_plugin_manifest(self):
         manifest = json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "game-exp")
-        self.assertEqual(manifest["version"], "0.13.0")
+        self.assertEqual(manifest["version"], "0.13.1")
         self.assertEqual(
             manifest["$schema"],
             "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
         )
         self.assertTrue(SKILL.exists())
+
+    def test_skill_icon_is_packaged_and_referenced(self):
+        icon = PLUGIN / "skills" / "game-exp" / "assets" / "icon.svg"
+        metadata = (PLUGIN / "skills" / "game-exp" / "agents" / "openai.yaml").read_text(
+            encoding="utf-8"
+        )
+        bootstrap = (ROOT / "tools" / "game-exp" / "bootstrap.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(icon.exists())
+        self.assertIn("icon_small: assets/icon.svg", metadata)
+        self.assertIn("icon_large: assets/icon.svg", metadata)
+        self.assertIn(
+            '"plugins/game-exp/skills/game-exp/assets/icon.svg"',
+            bootstrap,
+        )
 
     def test_repo_marketplace_points_to_plugin(self):
         market = json.loads(

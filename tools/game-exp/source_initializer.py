@@ -31,6 +31,8 @@ def run(args: list[str], *, cwd: Path | None = None, env=None, check: bool = Tru
         cwd=cwd,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="strict",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

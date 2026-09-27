@@ -49,6 +49,8 @@ def _run(
         proc = subprocess.run(
             args,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,

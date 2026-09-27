@@ -1087,6 +1087,8 @@ def run(args, cwd=None, env=None, check=True):
         cwd=cwd,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="strict",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

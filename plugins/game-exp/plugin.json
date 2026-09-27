@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Harness-neutral trusted game experiment workflow with cross-interface recovery, conformance simulation, resumable collaboration notifications, portable Godot handoff evidence, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [

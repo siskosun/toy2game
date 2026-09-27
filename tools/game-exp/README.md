@@ -188,7 +188,11 @@ v0.5 upgrades the Board from a portfolio list to an action-oriented dashboard:
 - optional `manifest.relationships` models `依赖 / 阻塞 / 替代` while preserving raw machine relation codes for automation;
 - all system-generated panel entries use Chinese as the primary UI text.
 
-The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.13.0`.
+The repo-local `game-exp` plugin is enabled from `.codex/config.toml` and packages the game-exp Skill. Current plugin version: `0.13.1`.
+
+### Windows UTF-8 compatibility
+
+v0.13.1 pins captured `git` / `gh` subprocess text to strict UTF-8 decoding instead of inheriting the Windows ANSI code page. Invalid UTF-8 fails closed on authoritative/control-plane paths. The CLI configures Windows stdout/stderr as UTF-8 for Chinese status text.
 
 Normal users do not need to remember MCP tool names. Examples:
 
