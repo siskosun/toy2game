@@ -63,13 +63,13 @@ class HarnessInstallerTests(unittest.TestCase):
                 result = HarnessInstaller(ROOT, home).install()
 
             self.assertEqual(result["status"], "PASS")
-            self.assertEqual(result["version"], "0.16.1")
+            self.assertEqual(result["version"], "0.16.2")
             self.assertEqual(result["repo_binding"], "dynamic")
 
             runtime = home / ".agents" / "tools" / "game-exp"
             self.assertEqual(
                 (runtime / "VERSION.txt").read_text(encoding="utf-8").strip(),
-                "0.16.1",
+                "0.16.2",
             )
             self.assertTrue(
                 (runtime / "tools" / "game-exp" / "mcp_server.py").is_file()
@@ -121,6 +121,45 @@ class HarnessInstallerTests(unittest.TestCase):
             self.assertEqual(
                 pathlib.Path(result["skills"]["codex"]).resolve(),
                 shared_skill.resolve(),
+            )
+
+    def test_runtime_install_falls_back_when_directory_swap_is_locked(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = pathlib.Path(td)
+            installer = HarnessInstaller(ROOT, home)
+            original_replace = __import__("install_harnesses")._atomic_replace_dir
+            calls = {"count": 0}
+
+            def locked_once(source, target):
+                calls["count"] += 1
+                if target == installer.runtime_dir:
+                    raise PermissionError("simulated live Windows directory lock")
+                return original_replace(source, target)
+
+            with (
+                mock.patch("install_harnesses.shutil.which", return_value="uv"),
+                mock.patch("install_harnesses._atomic_replace_dir", side_effect=locked_once),
+            ):
+                result = installer.install()
+
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["runtime_update_mode"], "filewise-fallback")
+            self.assertEqual(
+                (home / ".agents" / "tools" / "game-exp" / "VERSION.txt")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "0.16.2",
+            )
+            self.assertTrue(
+                (
+                    home
+                    / ".agents"
+                    / "tools"
+                    / "game-exp"
+                    / "tools"
+                    / "game-exp"
+                    / "mcp_server.py"
+                ).is_file()
             )
 
     def test_reinstall_is_idempotent_at_config_semantics(self):
