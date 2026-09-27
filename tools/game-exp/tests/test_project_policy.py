@@ -28,12 +28,59 @@ def valid_policy():
         "build": {"argv": ["npm", "run", "build"]},
         "candidate": {"include": ["dist"], "required_paths": ["dist/index.html"]},
     }
+
+
+def valid_policy_v2(adapter="node-npm"):
+    return {
+        "schema_version": 2,
+        "adapter": adapter,
+        "toolchain": {"node_version": "22"} if adapter == "node-npm" else {},
+        "install": {"argv": ["npm", "ci"]} if adapter == "node-npm" else {"argv": ["python", "-m", "pip", "install", "-r", "requirements.txt"]},
+        "test": {"argv": ["npm", "test"]} if adapter == "node-npm" else {"argv": ["python", "-m", "pytest"]},
+        "build": {"argv": ["npm", "run", "build"]} if adapter == "node-npm" else {"argv": ["python", "build.py"]},
+        "candidate": {"include": ["dist"], "required_paths": ["dist/index.html"]},
+    }
+
+
 class ProjectPolicyTests(unittest.TestCase):
     def test_valid_policy_has_stable_digest(self):
         first = policy_digest(valid_policy())
         second = policy_digest(json.loads(json.dumps(valid_policy())))
         self.assertEqual(first, second)
         self.assertRegex(first, r"^sha256:[0-9a-f]{64}$")
+
+    def test_schema_v2_node_policy_is_valid(self):
+        policy = valid_policy_v2()
+        self.assertEqual(validate_policy(policy)["toolchain"]["node_version"], "22")
+
+    def test_schema_v2_generic_command_adapter_is_valid(self):
+        policy = valid_policy_v2("command")
+        self.assertEqual(validate_policy(policy)["adapter"], "command")
+        self.assertEqual(validate_policy(policy)["toolchain"], {})
+
+    def test_schema_v1_non_node_adapter_remains_rejected(self):
+        policy = valid_policy()
+        policy["adapter"] = "command"
+        with self.assertRaises(ProjectPolicyError):
+            validate_policy(policy)
+
+    def test_schema_v2_node_requires_node_version(self):
+        policy = valid_policy_v2()
+        policy["toolchain"] = {}
+        with self.assertRaises(ProjectPolicyError):
+            validate_policy(policy)
+
+    def test_schema_v2_generic_adapter_rejects_unused_toolchain(self):
+        policy = valid_policy_v2("command")
+        policy["toolchain"] = {"node_version": "22"}
+        with self.assertRaises(ProjectPolicyError):
+            validate_policy(policy)
+
+    def test_schema_v2_adapter_must_be_normalized(self):
+        policy = valid_policy_v2("command")
+        policy["adapter"] = "Command Adapter"
+        with self.assertRaises(ProjectPolicyError):
+            validate_policy(policy)
 
     def test_extra_key_is_rejected(self):
         policy = valid_policy()
