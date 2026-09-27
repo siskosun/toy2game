@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "game-exp",
-  "version": "0.16.2",
-  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, self-describing Manifest v2, project-policy v2, live-safe atomic multi-Harness local installation, rich cross-Harness Board status, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
+  "version": "0.16.3",
+  "description": "Harness-neutral trusted game experiment workflow with complete repository trust setup, self-describing Manifest v2, project-policy v2, live-safe multi-Harness installation including Windows locked-file recovery, rich cross-Harness Board status, cross-interface recovery, conformance simulation, resumable collaboration notifications, portable implementation handoffs, and protected human gates.",
   "repository": "https://github.com/siskosun/toy2game",
   "keywords": [
     "game-development",

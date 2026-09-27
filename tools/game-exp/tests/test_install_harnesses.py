@@ -63,13 +63,13 @@ class HarnessInstallerTests(unittest.TestCase):
                 result = HarnessInstaller(ROOT, home).install()
 
             self.assertEqual(result["status"], "PASS")
-            self.assertEqual(result["version"], "0.16.2")
+            self.assertEqual(result["version"], "0.16.3")
             self.assertEqual(result["repo_binding"], "dynamic")
 
             runtime = home / ".agents" / "tools" / "game-exp"
             self.assertEqual(
                 (runtime / "VERSION.txt").read_text(encoding="utf-8").strip(),
-                "0.16.2",
+                "0.16.3",
             )
             self.assertTrue(
                 (runtime / "tools" / "game-exp" / "mcp_server.py").is_file()
@@ -148,7 +148,7 @@ class HarnessInstallerTests(unittest.TestCase):
                 (home / ".agents" / "tools" / "game-exp" / "VERSION.txt")
                 .read_text(encoding="utf-8")
                 .strip(),
-                "0.16.2",
+                "0.16.3",
             )
             self.assertTrue(
                 (
@@ -160,6 +160,56 @@ class HarnessInstallerTests(unittest.TestCase):
                     / "game-exp"
                     / "mcp_server.py"
                 ).is_file()
+            )
+
+    def test_runtime_install_handles_file_locked_against_replace(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = pathlib.Path(td)
+            installer = HarnessInstaller(ROOT, home)
+            module = __import__("install_harnesses")
+            original_replace = module._atomic_replace_dir
+            original_atomic_write = module._atomic_write
+            locked_path = installer.runtime_dir / "tools" / "game-exp" / "project_setup.py"
+            state = {"raised": False}
+
+            with mock.patch("install_harnesses.shutil.which", return_value="uv"):
+                installer.install()
+            self.assertTrue(locked_path.exists())
+
+            def locked_directory(source, target):
+                if target == installer.runtime_dir:
+                    raise PermissionError("simulated live runtime directory lock")
+                return original_replace(source, target)
+
+            def locked_file(path, content):
+                if path == locked_path and path.exists() and not state["raised"]:
+                    state["raised"] = True
+                    raise PermissionError("simulated reader denying delete-sharing")
+                return original_atomic_write(path, content)
+
+            with (
+                mock.patch("install_harnesses.shutil.which", return_value="uv"),
+                mock.patch("install_harnesses._atomic_replace_dir", side_effect=locked_directory),
+                mock.patch("install_harnesses._atomic_write", side_effect=locked_file),
+            ):
+                result = installer.install()
+
+            self.assertTrue(state["raised"])
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["runtime_update_mode"], "filewise-live-fallback")
+            self.assertEqual(
+                (home / ".agents" / "tools" / "game-exp" / "VERSION.txt")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "0.16.3",
+            )
+            self.assertEqual(
+                locked_path.read_bytes(),
+                (ROOT / "tools" / "game-exp" / "project_setup.py").read_bytes(),
+            )
+            self.assertEqual(
+                list(locked_path.parent.glob("project_setup.py.live-backup-*")),
+                [],
             )
 
     def test_reinstall_is_idempotent_at_config_semantics(self):

@@ -53,17 +53,56 @@ def _atomic_replace_dir(source: pathlib.Path, target: pathlib.Path) -> None:
             shutil.rmtree(backup)
 
 
-def _sync_tree_filewise(source: pathlib.Path, target: pathlib.Path) -> None:
+def _write_live_locked_file(path: pathlib.Path, content: bytes) -> None:
+    """Last-resort Windows fallback when delete-sharing blocks os.replace.
+
+    The old bytes are copied to a sibling recovery file before the direct
+    overwrite. If the overwrite raises, the old bytes are restored in-place.
+    This path is used only after atomic replacement was denied.
+    """
+    if not path.exists():
+        raise PermissionError(f"target disappeared before live overwrite: {path}")
+    backup = path.with_name(path.name + ".live-backup-" + uuid.uuid4().hex)
+    shutil.copy2(path, backup)
+    try:
+        with path.open("r+b") as fh:
+            fh.seek(0)
+            fh.write(content)
+            fh.truncate()
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        old = backup.read_bytes()
+        with path.open("r+b") as fh:
+            fh.seek(0)
+            fh.write(old)
+            fh.truncate()
+            fh.flush()
+            os.fsync(fh.fileno())
+        raise
+    else:
+        backup.unlink(missing_ok=True)
+
+
+def _sync_tree_filewise(source: pathlib.Path, target: pathlib.Path) -> bool:
     """Fallback for Windows when a live process keeps the target directory open.
 
-    Each file is still replaced atomically, so a live Harness never observes a
-    partially-written managed file. Extra target files are left in place; the
-    runtime validator only trusts the managed game-exp surface.
+    Prefer per-file atomic replacement. If a reader denies delete-sharing for a
+    specific existing file, fall back to a backed-up in-place overwrite for
+    that file only. Extra target files are left in place.
     """
     target.mkdir(parents=True, exist_ok=True)
+    used_live_overwrite = False
     for src in sorted(p for p in source.rglob("*") if p.is_file()):
         rel = src.relative_to(source)
-        _atomic_write(target / rel, src.read_bytes())
+        dst = target / rel
+        content = src.read_bytes()
+        try:
+            _atomic_write(dst, content)
+        except PermissionError:
+            _write_live_locked_file(dst, content)
+            used_live_overwrite = True
+    return used_live_overwrite
 
 
 def _copy_tree_atomic(source: pathlib.Path, target: pathlib.Path) -> str:
@@ -74,8 +113,8 @@ def _copy_tree_atomic(source: pathlib.Path, target: pathlib.Path) -> str:
             _atomic_replace_dir(stage, target)
             return "directory-swap"
         except PermissionError:
-            _sync_tree_filewise(stage, target)
-            return "filewise-fallback"
+            used_live = _sync_tree_filewise(stage, target)
+            return "filewise-live-fallback" if used_live else "filewise-fallback"
     finally:
         if stage.exists():
             shutil.rmtree(stage)
@@ -214,8 +253,8 @@ class HarnessInstaller:
             try:
                 _atomic_replace_dir(stage, self.runtime_dir)
             except PermissionError:
-                _sync_tree_filewise(stage, self.runtime_dir)
-                mode = "filewise-fallback"
+                used_live = _sync_tree_filewise(stage, self.runtime_dir)
+                mode = "filewise-live-fallback" if used_live else "filewise-fallback"
         finally:
             try:
                 os.chdir(old_cwd)
