@@ -1,4 +1,9 @@
 name: game-exp trusted writer
+run-name: game-exp:request:${{ inputs.request_id }}:${{ inputs.payload_digest }}
+
+concurrency:
+  group: game-exp-request-${{ inputs.request_id }}
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -15,13 +20,49 @@ on:
         description: Base64-encoded UTF-8 JSON payload
         required: true
         type: string
+      payload_digest:
+        description: Canonical sha256 digest of the decoded request payload
+        required: true
+        type: string
 
 permissions:
   contents: read
   issues: read
 
 jobs:
+  request-identity:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout request identity guard
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: control-guard
+          sparse-checkout: |
+            tools/game-exp/request_guard.py
+            tools/game-exp/protocol_core.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Freeze request id to the first payload digest
+        env:
+          GAME_EXP_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python control-guard/tools/game-exp/request_guard.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "game-exp-trusted-writer.yml" \
+            --request-id "${{ inputs.request_id }}" \
+            --payload-b64 "${{ inputs.payload_b64 }}" \
+            --payload-digest "${{ inputs.payload_digest }}" \
+            --run-id "${{ github.run_id }}"
+
   mutate-ledger:
+    needs: request-identity
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -60,6 +101,7 @@ jobs:
           REQUEST_ID: ${{ inputs.request_id }}
           EXPECTED_HEAD: ${{ inputs.expected_head }}
           PAYLOAD_B64: ${{ inputs.payload_b64 }}
+          PAYLOAD_DIGEST: ${{ inputs.payload_digest }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
