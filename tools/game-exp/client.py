@@ -696,6 +696,7 @@ class GameExpClient:
                 "dependency_review_hints": True,
                 "godot_handoff": True,
                 "archive_recovery": True,
+                "complete_project_setup": True,
             },
             "queries": [
                 "status",
@@ -708,6 +709,7 @@ class GameExpClient:
                 "operation_get",
                 "notifications",
                 "prototype_handoff",
+                "project_preflight",
             ],
             "commands": [
                 "experiment.bind",
@@ -716,6 +718,7 @@ class GameExpClient:
                 "experiment.decision",
                 "archive.abort",
                 *list(ASYNC_EXECUTION_ACTIONS),
+                "project_init_local_only",
             ],
             "recovery": {
                 "operation_get": True,
