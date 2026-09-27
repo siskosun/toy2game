@@ -43,6 +43,21 @@ class ProjectPolicyWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("grep -q '^dist/", text)
         self.assertIn("policy_digest(policy)", text)
 
+    def test_trusted_writer_workflow_freezes_request_payload_and_head(self):
+        path = ROOT / ".github/workflows/game-exp-trusted-writer.yml"
+        text = path.read_text(encoding="utf-8")
+        for phrase in (
+            "run-name: game-exp:request:",
+            "payload_digest:",
+            "group: game-exp-request-",
+            "cancel-in-progress: false",
+            "request_guard.py",
+            "--payload-digest",
+            "--expected-head",
+            "needs: request-identity",
+        ):
+            self.assertIn(phrase, text)
+
     def test_async_workflows_require_trusted_request_id_guard(self):
         for action, path in ASYNC_WORKFLOWS.items():
             text = path.read_text(encoding="utf-8")
