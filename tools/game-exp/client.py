@@ -2970,6 +2970,7 @@ class GameExpClient:
             "LIFECYCLE_PROMISING": "experiment.promising",
             "LIFECYCLE_SELECTED": "experiment.selected",
             "LIFECYCLE_REJECTED": "experiment.rejected",
+            "LIFECYCLE_ABANDONED": "experiment.abandoned",
             "INTEGRATED": "experiment.integrated",
             "ARCHIVED": "experiment.archived",
         }
